@@ -1,0 +1,4 @@
+{
+  "victim_model_name": "models/qwen",
+  "reference_model_name": "models/qwen"
+}
