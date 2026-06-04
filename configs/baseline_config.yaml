@@ -1,0 +1,20 @@
+# Baseline experiment configuration.
+
+logging:
+  level: INFO
+  file: datasets/logs/baselines.log
+
+paths:
+  scores_dir: outputs/scores
+  baselines_dir: outputs/baselines
+
+baseline:
+  threshold: 0.5
+  methods:
+    - Direct RAG-MIA
+    - S2MIA
+    - MBA
+    - RAG-leaks / difficulty-calibrated similarity baseline
+    - E-MIA / exam-style QA baseline
+    - IA / Interrogation Attack
+    - PCV-MIA new version

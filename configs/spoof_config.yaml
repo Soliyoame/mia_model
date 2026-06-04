@@ -1,0 +1,28 @@
+# Spoofed_Non_Member control-group generation configuration.
+# This group is retained only for experimental controls and robustness analysis,
+# not as a core component of the PCV-MIA attack method.
+
+logging:
+  level: INFO
+  file: datasets/logs/spoof.log
+
+llm_profiles_path: configs/llm_profiles.yaml
+
+paths:
+  splits_dir: datasets/splits
+  spoofed_dir: datasets/spoofed
+
+spoof:
+  sibling_profile: null
+  candidates_per_seed: 3
+  max_per_seed: 1
+  strategies: [formal_rewrite, syntax_restructure, compression, domain_style, neutral_paraphrase]
+  thresholds:
+    naturalness: 8
+    fluency: 8
+    semantic_preservation: 8
+    entity_preservation: 8
+    style_match: 8
+
+statistics:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2

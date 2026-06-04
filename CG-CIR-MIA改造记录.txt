@@ -1,0 +1,400 @@
+CG-CIR-MIA 项目改造记录
+========================
+
+创建时间：2026-05-07
+项目目录：D:\MIA\mia_model
+目标项目名：CG-CIR-MIA
+全称：Context-Gain Calibrated Conflict-Induced Recovery Membership Inference Attack
+
+
+一、本次改造目标
+----------------
+
+本次任务不是从零新建一个无关项目，而是在当前已有 MIA 项目代码基础上进行重构和扩展。
+
+原项目核心方向：
+微调 LLM 成员推理攻击。
+
+改造后的核心方向：
+面向 RAG 知识库的 CG-CIR-MIA 成员推理攻击框架。
+
+核心思想：
+1. 对候选文档抽取关键实体。
+2. 把关键实体替换成“合理但错误”的同类型实体。
+3. 构造自然的验证、审计、校对类 query。
+4. 同一条 query 分别运行 RAG 模式和 LLM-only 模式。
+5. 如果 RAG 能恢复原始实体，而 LLM-only 不能恢复，则恢复更可能来自 RAG 知识库。
+6. 用 CG-CMS = CMS_RAG - CMS_LLM 作为 membership score。
+7. 攻击目标是判断候选文档是否存在于 RAG 知识库中。
+
+
+二、重要实验边界
+----------------
+
+本次改造必须严格满足以下约束：
+
+1. 不实现 Twin_Non_Member。
+2. 保留 Spoofed_Non_Member。
+3. 主实验分组只有：
+   - KB_Member
+   - True_Non_Member
+   - Spoofed_Non_Member
+4. 只有 KB_Member 可以进入 RAG 知识库。
+5. True_Non_Member、Spoof_Seed、Spoofed_Non_Member、Reserve 绝对不能进入 RAG 知识库。
+6. retrieved_doc_ids、retrieval_scores、target_doc_retrieved 只能用于机制分析，不能用于 black-box 攻击判定。
+7. 所有中间结果统一保存为 JSONL。
+8. 所有阶段要有 logging、tqdm 进度条、manifest 文件和 --force 断点续跑能力。
+9. LLM API、Sibling LLM、Victim/RAG Generator 均接口化，不硬编码 API key。
+10. 优先复用当前已有代码，不做无意义删除。
+
+
+三、当前已观察到的项目结构
+--------------------------
+
+当前仓库根目录主要包含：
+
+- configs/
+  - sft_config.yaml
+  - prepare_config.yaml
+  - llm_profiles.yaml
+  - data_config.yaml
+  - attack_config.yaml
+
+- datasets/
+  - 当前已有数据目录，后续会扩展 raw、processed、splits、spoofed、benchmarks 等子目录。
+
+- output/
+  - 当前已有输出目录，后续建议兼容保留，同时新增 outputs/ 作为 CG-CIR-MIA 规范输出目录。
+
+- scripts/
+  - preprocess_data.py
+  - prepare_benchmark.py
+  - build_sft.py
+  - sft_to_jsonl.py
+  - run_attack.py
+  - report.py
+  - switch_llm.py
+
+- src/
+  - data/
+    - reader.py
+    - preprocess.py
+    - filter.py
+    - cleaner.py
+    - chunker.py
+  - prepare/
+    - splitter.py
+    - benchmark_builder.py
+    - spoof_generator.py
+    - spoof_judge.py
+    - sft_builder.py
+  - attack/
+    - entity_extractor.py
+    - perturbation_generator.py
+    - prompt_builder.py
+    - victim_runner.py
+    - response_parser.py
+    - aggregator.py
+    - adjudicator.py
+    - metrics.py
+  - llm/
+    - factory.py
+    - victim_client.py
+    - sibling_client.py
+    - openai_compatible.py
+  - utils/
+    - io.py
+    - seed.py
+    - hash.py
+    - logger.py
+
+- tests/
+  - test_strict_recovery.py
+
+初步判断：
+当前代码已经有数据清洗、切分、spoof、实体抽取、扰动、prompt、victim runner、response parser、聚合和指标模块。
+因此本次会以“改造并扩展现有模块”为主，而不是新建完全独立的玩具项目。
+
+
+四、需要新增或重点改造的模块
+----------------------------
+
+1. configs/
+   - 新增 rag_config.yaml
+   - 新增 spoof_config.yaml
+   - 新增 baseline_config.yaml
+   - 新增 defense_config.yaml
+   - 新增 experiment_config.yaml
+   - 扩展 data_config.yaml 和 attack_config.yaml
+
+2. src/data/
+   - 改造 preprocess.py、cleaner.py、filter.py、chunker.py
+   - 支持 Enron、CUAD、EDGAR、PubMed 的本地数据标准化
+   - 输出 datasets/processed/{dataset}.jsonl
+
+3. src/prepare/
+   - 改造 splitter.py
+   - 改造 benchmark_builder.py
+   - 改造 spoof_generator.py 和 spoof_judge.py
+   - 严格支持 KB_Member、True_Non_Member、Spoof_Seed、Reserve 切分
+   - 构建只包含 KB_Member、True_Non_Member、Spoofed_Non_Member 的 attack benchmark
+
+4. src/rag/（新增）
+   - index_builder.py
+   - retriever.py
+   - vector_store.py
+   - generator.py 或 rag_runner.py
+   - 只允许 KB_Member 进入 FAISS index
+
+5. src/spoof/（新增或从 src/prepare 拆分）
+   - generation.py
+   - quality.py
+   - statistics.py
+   - 用 Sibling LLM 接口生成 Spoofed_Non_Member hard negative
+
+6. src/attack/
+   - 改造 entity_extractor.py
+   - 改造 perturbation_generator.py
+   - 改造 prompt_builder.py 或新增 query_generation 模块
+   - 改造 response_parser.py
+   - 保留原有攻击逻辑中可复用部分
+
+7. src/query_generation/（新增）
+   - conflict_query_builder.py
+   - stealth_filter.py
+   - 支持 direct_conflict、compressed_conflict、role_based_audit、structured_verification、low_similarity_stealth
+
+8. src/scoring/（新增）
+   - recovery_scorer.py
+   - cg_cms.py
+   - thresholding.py
+   - 实现 CMS_RAG、CMS_LLM、CG-CMS 和低误报规则
+
+9. src/baselines/（新增）
+   - direct_rag_mia.py
+   - s2mia.py
+   - mba.py
+   - interrogation_attack.py
+   - cir_without_context_gain.py
+
+10. src/defenses/（新增）
+    - conflict_aware_non_disclosure.py
+    - entity_redaction.py
+    - query_similarity_filter.py
+    - answer_without_correction.py
+
+11. src/evaluation/（新增）
+    - metrics.py
+    - mechanism_analysis.py
+    - report_builder.py
+
+12. src/utils/
+    - 强化 jsonl 读写、manifest、配置加载、断点续跑、日志、错误记录能力
+
+13. scripts/
+    - 新增并保证顺序可执行：
+      01_preprocess_data.py
+      02_split_dataset.py
+      03_build_rag_index.py
+      04_generate_spoofed_nonmember.py
+      05_build_attack_benchmark.py
+      06_extract_entities.py
+      07_generate_conflict_queries.py
+      08_filter_stealth_queries.py
+      09_run_rag_and_llm_only.py
+      10_parse_and_score.py
+      11_run_baselines.py
+      12_mechanism_analysis.py
+      13_run_defenses.py
+      14_generate_report.py
+
+
+五、计划执行步骤
+----------------
+
+阶段 1：梳理现有代码
+- 阅读 README.md、configs、src/data、src/prepare、src/attack、src/llm、tests。
+- 记录哪些代码可以复用，哪些需要移动或改造。
+
+阶段 2：补齐基础设施
+- 统一 JSONL IO。
+- 统一 manifest 写入。
+- 统一配置加载。
+- 统一 logging。
+- 增加 --force 跳过/重跑逻辑。
+- 保证 Windows 路径兼容。
+
+阶段 3：数据标准化和切分
+- 改造 preprocess。
+- 支持 Enron、CUAD、EDGAR、PubMed 本地数据。
+- 实现四组互斥切分。
+- 生成 split_manifest。
+
+阶段 4：RAG 知识库
+- 新增 RAG index builder。
+- 接入 embedding client。
+- 支持 FAISS。
+- 保存 faiss.index、docstore.jsonl、index_manifest.json。
+- 强制校验只有 KB_Member 进入 index。
+
+阶段 5：Spoofed_Non_Member
+- 用 Sibling LLM client 接口生成改写候选。
+- mock 模式可先跑通流程。
+- 实现质量评分和阈值过滤。
+- 输出 spoof_manifest 和统计。
+
+阶段 6：Attack Benchmark
+- 合并 KB_Member、True_Non_Member、Spoofed_Non_Member。
+- 写入 benchmark jsonl 和 manifest。
+- 明确 in_knowledge_base 标签。
+
+阶段 7：实体抽取、扰动和 query 生成
+- 规则抽取 MONEY、DATE、PERCENT、NUMERIC_VALUE、MEDICAL_VALUE、CONTRACT_TERM。
+- NER 抽取 PERSON、ORG、LOCATION。
+- Sibling LLM 辅助 importance、replaceability、privacy_specificity。
+- 生成 conflict sample。
+- 构造自然冲突 query。
+- stealth filter 过滤可疑 query。
+
+阶段 8：RAG 与 LLM-only 双模式运行
+- RAG：query -> retriever -> context -> generator -> response。
+- LLM-only：query -> generator -> response。
+- 同一 generator，不提供 retrieved context。
+- 输出 rag_responses 和 llm_only_responses。
+
+阶段 9：解析和打分
+- 解析是否恢复 original_entity、是否保留 conflict_entity、是否拒答、是否 unknown。
+- 计算 recovery level。
+- 聚合 CMS_RAG、CMS_LLM、CG-CMS。
+- 实现默认 threshold 和低误报规则。
+
+阶段 10：baseline、机制分析、防御、报告
+- 实现 baseline 接口和可运行 stub。
+- 实现机制分析统计。
+- 实现防御实验接口。
+- 生成 final_report.json 和 summary.md。
+
+阶段 11：README 和测试
+- 更新 README.md，写清楚小白可运行步骤。
+- 增加基础测试。
+- 至少保证小规模 Enron mock 流程可跑通。
+
+
+六、当前进度
+------------
+
+[x] 已读取技能说明：planning-with-files、daily-coding。
+[x] 已初步读取仓库根目录和文件列表。
+[x] 已创建本改造记录文档：CG-CIR-MIA改造记录.txt。
+[x] 已继续读取 README.md、现有配置和核心 src 文件。
+[x] 已制定更具体的代码改造清单。
+[x] 已补齐第一版 CG-CIR-MIA 配置、脚本和模块。
+[x] 已运行语法检查和单元测试。
+[x] 语法检查通过：python -m compileall src scripts tests。
+[x] 单元测试通过：python -m unittest discover -s tests，共 8 个测试。
+
+
+七、后续记录方式
+----------------
+
+后续每完成一个阶段，会继续更新本文档：
+
+1. 记录新增或修改的文件。
+2. 记录关键设计选择。
+3. 记录已验证的命令。
+4. 记录遇到的问题和解决方式。
+5. 记录你作为初学者需要重点理解的运行步骤。
+
+
+八、已新增或修改的文件
+----------------------
+
+配置文件：
+- configs/data_config.yaml：改为 CG-CIR-MIA 数据预处理和四组切分配置。
+- configs/attack_config.yaml：改为实体抽取、冲突 query、stealth filter 和 CG-CMS 配置，同时保留旧入口需要的 legacy paths。
+- configs/rag_config.yaml：新增 RAG index、embedding、retrieval 和 generation 配置。
+- configs/spoof_config.yaml：新增 Spoofed_Non_Member 生成和评分配置。
+- configs/baseline_config.yaml：新增 baseline 配置。
+- configs/defense_config.yaml：新增 defense 配置。
+- configs/experiment_config.yaml：新增端到端实验开关配置。
+
+数据与准备模块：
+- src/data/filter.py：新增实体统计、实体密度、模板过滤和 metadata 生成。
+- src/data/cleaner.py：新增 Enron 邮件清洗和 PubMed references 清洗。
+- src/data/preprocess.py：输出 doc_id、metadata、错误文件、统计信息和示例。
+- src/prepare/splitter.py：新增 split_dataset_cg_cir，支持 KB_Member / True_Non_Member / Spoof_Seed / Reserve。
+- src/prepare/benchmark_builder.py：新增 build_cg_cir_attack_benchmark。
+
+RAG 模块：
+- src/rag/__init__.py
+- src/rag/embeddings.py：支持真实 sentence-transformers 和离线 hashing fallback。
+- src/rag/index_builder.py：只用 KB_Member 构建 index，保存 faiss.index、docstore.jsonl、index_manifest.json。
+- src/rag/retriever.py：加载 index 并执行 top-k 检索。
+- src/rag/runner.py：同一 query 同时运行 RAG 和 LLM-only。
+
+Spoof 模块：
+- src/spoof/__init__.py
+- src/spoof/generator.py：由 Spoof_Seed 生成 Spoofed_Non_Member，并输出质量统计。
+
+攻击与 query 模块：
+- src/attack/entity_extractor.py：扩展实体类型和输出字段。
+- src/attack/perturbation_generator.py：新增 generate_conflict_samples。
+- src/query_generation/__init__.py
+- src/query_generation/conflict_query_builder.py：生成自然冲突 query。
+- src/query_generation/stealth_filter.py：过滤 prompt injection、context probing、membership probing 等可疑 query。
+
+打分与评估模块：
+- src/scoring/__init__.py
+- src/scoring/recovery_scorer.py：解析 RAG/LLM-only 响应，计算 CMS_RAG、CMS_LLM、CG-CMS。
+- src/evaluation/__init__.py
+- src/evaluation/metrics.py：新增 KB_Member vs non-member 指标。
+- src/evaluation/mechanism_analysis.py：新增机制分析报告。
+- src/evaluation/report_builder.py：新增最终 JSON 和 Markdown 报告生成。
+
+Baseline 和 defense：
+- src/baselines/__init__.py
+- src/baselines/runner.py：实现 CG-CIR-MIA 和 without context gain 指标，预留其他 baseline 接口。
+- src/defenses/__init__.py
+- src/defenses/runner.py：预留四类 defense policy 评估接口。
+
+脚本：
+- scripts/01_preprocess_data.py
+- scripts/02_split_dataset.py
+- scripts/03_build_rag_index.py
+- scripts/04_generate_spoofed_nonmember.py
+- scripts/05_build_attack_benchmark.py
+- scripts/06_extract_entities.py
+- scripts/07_generate_conflict_queries.py
+- scripts/08_filter_stealth_queries.py
+- scripts/09_run_rag_and_llm_only.py
+- scripts/10_parse_and_score.py
+- scripts/11_run_baselines.py
+- scripts/12_mechanism_analysis.py
+- scripts/13_run_defenses.py
+- scripts/14_generate_report.py
+
+文档：
+- README.md：重写为 CG-CIR-MIA 详细中文运行说明。
+- task_plan.md：新增工程任务计划文件。
+
+测试：
+- tests/test_cg_cir_mia.py：新增 CG-CIR-MIA 关键行为测试。
+  - 验证四组切分互斥。
+  - 验证 RAG index 拒绝非 KB_Member。
+  - 验证 CG-CMS 会扣除 LLM-only 恢复。
+
+
+九、已验证命令
+--------------
+
+1. 语法检查：
+
+python -m compileall src scripts tests
+
+结果：通过。
+
+2. 单元测试：
+
+python -m unittest discover -s tests
+
+结果：通过，共 8 个测试。

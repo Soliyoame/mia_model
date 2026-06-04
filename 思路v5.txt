@@ -1,0 +1,137 @@
+核心设定：攻击者与受害者的“同源非对称”对抗
+在实验开始前，我们先明确模型阵容：
+
+受害大杯模型 (Victim Target)：例如 GPT-4o。这是我们要攻击和探测试探的目标，它拥有最庞大的参数记忆。
+
+同源小杯模型 (Sibling Judge)：例如 GPT-4o-mini。它与受害模型出自同一实验室，经过了同样的 RLHF（人类反馈强化学习）和 SFT（指令微调），因此它们的“语言偏好分布”高度一致，但它的参数量小，用来做廉价的打分和文本生成。
+
+第一阶段：同源伪造与分布对齐层 (Sibling-Assisted Spoofing)
+目标：利用“小杯模型”生成出足以骗过“大杯模型”的伪造非成员，且全程不让“大杯模型”提前看到这些数据。
+
+绝对隔离的源数据采集：
+
+收集一批时间截断在受害模型知识库之后的新数据（如最新的内部邮件、2025年的新闻），作为“真实非成员”的种子。同时准备一批模型肯定见过的“真实成员”。
+
+小杯模型迭代重写 (Sibling Generation)：
+
+将种子文本发给 GPT-4o-mini，要求其使用“高平滑度、教科书体”进行重写。
+
+小杯模型自然度打分 (Sibling LLM-as-a-Judge)：
+
+这是取代原来算 Loss 的核心步骤！
+
+把重写后的候选文本，再次发给无状态的 GPT-4o-mini，提示词：“请作为严苛的语言学家，对这段话的‘符合人类直觉程度、句法流畅度、专业度’进行 1-10 分打分。”
+
+准入机制：只有被 GPT-4o-mini 打出 9 分或 10 分的文本，才被收录为最终的**“伪造非成员 (Spoofed Non-members)”**。
+
+逻辑防御：因为 GPT-4o 和 GPT-4o-mini 拥有高度相似的对齐策略，小杯模型觉得完美的句子，大杯模型也一定会觉得极其符合直觉。分布对齐完成！
+
+第二阶段：实体微扰下毒层 (Entity Perturbation)
+目标：在三类数据（真实成员、真实非成员、伪造非成员）中，无痕植入“测试病毒”。
+
+定位记忆锚点：
+
+调用 GPT-4o-mini，让它找出每段文本中的“硬核事实实体”（如具体的年份、专有名词、数量值）。
+
+逻辑合理化篡改：
+
+要求模型把该实体替换为一个同类别、符合语境但错误的值。例如将“该法案于 1998 年通过”改为“该法案于 2004 年通过”。
+
+记录罪证：
+
+在系统的数据库中，为你留下三个关键线索：Original_Entity (1998)、Perturbed_Entity (2004)、以及最终的 Poisoned_Text (带毒文本)。
+
+第三阶段：黑盒降维打击层 (Black-box Probing)
+目标：此时，真正的目标——受害大杯模型（GPT-4o）终于登场。由于之前的操作都在小杯模型上完成，大杯模型对这些带毒文本是完全初见的。
+
+构造伪装探针 (Prompt Engineering)：
+
+我们不能问它“你见过这句话吗”，而是要触发它的被动技能。
+
+探针指令：“你是一个高级文字编辑。请通读以下文本，修复任何潜在的语法瑕疵，并输出校对后的完整段落：[Poisoned_Text]”
+
+高压审讯 (Zero-Temperature Execution)：
+
+调用 GPT-4o API，强制设置 Temperature = 0。
+
+为什么设为 0？ 因为我们要阻断它发散思考的能力，逼迫它使用底层的最大似然概率（即最深刻的参数记忆）来进行输出。
+
+回收结果：
+
+将 GPT-4o 吐出的整段“校对后文本”保存下来。
+
+第四阶段：仲裁与指标评估层 (Adjudication & Evaluation)
+目标：审视大杯模型的“供词”，用统计学指标定罪。
+
+三路分支仲裁逻辑：
+
+对比 GPT-4o 输出的文本与我们的记录：
+
+命中记忆 (强迫纠错)：如果 GPT-4o 的输出里，2004 不见了，它硬生生改回了 1998。
+👉 铁证如山，判定为：MEMBER (它是训练集数据)。
+
+盲从错误 (缺乏记忆)：如果 GPT-4o 优化了语法，但依然老老实实地保留了 2004。
+👉 证明它根本没见过原文，判定为：NON-MEMBER。
+
+信号丢失 (模棱两可)：如果 1998 和 2004 都不在（它把这句删了）。
+👉 保守处理，判定为：NON-MEMBER（不增加我们的假阳性）。
+
+顶会级实验对比 (生成完美的故事表格)：
+
+对比组 A（普通非成员）：因为没见过，大模型盲从错误。FPR 极低（如 0.2%）。
+
+对比组 B（同源伪造非成员）：这批数据极其符合 GPT-4o 的口味，如果是传统方法，大模型会因为觉得它太顺滑而给出低 Loss（被误判为成员）。但在我们的探针下，大模型依然盲从了错误！FPR 依然极低（如 0.3%）。
+
+实验组 C（真实成员）：大模型爆发了知识冲突，进行了大面积的“强迫纠错”。TPR 极高（如 80%）。
+
+
+
+
+
+
+# 角色设定
+你现在是一位顶级的 AI 安全研究员和资深的 Python 架构师。我需要你帮我重构一个用于大语言模型（LLM）的成员推理攻击（Membership Inference Attack, MIA）代码库。
+
+# 背景与目标
+我目前的代码库是一个“基于 Loss 和 GBDT”的白盒/灰盒 MIA 审计器，它需要本地部署大模型来计算困惑度（Perplexity/Loss）。
+现在，为了冲击安全四大顶会，我决定将其架构彻底重构为**“纯黑盒、纯 API 驱动、基于知识冲突与强迫纠错（Forced Correction）”**的新型 MIA 攻击框架。在这个新框架下，我们完全放弃计算 Loss，也放弃使用机器学习分类器（GBDT）。
+
+# 核心学术思路（Asymmetric Sibling-Assisted Forced Correction）
+1. **对照组伪造（小杯模型完成）**：利用便宜的同源小杯模型（如 GPT-4o-mini）对真实非成员文本进行“高平滑度”重写，并由小杯模型自己作为裁判（LLM-as-a-Judge）打分（1-10分）。只保留打出 9-10 分的极高流畅度文本，作为“伪造非成员”。
+2. **记忆锚点篡改**：在“真实成员”、“真实非成员”、“伪造非成员”中，挑出一个硬核实体（如年份、人名），并用小杯模型将其无痕替换为错误的同类实体（即“下毒”）。
+3. **黑盒探针（大杯模型完成）**：把带毒文本发给受害黑盒模型（如 GPT-4o），要求其进行“文本校对（Proofreading）”（Temperature=0）。
+4. **行为仲裁**：分析输出文本。如果黑盒模型将错误实体“悄悄纠正”回了原实体，说明触发了它的参数记忆（强迫纠错），判定为 Member；如果它盲从了错误实体，判定为 Non-Member。
+
+# 具体重构指令（File-by-File）
+
+请根据上述思路，帮我重构代码。以下是具体的文件变动要求：
+
+### 1. 需要彻底删除/废弃的文件：
+- `src/reference_model.py` 和 `src/victim_model.py` (我们不再需要在本地加载 HuggingFace 模型和计算 Loss)。
+- `src/attack_model.py` (我们不再需要 AuditorFeatureExtractor 提取 Loss 特征，也不需要 GBDT 分类器)。
+- `src/neighborhood_probe.py` (不再需要同义词邻域探测)。
+
+### 2. 需要修改的文件：`src/audit_data.py` (数据中枢层)
+- 废弃原来依赖 `membership_scorer` 和 `spoof_threshold` (Loss阈值) 的逻辑。
+- 引入 **LLM-as-a-Judge 打分机制**：在生成候选伪造文本后，调用 `self.llm` 询问：“请作为语言学家，对这段文本的流畅度和自然度打分（1-10分），只输出数字。”
+- 只有得分 >= 9 的候选文本，才被收录为 `Spoofed_NonMember`。
+
+### 3. 需要新建的文件：`src/perturbator.py` (扰动注入层)
+- 编写一个 `KnowledgePerturbator` 类。
+- 包含方法 `perturb(text)`：调用 `self.llm` 找出 text 中的一个硬事实实体，将其篡改为另一个合理但错误的实体。
+- 返回字典格式：`{"original_entity": "...", "perturbed_entity": "...", "poisoned_text": "..."}`。若无法篡改则返回 None。
+
+### 4. 需要新建的文件：`src/blackbox_auditor.py` (黑盒探针与仲裁层)
+- 编写 `BlackboxAuditor` 类，接收 `victim_llm_client` (受害模型的 API 客户端)。
+- 包含方法 `probe(poisoned_text)`：构建校对指令 Prompt (`"You are a proofreader. Please fix grammar and polish the following text, keeping facts intact: [text]"`），以 temperature=0 发给受害模型，获取 `response_text`。
+- 包含方法 `adjudicate(original_entity, perturbed_entity, response_text)`：
+  - 分支 A (Member): `original_entity` 出现，且 `perturbed_entity` 不出现。
+  - 分支 B (Non-Member): `perturbed_entity` 出现。
+  - 分支 C (Ambiguous): 其他情况（记为 Non-Member 以降低 FPR）。
+
+### 5. 需要重构的主流程：`src/pipeline.py` & `main.py`
+- 将流程串联：`AuditDatasetBuilder` -> `KnowledgePerturbator` -> `BlackboxAuditor`。
+- 最终输出顶会级别的统计日志，分别打印三类数据（True Members, True Non-members, Spoofed Non-members）各自的 Total 数量、触发 Auto-corrected 的数量，以及计算出的 TPR 和 FPR。
+
+# 你的任务
+请一步步思考，并为我提供重构后核心文件（特别是 `perturbator.py`、`blackbox_auditor.py` 和重写后的 `pipeline.py`）的 Python 完整代码。代码需要保持高可读性、良好的注释，并且充分体现“LLM API 驱动”的特性。

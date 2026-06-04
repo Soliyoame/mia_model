@@ -1,0 +1,17 @@
+# Defense experiment configuration.
+
+logging:
+  level: INFO
+  file: datasets/logs/defenses.log
+
+paths:
+  scores_dir: outputs/scores
+  defenses_dir: outputs/defenses
+
+defense:
+  threshold: 0.5
+  policies:
+    conflict_aware_non_disclosure: true
+    entity_redaction: true
+    query_similarity_filter: true
+    answer_without_correction: true

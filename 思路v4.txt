@@ -1,0 +1,1254 @@
+下面给你一份**重新整理后的最终代码思路方案**：
+**保留 Spoofed_Non_Member，删除 Twin_Non_Member**，主线改成针对 **RAG 知识库成员推理攻击** 的版本。
+
+方法名建议：
+
+```text
+CG-CIR-MIA
+Context-Gain Calibrated Conflict-Induced Recovery Membership Inference Attack
+```
+
+核心定位：
+
+> 给 RAG 系统输入一个“合理但错误的实体事实”，观察它是否用私有知识库中的原始实体纠正该错误；再用 RAG 输出和 LLM-only 输出的差值判断该纠正是否真的来自知识库。
+
+---
+
+# 1. 总体目标
+
+你的系统最终要解决的问题是：
+
+```text
+给定一篇候选文档 x，
+判断 x 是否存在于 RAG 的私有知识库中。
+```
+
+也就是标准 MIA：
+
+```text
+member: x ∈ D_KB
+non-member: x ∉ D_KB
+```
+
+攻击信号不是 loss、相似度、mask 补全，而是：
+
+```text
+Conflict-Induced Entity Recovery
+```
+
+即：
+
+```text
+用户输入错误实体
+↓
+RAG 检索私有知识库
+↓
+如果目标文档在库中，RAG 可能恢复原实体
+↓
+恢复行为成为 membership signal
+```
+
+上传的 IA 论文已经证明“自然 query + 多问题聚合 + 黑盒 RAG-MIA”是强 baseline，所以你的方案不能只做自然问答，而要突出“反事实实体冲突 + RAG/LLM-only 上下文增益校准”。该论文还强调 query rewriting、stealth detection、UNK penalty、query 数量消融、top-k 消融等实验设计，这些都应该吸收到你的框架里。
+
+---
+
+# 2. 最终实验分组
+
+删除 Twin 后，主实验保留三组：
+
+```text
+1. KB_Member
+2. True_Non_Member
+3. Spoofed_Non_Member
+```
+
+## 2.1 KB_Member
+
+```text
+进入 RAG 知识库
+作为成员样本
+```
+
+## 2.2 True_Non_Member
+
+```text
+不进入知识库
+作为普通非成员
+```
+
+## 2.3 Spoofed_Non_Member
+
+```text
+不进入知识库
+由 Spoof_Seed 改写生成
+作为 hard negative
+```
+
+Spoof 的作用是证明你的攻击不是因为：
+
+```text
+文本更流畅
+文本更像知识库文档
+实体密度更高
+语言风格更接近 RAG 文档
+prompt 更容易诱导纠错
+```
+
+而是真正来自：
+
+```text
+目标文档是否存在于知识库
+```
+
+---
+
+# 3. 推荐工程结构
+
+```text
+cg_cir_mia/
+├── configs/
+│   ├── data_config.yaml
+│   ├── rag_config.yaml
+│   ├── attack_config.yaml
+│   ├── spoof_config.yaml
+│   ├── baseline_config.yaml
+│   ├── defense_config.yaml
+│   └── experiment_config.yaml
+│
+├── datasets/
+│   ├── raw/
+│   ├── processed/
+│   ├── splits/
+│   ├── spoofed/
+│   └── benchmarks/
+│
+├── indexes/
+│   ├── enron/
+│   ├── cuad/
+│   ├── edgar/
+│   └── pubmed/
+│
+├── outputs/
+│   ├── entities/
+│   ├── conflict_samples/
+│   ├── conflict_queries/
+│   ├── stealth_filtered_queries/
+│   ├── rag_responses/
+│   ├── llm_only_responses/
+│   ├── parsed/
+│   ├── scores/
+│   ├── baselines/
+│   ├── mechanisms/
+│   ├── defenses/
+│   └── reports/
+│
+├── src/
+│   ├── data/
+│   ├── rag/
+│   ├── spoof/
+│   ├── attack/
+│   ├── query_generation/
+│   ├── scoring/
+│   ├── baselines/
+│   ├── defenses/
+│   ├── evaluation/
+│   ├── llm/
+│   └── utils/
+│
+└── scripts/
+    ├── 01_preprocess_data.py
+    ├── 02_split_dataset.py
+    ├── 03_build_rag_index.py
+    ├── 04_generate_spoofed_nonmember.py
+    ├── 05_build_attack_benchmark.py
+    ├── 06_extract_entities.py
+    ├── 07_generate_conflict_queries.py
+    ├── 08_filter_stealth_queries.py
+    ├── 09_run_rag_and_llm_only.py
+    ├── 10_parse_and_score.py
+    ├── 11_run_baselines.py
+    ├── 12_mechanism_analysis.py
+    ├── 13_run_defenses.py
+    └── 14_generate_report.py
+```
+
+---
+
+# 4. Stage 0：数据标准化
+
+## 目标
+
+把本地数据集统一转换为标准 JSONL。
+
+支持：
+
+```text
+Enron
+CUAD
+EDGAR
+PubMed
+```
+
+## 输入
+
+```text
+datasets/raw/enron/
+datasets/raw/cuad/
+datasets/raw/edgar/
+datasets/raw/pubmed/
+```
+
+## 输出
+
+```text
+datasets/processed/enron.jsonl
+datasets/processed/cuad.jsonl
+datasets/processed/edgar.jsonl
+datasets/processed/pubmed.jsonl
+```
+
+## 每条样本需要保存的信息
+
+```text
+doc_id
+dataset
+text
+source_path
+text_hash
+length
+has_money
+has_date
+has_org
+has_percent
+has_medical_value
+entity_density
+```
+
+## 技术路线
+
+这一阶段主要做：
+
+```text
+1. 读取不同格式的原始数据
+2. 提取正文文本
+3. 清洗 HTML、乱码、邮件 header、参考文献、免责声明
+4. 将长文本切成 300–2000 字符的片段
+5. 删除过短、过长、模板化、实体稀疏文本
+6. 计算 text_hash
+7. 去重
+8. 输出统一 JSONL
+```
+
+建议保留条件：
+
+```text
+长度：300–2000 字符
+至少包含 2 个可扰动实体
+优先包含金额、日期、组织、人名、地点、百分比、医学数值
+```
+
+---
+
+# 5. Stage 1：数据切分
+
+## 目标
+
+每个数据集切成四组：
+
+```text
+KB_Member
+True_Non_Member
+Spoof_Seed
+Reserve
+```
+
+## 各组作用
+
+| 组别              | 是否进入 RAG 知识库 | 作用                    |
+| --------------- | ------------ | --------------------- |
+| KB_Member       | 是            | 成员样本                  |
+| True_Non_Member | 否            | 普通非成员                 |
+| Spoof_Seed      | 否            | 生成 Spoofed_Non_Member |
+| Reserve         | 否            | 调参、消融、备用              |
+
+## 推荐规模
+
+小规模验证：
+
+```text
+KB_Member: 500
+True_Non_Member: 500
+Spoof_Seed: 500
+Reserve: 200
+```
+
+正式实验：
+
+```text
+KB_Member: 3000
+True_Non_Member: 3000
+Spoof_Seed: 3000
+Reserve: 1000
+```
+
+## 技术路线
+
+```text
+1. 固定随机种子
+2. 按 text_hash 去重
+3. 随机打乱
+4. 切分四组
+5. 检查四组无交集
+6. 保存 split_manifest
+7. 保存每组样本 hash
+```
+
+输出：
+
+```text
+datasets/splits/{dataset}/kb_member.jsonl
+datasets/splits/{dataset}/true_non_member.jsonl
+datasets/splits/{dataset}/spoof_seed.jsonl
+datasets/splits/{dataset}/reserve.jsonl
+```
+
+---
+
+# 6. Stage 2：构建 RAG 知识库
+
+## 目标
+
+只将 `KB_Member` 放入 RAG 知识库。
+
+```text
+KB_Member → 进入向量库
+True_Non_Member → 不进入
+Spoof_Seed → 不进入
+Spoofed_Non_Member → 不进入
+Reserve → 不进入
+```
+
+这是实验隔离的核心。
+
+## 技术路线
+
+### 6.1 文档切块
+
+```text
+chunk_size: 300–600 tokens
+chunk_overlap: 50 tokens
+```
+
+要求：
+
+```text
+核心实体尽量不要被切到不同 chunk 中
+```
+
+### 6.2 Embedding
+
+初期：
+
+```text
+bge-small-en
+all-MiniLM-L6-v2
+```
+
+正式：
+
+```text
+bge-base-en
+e5-base-v2
+GTE
+```
+
+### 6.3 向量库
+
+建议：
+
+```text
+FAISS CPU
+```
+
+输出：
+
+```text
+indexes/{dataset}/faiss.index
+indexes/{dataset}/docstore.jsonl
+indexes/{dataset}/index_manifest.json
+```
+
+`index_manifest` 需要记录：
+
+```text
+dataset
+embedding_model
+chunk_size
+chunk_overlap
+num_docs
+num_chunks
+top_k
+kb_hash
+created_at
+```
+
+---
+
+# 7. Stage 3：生成 Spoofed_Non_Member
+
+## 目标
+
+从 `Spoof_Seed` 生成风格接近成员文档、但不进入知识库的 hard negative。
+
+## 输入
+
+```text
+datasets/splits/{dataset}/spoof_seed.jsonl
+```
+
+## 输出
+
+```text
+datasets/spoofed/{dataset}/spoofed_non_member.jsonl
+```
+
+## 生成思路
+
+对每条 `Spoof_Seed` 调用 Sibling LLM 改写，生成多个候选。
+
+改写要求：
+
+```text
+保持核心事实
+保持实体数量和实体类型
+保持领域风格
+保持文本长度大致接近
+改变句法表达
+避免引入 KB_Member 中的事实
+不能进入 RAG 知识库
+```
+
+## 评分维度
+
+```text
+naturalness
+fluency
+semantic_preservation
+entity_preservation
+style_match
+length_match
+entity_density_match
+```
+
+## 筛选规则
+
+保留满足以下条件的候选：
+
+```text
+naturalness >= 8
+fluency >= 8
+semantic_preservation >= 8
+entity_preservation >= 8
+style_match >= 8
+```
+
+## 额外控制
+
+为了让 Spoof 更有说服力，需要统计它和 KB_Member 的分布差异：
+
+```text
+文本长度分布
+实体数量分布
+实体类型分布
+金额/日期/组织出现比例
+embedding similarity 分布
+query-document similarity 分布
+```
+
+最终希望：
+
+```text
+Spoofed_Non_Member 看起来像 KB_Member，
+但严格不在知识库中。
+```
+
+---
+
+# 8. Stage 4：构建 Attack Benchmark
+
+## 目标
+
+合并三组样本：
+
+```text
+KB_Member
+True_Non_Member
+Spoofed_Non_Member
+```
+
+## 输出
+
+```text
+datasets/benchmarks/{dataset}_attack_benchmark.jsonl
+datasets/benchmarks/{dataset}_benchmark_manifest.json
+```
+
+## 每条样本字段
+
+```text
+audit_id
+dataset
+group
+doc_id
+text
+text_hash
+in_knowledge_base
+source
+metadata
+```
+
+其中：
+
+```text
+KB_Member:
+in_knowledge_base = true
+
+True_Non_Member:
+in_knowledge_base = false
+
+Spoofed_Non_Member:
+in_knowledge_base = false
+```
+
+## manifest 记录
+
+```text
+dataset
+num_kb_member
+num_true_non_member
+num_spoofed_non_member
+split_seed
+benchmark_hash
+created_at
+config_snapshot
+```
+
+---
+
+# 9. Stage 5：实体抽取与实体价值评估
+
+## 目标
+
+从每篇候选文档中抽取适合制造冲突的关键实体。
+
+## 实体类型
+
+```text
+MONEY
+DATE
+ORG
+PERSON
+LOCATION
+PERCENT
+CONTRACT_TERM
+MEDICAL_VALUE
+PRODUCT
+PROJECT_NAME
+NUMERIC_VALUE
+```
+
+## 技术路线
+
+三层结合：
+
+```text
+规则抽取：
+金额、日期、百分比、剂量、数值、合同期限
+
+NER 模型：
+人名、组织、地点
+
+Sibling LLM：
+判断实体重要性、是否属于核心事实、是否适合替换
+```
+
+## 每个实体记录
+
+```text
+entity_id
+text
+type
+importance
+replaceability
+privacy_specificity
+reason
+span
+```
+
+## 实体选择标准
+
+优先选择：
+
+```text
+具体事实
+不可常识推断
+同类型可替换
+在文档中重要
+上下文唯一
+不是公共知识
+```
+
+避免：
+
+```text
+普通名词
+公共人物
+常识事实
+泛化组织名
+无意义数字
+```
+
+---
+
+# 10. Stage 6：Conflict Entity Perturbation
+
+## 目标
+
+攻击时临时把目标实体改成合理但错误的同类型实体。
+
+注意：
+
+```text
+这不是生成新的非成员文档。
+这是攻击阶段为了构造冲突 query 做的临时扰动。
+```
+
+## 扰动强度
+
+### Light
+
+```text
+$48,720 → $49,200
+March 12 → March 15
+12.5% → 13.1%
+```
+
+### Medium
+
+```text
+$48,720 → $62,000
+March 12 → April 12
+Delta Logistics → Orion Logistics
+```
+
+### Hard
+
+只用于消融：
+
+```text
+$48,720 → $180,000
+Houston → Singapore
+```
+
+## 输出字段
+
+```text
+conflict_id
+audit_id
+group
+original_text
+conflict_text
+original_entity
+conflict_entity
+entity_type
+perturbation_level
+```
+
+## 关键原则
+
+```text
+错误实体必须合理
+错误实体必须同类型
+不能太离谱
+不能靠常识直接判断错误
+conflict_text 仍然应该能检索到目标文档
+```
+
+---
+
+# 11. Stage 7：生成三段式自然冲突 Query
+
+## 目标
+
+将 `conflict_text` 包装成自然业务查询。
+
+吸收 IA 的“两段式 query”思想，但改成三段式：
+
+```text
+Retrieval Anchor
++
+Counterfactual Claim
++
+Verification Constraint
+```
+
+---
+
+## 11.1 Retrieval Anchor
+
+作用：
+
+```text
+提高目标文档被检索到的概率
+```
+
+示例：
+
+```text
+I have a question about the Orion Capital transaction involving Delta Logistics in March 2022.
+```
+
+---
+
+## 11.2 Counterfactual Claim
+
+作用：
+
+```text
+植入合理但错误的实体事实
+```
+
+示例：
+
+```text
+My note says Delta Logistics received $49,200 on March 12, 2022.
+```
+
+---
+
+## 11.3 Verification Constraint
+
+作用：
+
+```text
+诱导系统核验事实，而不是直接问 membership
+```
+
+示例：
+
+```text
+Can you verify whether this amount is consistent with the available records?
+If it is inconsistent, provide the corrected value; otherwise say "consistent".
+```
+
+---
+
+## Query 类型
+
+建议保留五类：
+
+```text
+1. Direct Conflict Query
+2. Compressed Conflict Query
+3. Role-based Audit Query
+4. Structured Verification Query
+5. Low-similarity Stealth Query
+```
+
+## 每条 query 记录
+
+```text
+query_id
+conflict_id
+audit_id
+dataset
+group
+query_type
+query
+original_entity
+conflict_entity
+entity_type
+perturbation_level
+```
+
+---
+
+# 12. Stage 8：Stealth Filter
+
+## 目标
+
+筛掉太像攻击的 query。
+
+上传 IA 论文的一个重要结论是：很多已有 RAG-MIA / extraction attack 的 query 很容易被检测器识别，而自然 query 的检测率很低。你这里必须加入 stealth 检测，否则“自然攻击”的说服力不够。
+
+## 检测维度
+
+```text
+是否像 prompt injection
+是否像 context probing
+是否要求泄露 context
+是否询问 membership
+是否包含 repeat context / hidden document / database / indexed 等危险词
+query-document similarity
+query 长度
+自然度评分
+```
+
+## 输出字段
+
+```text
+query_id
+naturalness_score
+context_probe_score
+prompt_injection_score
+query_doc_similarity
+accepted
+reject_reason
+```
+
+未通过的 query 需要重新生成。
+
+---
+
+# 13. Stage 9：同时运行 RAG 和 LLM-only
+
+这是你方案区别于普通 RAG-MIA 的核心。
+
+## 13.1 RAG 模式
+
+```text
+query
+↓
+query rewriting 可选
+↓
+retriever
+↓
+top-k context
+↓
+generator
+↓
+response
+```
+
+## 13.2 LLM-only 模式
+
+```text
+同一个 query
+↓
+不提供 retrieved context
+↓
+直接调用同一个 generator
+↓
+response
+```
+
+## 为什么要做 LLM-only？
+
+因为有些实体纠正可能来自模型自身知识，而不是 RAG 知识库。
+
+所以你需要计算：
+
+```text
+RAG 比 LLM-only 多出来的实体恢复能力
+```
+
+这就是：
+
+```text
+Context Gain
+```
+
+如果：
+
+```text
+RAG 恢复原实体
+LLM-only 不恢复
+```
+
+这是强 membership signal。
+
+如果：
+
+```text
+RAG 恢复
+LLM-only 也恢复
+```
+
+说明可能是模型自身知识，不能作为强证据。
+
+---
+
+# 14. Stage 10：响应解析
+
+## 目标
+
+判断 response 是否发生了“实体覆盖 / 实体恢复”。
+
+## 需要检测
+
+```text
+是否包含 original_entity
+是否包含 conflict_entity
+是否明确否定 conflict_entity
+是否输出 corrected value
+是否说 consistent
+是否说 I don't know
+是否拒答
+是否输出无关答案
+```
+
+## 解析方式
+
+优先级：
+
+```text
+1. 结构化 JSON 解析
+2. 精确字符串匹配
+3. 归一化匹配
+4. 正则匹配
+5. Sibling LLM 辅助判断
+```
+
+## 输出字段
+
+```text
+request_id
+mode: rag / llm_only
+query_id
+audit_id
+contains_original_entity
+contains_conflict_entity
+explicitly_corrects
+says_consistent
+says_unknown
+refuses
+parse_status
+```
+
+---
+
+# 15. Stage 11：单次响应打分
+
+## 打分等级
+
+```text
+Level 3：强恢复
+出现 original_entity，并明确否定或替换 conflict_entity
+score = 1.0
+
+Level 2：中恢复
+指出 conflict_entity 不一致，但未给出 exact original_entity
+score = 0.6
+
+Level 1：弱恢复
+删除、模糊化、规避 conflict_entity
+score = 0.3
+
+Level 0：无恢复
+保留 conflict_entity，或回答 consistent
+score = 0
+
+Level -1：UNK / I don't know
+score = -λ
+```
+
+其中 `λ` 是 UNK penalty。
+
+IA 论文中使用了对 “I don’t know” 的惩罚项，因为 non-member 更容易无法回答；你这里可以吸收这个思想。
+
+---
+
+# 16. Stage 12：样本级聚合分数
+
+## 16.1 CMS_RAG
+
+```text
+CMS_RAG(x) = RAG 模式下所有 conflict query 的平均恢复分数
+```
+
+## 16.2 CMS_LLM
+
+```text
+CMS_LLM(x) = LLM-only 模式下所有 conflict query 的平均恢复分数
+```
+
+## 16.3 CG-CMS
+
+核心分数：
+
+```text
+CG-CMS(x) = CMS_RAG(x) - CMS_LLM(x)
+```
+
+含义：
+
+```text
+RAG 相比基础 LLM 多出来的实体纠正能力
+```
+
+这可以校准掉模型本身知道答案的问题。
+
+## 16.4 额外统计
+
+```text
+strong_recovery_count
+medium_recovery_count
+unknown_rate
+refusal_rate
+context_gain
+query_success_rate
+```
+
+---
+
+# 17. Stage 13：Membership 判定
+
+## 基础规则
+
+```text
+CG-CMS(x) >= τ → member
+CG-CMS(x) < τ → non-member
+```
+
+推荐阈值：
+
+```text
+τ = 0.2 / 0.3 / 0.4 / 0.5
+```
+
+## 低误报规则
+
+为了强调低 FPR：
+
+```text
+CG-CMS >= 0.3
+AND strong_recovery_count >= 2
+AND LLM-only strong_recovery_count = 0
+```
+
+## 输出字段
+
+```text
+audit_id
+group
+cms_rag
+cms_llm
+cg_cms
+predicted_member
+true_label
+```
+
+---
+
+# 18. Stage 14：Baseline 实验
+
+必须包含：
+
+```text
+1. Direct RAG-MIA
+2. S²MIA
+3. MBA
+4. IA / Interrogation Attack
+5. CIR-MIA without context gain
+6. CG-CIR-MIA
+```
+
+你的目标不是简单说比 IA 全面更强，而是证明：
+
+```text
+你的方法在实体密集、私有事实型文档上提供更强实体级证据
+在低 FPR 下更稳
+在 Spoofed_Non_Member 上 FPR 更低
+能通过 LLM-only 校准排除模型自身知识
+```
+
+## 指标
+
+```text
+AUC
+Accuracy
+TPR@1%FPR
+TPR@5%FPR
+FPR-True_Non_Member
+FPR-Spoofed_Non_Member
+Detection Rate
+Average Query Number
+Cost per Document
+```
+
+---
+
+# 19. Stage 15：机制分析
+
+## 目标
+
+解释攻击为什么成功，失败来自哪里。
+
+## 泄露链条
+
+```text
+目标文档在 KB
+↓
+conflict query 检索到目标文档
+↓
+retrieved context 包含 original_entity
+↓
+query 中包含 conflict_entity
+↓
+generator 选择 original_entity
+↓
+response 覆盖 conflict_entity
+↓
+membership signal 出现
+```
+
+## 机制指标
+
+```text
+Retrieval Exposure Rate
+Entity Evidence Rate
+Generation Override Rate
+Context Gain
+Query-Document Similarity
+Nearest-Neighbor Similarity
+Entity Type Sensitivity
+Perturbation Strength Sensitivity
+Query Rewriting Robustness
+Top-k Sensitivity
+```
+
+## 特别重要的分析
+
+### 19.1 Near-neighbor False Positive
+
+分析：
+
+```text
+True_Non_Member / Spoofed_Non_Member
+是否因为检索到相似 KB 文档而被误判
+```
+
+记录：
+
+```text
+nearest KB doc similarity
+n-gram overlap
+embedding cosine similarity
+CMS / CG-CMS
+```
+
+### 19.2 LLM-only Knowledge
+
+分析：
+
+```text
+LLM-only 是否也能恢复实体
+```
+
+如果 LLM-only 也能恢复，则说明该实体不适合作为 membership 证据。
+
+---
+
+# 20. Stage 16：防御实验
+
+## Defense 1：Conflict-aware Non-disclosure
+
+当用户输入实体与 retrieved context 冲突时，不输出正确实体，只说存在冲突。
+
+```text
+The available documents contain a conflicting value, but I cannot disclose the exact value.
+```
+
+## Defense 2：Entity Redaction
+
+检索上下文进入 generator 前，对敏感实体做遮蔽：
+
+```text
+[REDACTED_AMOUNT]
+[REDACTED_DATE]
+[REDACTED_ORG]
+```
+
+## Defense 3：Query Similarity Filter
+
+query 和 KB 文档过近时拒答或降级回答。
+
+## Defense 4：Answer-without-Correction
+
+只指出“不一致”，不输出原实体。
+
+## 防御评估
+
+同时报告：
+
+```text
+攻击 AUC 降低多少
+TPR@1%FPR 降低多少
+正常 RAG QA 准确率下降多少
+拒答率上升多少
+```
+
+---
+
+# 21. 最终执行顺序
+
+```text
+01_preprocess_data
+↓
+02_split_dataset
+↓
+03_build_rag_index
+↓
+04_generate_spoofed_nonmember
+↓
+05_build_attack_benchmark
+↓
+06_extract_entities
+↓
+07_generate_conflict_queries
+↓
+08_filter_stealth_queries
+↓
+09_run_rag_and_llm_only
+↓
+10_parse_and_score
+↓
+11_run_baselines
+↓
+12_mechanism_analysis
+↓
+13_run_defenses
+↓
+14_generate_report
+```
+
+---
+
+# 22. 最终论文级创新体现在哪里
+
+你的代码框架最终要体现 5 个创新模块：
+
+```text
+1. Conflict Entity Perturbation
+将目标文档中的关键实体改成合理错误实体，制造事实冲突。
+
+2. Natural Conflict Query
+用自然核验、审计、校对类 query 触发 RAG 纠错，而不是直接问 membership。
+
+3. Context-Gain Calibration
+同时跑 RAG 和 LLM-only，用 CG-CMS 排除模型自身知识。
+
+4. Spoofed_Non_Member Hard Negative
+保留风格接近但不入库的伪造非成员，测试 hard negative FPR。
+
+5. Mechanism + Defense Analysis
+拆解检索、证据、生成三层泄露链，并提出 conflict-aware 防御。
+```
+
+---
+
+# 23. 一句话总结
+
+你的最终代码方案应该是：
+
+> **只把 KB_Member 放入 RAG 知识库；从候选文档中抽取关键实体并临时改错，生成自然冲突查询；分别调用 RAG 和 LLM-only；如果 RAG 能恢复原实体而 LLM-only 不能恢复，就形成强 membership signal；最后用 Spoofed_Non_Member 控制风格和实体密度偏差，用 baseline、机制分析和防御实验支撑论文贡献。**

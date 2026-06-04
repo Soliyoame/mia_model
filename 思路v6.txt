@@ -1,0 +1,908 @@
+下面是**最终版代码思路**，不写任何真实代码，只讲工程流程、模块职责、输入输出和每一步为什么做。
+
+你的当前方法建议命名为：
+
+```text
+PCV-MIA
+Paired Counterfactual Verification Membership Inference Attack
+```
+
+中文可以叫：
+
+```text
+基于成对反事实验证的 RAG 知识库成员推理攻击
+```
+
+核心方法是：
+
+> 从候选文档中抽取可验证事实，构造一组真假事实验证查询 Q+ / Q-，分别让 RAG 和 LLM-only 回答。
+> 如果 RAG 能支持真实事实、否定反事实，而 LLM-only 不能做到，则说明这种验证能力更可能来自 RAG 知识库，从而推断候选文档是 member。
+
+`Spoofed_Non_Member` 保留，但只作为实验对照组，不是方法核心。
+
+---
+
+# 1. 总体代码流程
+
+完整流程如下：
+
+```text
+本地数据集
+↓
+数据清洗与标准化
+↓
+数据切分
+↓
+只用 KB_Member 构建 RAG 知识库
+↓
+可选生成 Spoofed_Non_Member
+↓
+构建 Attack Benchmark
+↓
+事实单元抽取
+↓
+成对 Claim 构造：True Claim / Counterfactual Claim
+↓
+成对 Query 构造：Q+ / Q-
+↓
+RAG 与 LLM-only 双路推理
+↓
+Stance Parsing：判断支持、否定、纠正、未知
+↓
+计算 CVG_RAG、CVG_LLM、CG-CVG
+↓
+得到文档级 PCV_SCORE
+↓
+判断 member / non-member
+↓
+跑 baseline、hard negative、机制分析和防御实验
+```
+
+其中主方法只依赖：
+
+```text
+事实抽取
+成对验证查询
+RAG / LLM-only 双路推理
+CG-CVG 成员分数
+```
+
+`Spoofed_Non_Member`、baseline、defense、mechanism analysis 都是实验部分，不是方法本体。
+
+---
+
+# 2. 推荐项目结构
+
+工程结构可以整理成：
+
+```text
+pcv_mia/
+├── configs/
+│   ├── data_config.yaml
+│   ├── rag_config.yaml
+│   ├── spoof_config.yaml
+│   ├── pcv_attack_config.yaml
+│   ├── baseline_config.yaml
+│   ├── defense_config.yaml
+│   └── experiment_config.yaml
+│
+├── datasets/
+│   ├── raw/
+│   ├── processed/
+│   ├── splits/
+│   ├── spoofed/
+│   └── benchmarks/
+│
+├── indexes/
+│   ├── enron/
+│   ├── cuad/
+│   ├── edgar/
+│   └── pubmed/
+│
+├── outputs/
+│   ├── facts/
+│   ├── paired_claims/
+│   ├── paired_queries/
+│   ├── rag_responses/
+│   ├── llm_only_responses/
+│   ├── parsed_stance/
+│   ├── scores/
+│   ├── baselines/
+│   ├── mechanisms/
+│   ├── defenses/
+│   └── reports/
+│
+├── src/
+│   ├── data/
+│   ├── rag/
+│   ├── spoof/
+│   ├── fact_extraction/
+│   ├── paired_claims/
+│   ├── query_generation/
+│   ├── inference/
+│   ├── parsing/
+│   ├── scoring/
+│   ├── baselines/
+│   ├── mechanisms/
+│   ├── defenses/
+│   ├── evaluation/
+│   ├── llm/
+│   └── utils/
+│
+└── scripts/
+    ├── 01_preprocess_data.py
+    ├── 02_split_dataset.py
+    ├── 03_build_rag_index.py
+    ├── 04_generate_spoofed_nonmember.py
+    ├── 05_build_attack_benchmark.py
+    ├── 06_extract_facts.py
+    ├── 07_generate_paired_claims.py
+    ├── 08_generate_paired_queries.py
+    ├── 09_run_rag_and_llm_only.py
+    ├── 10_parse_stance_and_score.py
+    ├── 11_run_baselines.py
+    ├── 12_mechanism_analysis.py
+    ├── 13_run_defenses.py
+    └── 14_generate_report.py
+```
+
+---
+
+# 3. Stage 0：数据清洗与标准化
+
+## 目标
+
+把 Enron、CUAD、EDGAR、PubMed 等本地数据统一转成 JSONL。
+
+每条样本保存：
+
+```text
+doc_id
+dataset
+text
+source_path
+text_hash
+length
+entity_density
+has_money
+has_date
+has_org
+has_percent
+has_medical_value
+```
+
+## 做什么
+
+这一阶段主要完成：
+
+```text
+读取原始文件
+抽取正文文本
+去 HTML、乱码、异常空格
+去邮件 header、转发噪声、签名
+去参考文献、免责声明、纯模板文本
+长文本切片
+实体密度过滤
+去重
+保存 processed JSONL
+```
+
+## 保留样本标准
+
+建议：
+
+```text
+文本长度：300–2000 字符
+至少包含 2 个可验证事实实体
+优先包含金额、日期、组织、地点、百分比、医学数值、合同期限
+```
+
+---
+
+# 4. Stage 1：数据切分
+
+## 目标
+
+把每个数据集切成四组：
+
+```text
+KB_Member
+True_Non_Member
+Spoof_Seed
+Reserve
+```
+
+## 各组作用
+
+| 组别              | 是否进入 RAG 知识库 | 作用                      |
+| --------------- | ------------ | ----------------------- |
+| KB_Member       | 是            | 成员样本                    |
+| True_Non_Member | 否            | 普通非成员                   |
+| Spoof_Seed      | 否            | 用来生成 Spoofed_Non_Member |
+| Reserve         | 否            | 备用、调参、消融                |
+
+## 关键要求
+
+```text
+固定随机种子
+按 text_hash 去重
+四组严格互斥
+保存 split_manifest
+```
+
+---
+
+# 5. Stage 2：构建 RAG 知识库
+
+## 目标
+
+只用 `KB_Member` 构建向量库。
+
+这是整个实验最重要的隔离原则：
+
+```text
+KB_Member → 进入 RAG 知识库
+True_Non_Member → 不进入
+Spoof_Seed → 不进入
+Spoofed_Non_Member → 不进入
+Reserve → 不进入
+```
+
+## 做什么
+
+```text
+加载 KB_Member
+文档切块
+计算 embedding
+构建 FAISS index
+保存 docstore
+保存 index_manifest
+```
+
+## Manifest 需要记录
+
+```text
+dataset
+embedding_model
+chunk_size
+chunk_overlap
+num_docs
+num_chunks
+kb_hash
+created_at
+```
+
+---
+
+# 6. Stage 3：生成 Spoofed_Non_Member
+
+## 定位
+
+`Spoofed_Non_Member` 不是方法核心，只是实验对照组。
+
+它的作用是：
+
+```text
+测试 PCV-MIA 在风格接近、实体密集、语言流畅的非成员文本上是否仍然低误报
+```
+
+## 输入
+
+```text
+Spoof_Seed
+```
+
+## 输出
+
+```text
+Spoofed_Non_Member
+```
+
+## 生成要求
+
+```text
+保持核心事实
+保持实体数量
+保持实体类型
+保持领域风格
+改变句法表达
+不引入 KB_Member 中的事实
+不进入 RAG 知识库
+```
+
+## 评分维度
+
+```text
+naturalness
+fluency
+semantic_preservation
+entity_preservation
+style_match
+length_match
+entity_density_match
+```
+
+## 论文定位
+
+你可以明确写：
+
+> Spoofed_Non_Member is not part of the attack algorithm. It is only used as a distribution-matched hard negative control.
+
+---
+
+# 7. Stage 4：构建 Attack Benchmark
+
+## 目标
+
+构建最终攻击候选集合。
+
+主实验至少包含：
+
+```text
+KB_Member
+True_Non_Member
+```
+
+增强实验加入：
+
+```text
+Spoofed_Non_Member
+```
+
+## 每条样本需要保存
+
+```text
+audit_id
+dataset
+group
+doc_id
+text
+text_hash
+in_knowledge_base
+metadata
+```
+
+其中：
+
+```text
+KB_Member: in_knowledge_base = true
+True_Non_Member: in_knowledge_base = false
+Spoofed_Non_Member: in_knowledge_base = false
+```
+
+---
+
+# 8. Stage 5：事实单元抽取
+
+这是 PCV-MIA 的核心输入。
+
+## 目标
+
+不是只抽实体，而是抽取“可验证事实单元”。
+
+一个事实单元应该包含：
+
+```text
+subject
+relation
+object_entity
+context
+entity_type
+supporting_sentence
+factual_claim
+```
+
+## 示例
+
+原文：
+
+```text
+Delta Logistics received $48,720 from Orion Capital on March 12, 2022.
+```
+
+抽取成：
+
+```text
+subject: Delta Logistics
+relation: received amount from Orion Capital
+object_entity: $48,720
+context: March 12, 2022
+entity_type: MONEY
+factual_claim: Delta Logistics received $48,720 from Orion Capital on March 12, 2022.
+```
+
+## 技术路线
+
+```text
+规则抽取金额、日期、百分比、医学剂量、合同期限
+NER 抽取 PERSON、ORG、LOCATION
+Sibling LLM 辅助生成 fact unit
+对 fact 打分：importance、replaceability、privacy_specificity
+```
+
+## 筛选原则
+
+保留：
+
+```text
+具体事实
+非公共常识
+上下文唯一
+可同类型替换
+和文档主题强相关
+```
+
+过滤：
+
+```text
+普通名词
+公共常识
+过泛事实
+无意义数字
+容易由 LLM 自身知识判断的事实
+```
+
+---
+
+# 9. Stage 6：成对 Claim 构造
+
+## 目标
+
+每个事实单元生成一对 claim：
+
+```text
+True Claim
+Counterfactual Claim
+```
+
+## 示例
+
+True Claim：
+
+```text
+Delta Logistics received $48,720 from Orion Capital on March 12, 2022.
+```
+
+Counterfactual Claim：
+
+```text
+Delta Logistics received $52,000 from Orion Capital on March 12, 2022.
+```
+
+## 要求
+
+```text
+只替换一个核心实体
+替换实体必须同类型
+错误实体合理但错误
+不能太离谱
+不能靠常识直接判断
+保留足够检索关键词
+```
+
+## 主实验建议
+
+```text
+每篇文档抽取 2 个事实
+每个事实生成 1 对 True / Counterfactual Claim
+扰动强度默认 light
+```
+
+---
+
+# 10. Stage 7：成对 Query 生成
+
+## 目标
+
+把 True Claim 和 Counterfactual Claim 分别包装成自然验证查询。
+
+## 生成两个查询
+
+```text
+Q+：验证真实事实
+Q-：验证反事实错误事实
+```
+
+## Q+ 示例
+
+```text
+I have a question about the Orion Capital transaction involving Delta Logistics in March 2022. 
+My note says Delta Logistics received $48,720 on March 12, 2022. 
+Can you verify whether this amount is consistent with the available records?
+```
+
+## Q- 示例
+
+```text
+I have a question about the Orion Capital transaction involving Delta Logistics in March 2022. 
+My note says Delta Logistics received $52,000 on March 12, 2022. 
+Can you verify whether this amount is consistent with the available records? 
+If it is inconsistent, provide the corrected value.
+```
+
+## Query 类型
+
+可以先保留两类：
+
+```text
+compressed_verification
+role_based_audit
+```
+
+其他类型后续再做消融，不要一开始堆太多。
+
+---
+
+# 11. Stage 8：RAG 与 LLM-only 双路推理
+
+这是你的核心创新之一。
+
+同一组 Q+ / Q- 分别跑：
+
+```text
+RAG mode
+LLM-only mode
+```
+
+## RAG mode
+
+```text
+query
+↓
+retriever
+↓
+top-k retrieved context
+↓
+generator
+↓
+response
+```
+
+## LLM-only mode
+
+```text
+query
+↓
+不提供 retrieved context
+↓
+同一个 generator
+↓
+response
+```
+
+## 为什么要这么做？
+
+因为有些事实可能 LLM 自己就知道。
+你要用 LLM-only 作为校准项：
+
+```text
+如果 RAG 能验证真假事实，但 LLM-only 也能验证，说明可能不是知识库泄露
+如果只有 RAG 能验证，才是强 membership signal
+```
+
+---
+
+# 12. Stage 9：Stance Parsing
+
+## 目标
+
+解析回答对 Q+ / Q- 的态度。
+
+## 对 Q+ 判断
+
+```text
+supports_true_claim
+rejects_true_claim
+says_unknown
+refuses
+unrelated
+```
+
+## 对 Q- 判断
+
+```text
+accepts_counterfactual
+rejects_counterfactual
+corrects_to_original_entity
+mentions_original_entity
+mentions_counterfactual_entity
+says_unknown
+refuses
+unrelated
+```
+
+## 解析优先级
+
+```text
+结构化输出解析
+实体精确匹配
+归一化字符串匹配
+正则匹配
+Sibling LLM judge
+```
+
+---
+
+# 13. Stage 10：PCV-MIA 打分
+
+## 13.1 Q+ 分数：SupportScore
+
+```text
+支持真实事实 / 判断 consistent → +1
+明确否定真实事实 → -1
+I don't know / cannot verify → -λ
+拒答 → 可配置惩罚
+无关回答 → 0
+```
+
+## 13.2 Q- 分数：CorrectionScore
+
+```text
+否定反事实并纠正回原实体 → +1
+否定反事实但不泄露原实体 → +0.5
+接受反事实 / 判断 consistent → -1
+I don't know / cannot verify → -λ
+拒答 → 可配置惩罚
+无关回答 → 0
+```
+
+## 13.3 Pair-level 分数
+
+```text
+CVG_RAG = SupportScore_RAG(Q+) + CorrectionScore_RAG(Q-) - AcceptFalsePenalty_RAG(Q-)
+
+CVG_LLM = SupportScore_LLM(Q+) + CorrectionScore_LLM(Q-) - AcceptFalsePenalty_LLM(Q-)
+
+CG-CVG = CVG_RAG - CVG_LLM
+```
+
+## 13.4 文档级分数
+
+```text
+PCV_SCORE(x) = average(CG-CVG over all fact pairs from document x)
+```
+
+## 13.5 成员判定
+
+```text
+PCV_SCORE >= threshold → member
+PCV_SCORE < threshold → non-member
+```
+
+阈值可以测试：
+
+```text
+0.3
+0.5
+0.7
+1.0
+```
+
+---
+
+# 14. Stage 11：评估指标
+
+主指标：
+
+```text
+AUC
+Accuracy
+Precision
+Recall
+TPR@1%FPR
+TPR@5%FPR
+FPR-True_Non_Member
+```
+
+如果使用 Spoofed_Non_Member，再报告：
+
+```text
+FPR-Spoofed_Non_Member
+```
+
+重点不是只看 accuracy，而是看低误报场景：
+
+```text
+TPR@1%FPR
+TPR@5%FPR
+```
+
+因为 MIA 论文里低 FPR 更有说服力。
+
+---
+
+# 15. Stage 12：Baseline 实验
+
+你已有 baseline 包括 Direct RAG-MIA、S²MIA、MBA、difficulty-calibrated RAG-MIA、E-MIA、IA 等方向。
+
+你的 baseline 模块应包含：
+
+```text
+Direct RAG-MIA
+S²MIA
+MBA
+RAG-leaks / difficulty-calibrated similarity baseline
+E-MIA
+IA / Interrogation Attack
+旧版 CG-CIR-MIA
+新版 PCV-MIA
+```
+
+重点证明：
+
+```text
+PCV-MIA 不是简单自然问答
+不是 mask recovery
+不是语义相似度
+而是成对真假事实验证能力带来的 membership signal
+```
+
+---
+
+# 16. Stage 13：机制分析
+
+机制分析不是方法核心，但正式论文必须做。
+
+## 需要统计
+
+```text
+Retrieval Exposure Rate
+Entity Evidence Rate
+True Claim Support Rate
+Counterfactual Rejection Rate
+Counterfactual Correction Rate
+False Acceptance Rate
+Context Gain
+Query-Document Similarity
+Nearest-Neighbor Similarity
+Entity Type Sensitivity
+Top-k Sensitivity
+Query Rewriting Robustness
+```
+
+## 目的
+
+回答这些问题：
+
+```text
+攻击成功是否来自目标文档被检索到？
+RAG 是否真的看到了原始实体？
+Q+ 是否被支持？
+Q- 是否被否定？
+LLM-only 是否也能判断？
+误报是否来自相似 KB 文档？
+哪个实体类型最有效？
+```
+
+---
+
+# 17. Stage 14：防御实验
+
+防御不是第一版必须实现，但论文后期建议做。
+
+## Defense 1：Conflict-aware Non-disclosure
+
+当用户 claim 和 retrieved context 冲突时：
+
+```text
+不输出正确实体
+只回答：available records contain a conflicting value
+```
+
+注意：这仍然可能泄露 membership，因为它承认了存在冲突。
+
+## Defense 2：Entity Redaction
+
+进入 generator 前，把敏感实体遮蔽：
+
+```text
+[REDACTED_AMOUNT]
+[REDACTED_DATE]
+[REDACTED_ORG]
+```
+
+## Defense 3：Answer-without-Correction
+
+只说 inconsistent，不给 corrected value。
+
+## Defense 4：Query Similarity Filter
+
+query 和 KB 文档太近时拒答或降级。
+
+## 防御评估
+
+```text
+AUC 下降多少
+TPR@1%FPR 下降多少
+exact entity leakage rate
+conflict acknowledgment rate
+正常 RAG QA 准确率下降多少
+```
+
+---
+
+# 18. 最终脚本执行顺序
+
+建议执行顺序：
+
+```text
+01_preprocess_data
+↓
+02_split_dataset
+↓
+03_build_rag_index
+↓
+04_generate_spoofed_nonmember
+↓
+05_build_attack_benchmark
+↓
+06_extract_facts
+↓
+07_generate_paired_claims
+↓
+08_generate_paired_queries
+↓
+09_run_rag_and_llm_only
+↓
+10_parse_stance_and_score
+↓
+11_run_baselines
+↓
+12_mechanism_analysis
+↓
+13_run_defenses
+↓
+14_generate_report
+```
+
+如果先做最小可行版本，可以先跑：
+
+```text
+01_preprocess_data
+02_split_dataset
+03_build_rag_index
+05_build_attack_benchmark
+06_extract_facts
+07_generate_paired_claims
+08_generate_paired_queries
+09_run_rag_and_llm_only
+10_parse_stance_and_score
+```
+
+先不用 Spoof、baseline、防御，等核心信号跑出来再加。
+
+---
+
+# 19. 最小可行版本建议
+
+为了避免又变成“拼装工程”，第一版只做：
+
+```text
+数据集：Enron
+分组：KB_Member + True_Non_Member
+RAG：FAISS + bge-small
+事实数：每篇 2 个
+Query：Q+ / Q- 各 1 个
+推理：RAG + LLM-only
+分数：CG-CVG
+指标：AUC + TPR@5%FPR
+```
+
+跑通后再加：
+
+```text
+Spoofed_Non_Member
+IA baseline
+MBA baseline
+FPR-Spoofed_Non_Member
+机制分析
+防御实验
+```
+
+---
+
+# 20. 最终一句话总结
+
+你现在的代码思路应该是：
+
+> **只把 KB_Member 放入 RAG 知识库；从候选文档中抽取可验证事实，构造 Q+ 真实事实验证和 Q- 反事实验证；同一组 Q+ / Q- 同时运行 RAG 和 LLM-only；如果 RAG 比 LLM-only 更能支持真实事实、否定反事实并纠正原实体，则该候选文档更可能是知识库成员。Spoofed_Non_Member 仅作为 hard negative 对照组，不参与方法核心。**

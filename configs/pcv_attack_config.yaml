@@ -1,0 +1,45 @@
+# PCV-MIA attack configuration.
+
+logging:
+  level: INFO
+  file: datasets/logs/pcv_attack.log
+
+llm_profiles_path: configs/llm_profiles.yaml
+
+paths:
+  benchmark_dir: datasets/benchmarks
+  facts_dir: outputs/facts
+  paired_claims_dir: outputs/paired_claims
+  paired_queries_dir: outputs/paired_queries
+  stealth_filtered_queries_dir: outputs/stealth_filtered_queries
+  parsed_stance_dir: outputs/parsed_stance
+  scores_dir: outputs/scores
+
+fact_extraction:
+  max_facts_per_doc: 2
+  max_entities_per_doc: 8
+  max_samples: null
+  min_importance: 0.6
+  min_replaceability: 0.6
+  min_privacy_specificity: 0.5
+
+paired_claims:
+  perturbation_levels: [light]
+  max_pairs_per_fact: 1
+
+paired_queries:
+  query_types: [compressed_verification]
+
+stealth_filter:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  min_naturalness: 0.55
+  max_context_probe: 0.5
+  max_prompt_injection: 0.5
+  min_similarity: 0.03
+  max_similarity: 0.97
+
+scoring:
+  unknown_lambda: 0.5
+  refusal_penalty: 0.5
+  false_acceptance_penalty: 1.0
+  thresholds: [0.3, 0.5, 0.7, 1.0]

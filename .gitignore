@@ -1,26 +1,57 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.pytest_tmp/
+.test_tmp/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local editor and OS files
 .claude/
 .vscode/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and local environment files
+.env
+.env.*
+*.key
+*.pem
+config/llm_api.json
+config/llm_api_profiles.json
+configs/*local*.yaml
+configs/*secret*.yaml
+
+# PCV-MIA data and generated artifacts
+datasets/
+output/
+models/
+checkpoints/
+runs/
+wandb/
+
+# Logs and temporary files
 *.log
 *.tmp
 *.bak
 *.swp
+*.cache
 
-dataset/
-models/
-output/
-
-config/llm_api.json
-config/model_config.json
-.env
-.env.*
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-*.txt
-
-.DS_Store
-Thumbs.db
+# 临时/产物目录,不入库
+.comment_baseline/
+.pristine_recovered/
+outputs/
+indexes/

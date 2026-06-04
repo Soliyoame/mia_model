@@ -1,0 +1,47 @@
+# PCV-MIA data configuration.
+
+logging:
+  level: INFO
+  file: datasets/logs/preprocess.log
+
+paths:
+  processed_dir: datasets/processed
+  splits_dir: datasets/splits
+
+preprocess:
+  min_chars: 300
+  max_chars: 2000
+  target_chars: 1000
+  require_entity: true
+  require_numeric: false
+  # PCV-MIA paired claims need replaceable entities.
+  min_entities: 2
+
+split:
+  seed: 42
+  source_exclusive: true
+  scale: small
+  small:
+    KB_Member: 100
+    True_Non_Member: 100
+    Spoof_Seed: 500
+    Reserve: 200
+  formal:
+    KB_Member: 3000
+    True_Non_Member: 3000
+    Spoof_Seed: 3000
+    Reserve: 1000
+
+datasets:
+  enron:
+    input_path: datasets/raw/extracted/enron
+    limit: 30000
+  cuad:
+    input_path: datasets/raw/extracted/cuad/CUAD_v1/CUAD_v1.json
+    limit: 3000
+  edgar:
+    input_path: datasets/raw/extracted/edgar/raw.jsonl
+    limit: 50000
+  pubmed:
+    input_path: datasets/raw/extracted/pmc/raw.jsonl
+    limit: 50000

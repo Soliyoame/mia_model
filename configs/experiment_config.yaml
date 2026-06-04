@@ -1,0 +1,22 @@
+# End-to-end PCV-MIA experiment configuration.
+
+project_name: PCV-MIA
+seed: 42
+default_dataset: enron
+
+pipeline:
+  preprocess: true
+  split: true
+  build_rag_index: true
+  generate_spoofed_nonmember: true
+  build_attack_benchmark: true
+  extract_facts: true
+  generate_paired_claims: true
+  generate_paired_queries: true
+  filter_stealth_queries: true
+  run_rag_and_llm_only: true
+  parse_stance_and_score: true
+  run_baselines: true
+  mechanism_analysis: true
+  run_defenses: true
+  generate_report: true

@@ -1,0 +1,173 @@
+"""最终报告生成模块。
+
+中文说明
+========
+本文件对应流水线第 15 步「生成报告」。它把前面各阶段产出的零散结果(攻击基准统计、
+打分指标、隐蔽过滤情况、RAG 索引信息、baseline 对照、机制分析、防御实验等)汇总成
+两份东西:一份机器可读的 JSON 完整报告,一份人看的 Markdown 摘要。
+"""
+
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import mean
+from typing import Any
+
+from .metrics import summarize_membership_scores
+from ..utils.io import read_json, read_jsonl, write_json
+from ..utils.logger import get_logger
+
+
+LOGGER = get_logger(__name__)
+
+
+def generate_final_report(
+    dataset: str,
+    benchmark_path: str | Path,
+    scores_path: str | Path,
+    stealth_manifest_path: str | Path,
+    index_manifest_path: str | Path,
+    baseline_path: str | Path,
+    mechanism_path: str | Path,
+    defense_path: str | Path,
+    report_json_path: str | Path,
+    summary_md_path: str | Path,
+    threshold: float = 0.3,
+    resume: bool = True,
+    force: bool = False,
+) -> dict[str, Any]:
+    """汇总各阶段 manifest 和指标，生成 JSON + Markdown 报告。
+
+    参数:
+        dataset:               数据集名。
+        benchmark_path:        攻击基准文件(用于统计各分组样本数)。
+        scores_path:           打分结果文件。
+        stealth_manifest_path: 隐蔽过滤的 manifest。
+        index_manifest_path:   RAG 索引的 manifest。
+        baseline_path:         baseline 对照结果。
+        mechanism_path:        机制分析结果。
+        defense_path:          防御实验结果。
+        report_json_path:      输出的 JSON 报告路径。
+        summary_md_path:       输出的 Markdown 摘要路径。
+        threshold:             计算固定阈值指标用的阈值。
+        resume:                断点续跑:两份报告都已存在则跳过。
+        force:                 强制重跑。
+    返回:
+        report(字典):完整报告内容;若跳过则带 skipped_existing。
+    """
+    report_path = Path(report_json_path)
+    summary_path = Path(summary_md_path)
+    # 断点续跑:JSON 和 Markdown 都在就跳过。
+    if resume and not force and report_path.exists() and summary_path.exists():
+        LOGGER.info("Skipping existing final report: %s", report_path)
+        return {"dataset": dataset, "report_path": str(report_path), "skipped_existing": True}
+
+    benchmark_rows = list(read_jsonl(benchmark_path))
+    score_rows = list(read_jsonl(scores_path))
+    # 自动判断主分数字段:有 pcv_score 就用它,否则用旧字段 cg_cms(兼容老数据)。
+    score_key = "pcv_score" if score_rows and "pcv_score" in score_rows[0] else "cg_cms"
+    # 算主攻击指标。
+    metrics = summarize_membership_scores(score_rows, score_key=score_key, threshold=threshold)
+    # 算各分组的分数分布(用于看成员 vs 非成员的差距)。
+    group_scores = _score_distribution(score_rows)
+    report = {
+        "dataset": dataset,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "data_statistics": {
+            # 统计基准里各分组各有多少样本。
+            "benchmark_counts": dict(Counter(row["group"] for row in benchmark_rows)),
+            "num_benchmark_samples": len(benchmark_rows),
+        },
+        "rag_index_statistics": _read_optional_json(index_manifest_path),
+        "control_group_quality_statistics": {
+            "Spoofed_Non_Member": "experimental control group only; see datasets/spoofed/{dataset}/spoof_manifest.json"
+        },
+        "main_attack_results": metrics,
+        "main_score_key": score_key,
+        "score_distributions": group_scores,
+        # baseline 文件存在才读,否则给空列表。
+        "baseline_comparison": list(read_jsonl(baseline_path)) if Path(baseline_path).exists() else [],
+        "mechanism_analysis": _read_optional_json(mechanism_path),
+        "defense_privacy_utility_tradeoff": _read_optional_json(defense_path),
+        "stealth_filter": _read_optional_json(stealth_manifest_path),
+        # 论文必报的几项关键指标,单独再列一份方便查阅。
+        "required_report_items": {
+            "TPR@1%FPR": metrics.get("TPR@1%FPR"),
+            "TPR@5%FPR": metrics.get("TPR@5%FPR"),
+            "FPR-True_Non_Member": metrics.get("FPR-True_Non_Member"),
+            "FPR-Spoofed_Non_Member_control": metrics.get("FPR-Spoofed_Non_Member"),
+            "Stealth detection rate": _read_optional_json(stealth_manifest_path).get("stealth_detection_rate"),
+            "LLM-only vs RAG context gain": group_scores,
+        },
+    }
+    write_json(report, report_path)
+    # 确保摘要目录存在,再写 Markdown。
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(_render_summary(report), encoding="utf-8")
+    LOGGER.info("Final report written: %s and %s", report_path, summary_path)
+    return report
+
+
+def _read_optional_json(path: str | Path) -> dict[str, Any]:
+    """读取一个 JSON 文件;文件不存在则返回空字典(让缺某阶段产物时也能出报告)。"""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    return read_json(p)
+
+
+def _score_distribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """按分组统计平均分(cvg_rag / cvg_llm / cg_cvg / pcv_score)。
+
+    成员组的 cg_cvg/pcv_score 应明显高于非成员组——这是攻击有效的直接体现。
+
+    参数:
+        rows: 打分记录。
+    返回:
+        {分组: {count, 各项平均分}} 的字典。
+    """
+    # 先按分组把记录归桶。
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        buckets[str(row.get("group", "unknown"))].append(row)
+    out = {}
+    for group, group_rows in buckets.items():
+        # 对每个分组求各项分数的平均(字段名兼容新旧两套:cvg_* / cms_*)。
+        out[group] = {
+            "count": len(group_rows),
+            "cvg_rag_avg": mean([float(row.get("cvg_rag", row.get("cms_rag", 0.0))) for row in group_rows]) if group_rows else 0.0,
+            "cvg_llm_avg": mean([float(row.get("cvg_llm", row.get("cms_llm", 0.0))) for row in group_rows]) if group_rows else 0.0,
+            "cg_cvg_avg": mean([float(row.get("cg_cvg", row.get("cg_cms", 0.0))) for row in group_rows]) if group_rows else 0.0,
+            "pcv_score_avg": mean([float(row.get("pcv_score", row.get("cg_cms", 0.0))) for row in group_rows]) if group_rows else 0.0,
+        }
+    return out
+
+
+def _render_summary(report: dict[str, Any]) -> str:
+    """把报告里最关键的几项渲染成一段 Markdown 文本(给人快速浏览)。
+
+    参数:
+        report: 完整报告字典。
+    返回:
+        Markdown 格式的摘要字符串。
+    """
+    metrics = report.get("main_attack_results", {})
+    counts = report.get("data_statistics", {}).get("benchmark_counts", {})
+    # 用 f-string 把关键指标拼成 Markdown 列表与小节。
+    return (
+        f"# {report['dataset']} PCV-MIA Summary\n\n"
+        f"- Created at: {report['created_at']}\n"
+        f"- Benchmark counts: {counts}\n"
+        f"- AUC: {metrics.get('AUC')}\n"
+        f"- Accuracy @ threshold {metrics.get('threshold')}: {metrics.get('Accuracy')}\n"
+        f"- TPR@1%FPR: {metrics.get('TPR@1%FPR')}\n"
+        f"- TPR@5%FPR: {metrics.get('TPR@5%FPR')}\n"
+        f"- FPR True_Non_Member: {metrics.get('FPR-True_Non_Member')}\n"
+        f"- FPR Spoofed_Non_Member control group: {metrics.get('FPR-Spoofed_Non_Member')}\n\n"
+        "## Score Distributions\n\n"
+        f"{report.get('score_distributions', {})}\n\n"
+        "## Notes\n\n"
+        "RAG retrieval internals are used only in mechanism analysis, not in black-box membership scoring.\n"
+    )

@@ -1,0 +1,58 @@
+# PCV-MIA LLM interface profiles.
+#
+# Profile names select the client type and prompts. The concrete API key,
+# base_url, and model are intended to be switched from .env:
+#   PCV_SIBLING_API_KEY / PCV_SIBLING_BASE_URL / PCV_SIBLING_MODEL
+#   PCV_VICTIM_API_KEY  / PCV_VICTIM_BASE_URL  / PCV_VICTIM_MODEL
+
+active:
+  sibling: dashscope_qwen
+  victim: dashscope_qwen
+
+sibling:
+  profiles:
+    openai_api:
+      provider: openai_compatible
+      api_key_env: PCV_SIBLING_API_KEY
+      base_url_env: PCV_SIBLING_BASE_URL
+      model_env: PCV_SIBLING_MODEL
+      base_url: https://api.openai.com/v1
+      model: gpt-4.1-mini
+      timeout: 60
+      max_tokens: 1024
+      system_prompt: "You are a sibling model for data generation. Return concise, valid JSON only."
+    dashscope_qwen:
+      provider: openai_compatible
+      api_key_env: PCV_SIBLING_API_KEY
+      base_url_env: PCV_SIBLING_BASE_URL
+      model_env: PCV_SIBLING_MODEL
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen3-235b-a22b
+      timeout: 60
+      max_tokens: 1024
+      extra_body:
+        enable_thinking: false
+      system_prompt: "You are a sibling model for data generation. Return concise, valid JSON only."
+
+victim:
+  profiles:
+    openai_api:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      base_url: https://api.openai.com/v1
+      model: gpt-4.1-mini
+      timeout: 60
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
+    dashscope_qwen:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model: qwen3-235b-a22b
+      timeout: 60
+      extra_body:
+        enable_thinking: false
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
