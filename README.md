@@ -541,7 +541,7 @@ outputs/stealth_filtered_queries/enron_paired_queries_rejected.jsonl
 outputs/stealth_filtered_queries/enron_paired_queries.manifest.json
 ```
 
-这一步会过滤太像 prompt injection、context probing、membership probing，或者相似度过低/过高的 query。
+这一步会过滤太像 prompt injection、context probing、membership probing，或者相似度过低/过高的 query。**过滤以 pair 为单位**：Q+ 与 Q- 共进退，对内任一条被拒则整对剔除，保证进入第 10 步的永远是完整配对（否则下游 `score_pair` 会把缺失的一边按 0 计入、扭曲 CVG）。`manifest.json` 额外记录 `accepted_pairs` / `rejected_pairs` / `pair_rejection_rate`。
 
 ### 10. RAG 和 LLM-only 双路推理
 
@@ -687,6 +687,8 @@ outputs/reports/enron_final_report.json
 outputs/reports/enron_summary.md
 ```
 
+主报告的攻击指标（`AUC` / `TPR@1%FPR` / `FPR` 等）只在**排除 `Reserve` 校准组**后的 `KB_Member` 与 `True_Non_Member` 上计算，与 `analyze_feasibility` 口径一致（`Reserve` 是 L1 校准的非成员零分布，不是测试样本）；`score_distributions` 仍保留各组均值（含 `Reserve`）作诊断展示。
+
 可选渲染可读 HTML / Markdown 表格：
 
 ```powershell
@@ -779,8 +781,8 @@ src/paired_claims/
   claim_generator.py  true/counterfactual claim 构造
 
 src/query_generation/
-  paired_query_builder.py  Q+ / Q- 查询构造
-  stealth_filter.py        stealth query 过滤
+  paired_query_builder.py  Q+ / Q- 查询构造（回答格式指令统一由第 10 步 runner 给出）
+  stealth_filter.py        stealth query 过滤（按 pair 整体接受/拒绝，Q+/Q- 共进退）
 
 src/parsing/
   stance_parser.py  回答立场解析
@@ -1034,7 +1036,7 @@ L1 群体校准（`src/scoring/calibration.py`）用 `Reserve` 组当"非成员�
 - 对每个待测样本，按它的 `cvg_rag` 在 Reserve 分布中的位置算两种校准分（都写回每行）：
   - `pcv_score_calibrated`：经验百分位（mid-rank 处理 ties），取值 [0,1]，不假设正态、小样本更稳；**默认主校准分**。
   - `pcv_score_calibrated_z`：z-score = `(cvg_rag − μ_reserve) / σ_reserve`。
-- **评估指标必须排除 Reserve**：它是校准料不是测试样本。`analyze_feasibility` 在算 AUC / TPR 前已剔除 Reserve——校准用 Reserve、评估排除 Reserve，两者零重叠。
+- **评估指标必须排除 Reserve**：它是校准料不是测试样本。`analyze_feasibility` 与第 15 步主报告 `generate_final_report` 在算 AUC / TPR / FPR 前均已剔除 Reserve——校准用 Reserve、评估排除 Reserve，两者零重叠。
 
 `scripts/analyze_feasibility.py` 会并排打印旧终分 `cg_cvg` 与校准分的 `AUC / TPR@1%FPR / TPR@5%FPR`；校准收益主要落在低 FPR 区，**重点看 TPR@1%FPR**。Reserve 经 06–09 筛选后有效样本可能偏少，零分布不稳时可调大 `configs/data_config.yaml` 的 `Reserve` 目标。
 
@@ -1268,15 +1270,16 @@ configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 
 ## 研究记录
 
-仓库根目录下的 `思路v2.txt`~`思路v9.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
+仓库根目录下的 `思路v2.txt`~`思路v10.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
 
-- [思路v9.txt](思路v9.txt) 是**最新**增量文档（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
+- [思路v10.txt](思路v10.txt) 是**最新**增量文档（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
+- [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
 - [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
 - [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
-- 新旧说法冲突时，以 `思路v8.txt` + `思路v9.txt` + 当前代码为准；这三者没提到的细节再回 `思路v7.txt`。
+- 新旧说法冲突时，以 `思路v10.txt` + `思路v9.txt` + 当前代码为准；这些没提到的细节再回 `思路v8.txt` / `思路v7.txt`。
 - **当前阶段定位 = 可行性验证**（确认信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验），非冲顶会的完整实验。
 - v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
 - `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。
 - `分类器.txt` 是关于 MIA 元分类器方向的调研笔记；其中提到的 `GradientBoostingClassifier` 等分类器属于后续设想，当前代码尚未引入，主方法仍是 CG-CVG 阈值判定。
 
-README 是面向运行和复现的操作文档，应与 `思路v8.txt` / `思路v9.txt` 和代码同步更新。
+README 是面向运行和复现的操作文档，应与 `思路v9.txt` / `思路v10.txt` 和代码同步更新。
