@@ -18,13 +18,17 @@ import re
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
+from ..utils.hash import short_hash
+
 
 # 下面几组是"候选替换库":当要替换地点/人名/机构/产品/项目名时，从这里挑一个不同的。
-LOCATION_CANDIDATES = ["California", "Texas", "New York", "London", "Canada", "Germany"]
-PERSON_CANDIDATES = ["Jordan Ellis", "Taylor Morgan", "Alex Carter", "Morgan Lee", "Casey Brooks"]
-ORG_CANDIDATES = ["Orion Services Inc", "Northstar Logistics LLC", "Harborview Group", "Summit Data Corp"]
-PRODUCT_CANDIDATES = ["Atlas Platform", "Beacon System", "Meridian Service", "Nova Device"]
-PROJECT_CANDIDATES = ["Project Atlas", "Project Beacon", "Program Meridian", "Initiative Nova"]
+# 库适当扩大,配合 _candidate_replacement 的哈希选择,让不同原值落到不同假值、跨文档不雷同
+# (固定且过小的库会使反事实高度重复,容易被模型先验识破,从而抬高 cvg_llm 假阳性)。
+LOCATION_CANDIDATES = ["California", "Texas", "New York", "London", "Canada", "Germany", "Singapore", "Tokyo", "Sydney", "Toronto", "Paris", "Dublin"]
+PERSON_CANDIDATES = ["Jordan Ellis", "Taylor Morgan", "Alex Carter", "Morgan Lee", "Casey Brooks", "Riley Bennett", "Avery Sinclair", "Dakota Reyes", "Quinn Harper", "Sawyer Bishop"]
+ORG_CANDIDATES = ["Orion Services Inc", "Northstar Logistics LLC", "Harborview Group", "Summit Data Corp", "Cedarline Partners", "Vanta Industries", "Brightpeak Holdings", "Ironwood Associates"]
+PRODUCT_CANDIDATES = ["Atlas Platform", "Beacon System", "Meridian Service", "Nova Device", "Helix Suite", "Quanta Engine", "Lumen Toolkit", "Vertex Console"]
+PROJECT_CANDIDATES = ["Project Atlas", "Project Beacon", "Program Meridian", "Initiative Nova", "Project Helix", "Program Vega", "Initiative Lumen", "Project Vertex"]
 
 
 def _shift_number(value: str, factor: float) -> str:
@@ -46,12 +50,26 @@ def _shift_number(value: str, factor: float) -> str:
     raw = match.group(0)
     # 去掉逗号转成浮点数再缩放;至少为 1,避免出现 0 或负数。
     number = float(raw.replace(",", ""))
-    shifted = max(1, number * factor)
+    shifted = max(1.0, number * factor)
+    # 扰动方向:factor>=1 往大改,否则往小改;在"舍入后又变回原值"时用来强制偏移一格。
+    direction = 1 if factor >= 1.0 else -1
     # 原数有小数就保留两位小数格式,否则按整数(带千分位)渲染。
     if "." in raw:
-        rendered = f"{shifted:,.2f}"
+        new_number = round(shifted, 2)
+        # 小值乘以接近 1 的 factor,两位小数舍入后可能等于原值(如 0.01*1.05→0.01)。
+        # 这会让反事实==真值而被上游丢弃,故强制至少偏移 0.01。
+        if new_number == round(number, 2):
+            new_number = round(number + direction * 0.01, 2)
+        new_number = max(0.01, new_number)
+        rendered = f"{new_number:,.2f}"
     else:
-        rendered = f"{int(round(shifted)):,}"
+        # 整数同理:Python round 是银行家舍入,10*1.05=10.5→round→10、2*1.25=2.5→round→2,
+        # 小整数会原地不动。检测到没变就强制 ±1,确保一定产生同类型的不同值。
+        new_int = int(round(shifted))
+        if new_int == int(number):
+            new_int = int(number) + direction
+        new_int = max(1, new_int)
+        rendered = f"{new_int:,}"
     # 把新数字拼回原字符串中数字所在的位置(前缀 + 新数 + 后缀)。
     return value[: match.start()] + rendered + value[match.end() :]
 
@@ -269,20 +287,28 @@ def _perturb_phone(value: str, amount: int) -> str:
 def _candidate_replacement(value: str, candidates: list[str], medium: bool) -> str:
     """从候选库里挑一个"与原值不同"的替换项。
 
+    用原值的稳定哈希来选,达到两个目的:
+      (1) 不同原值映射到不同假值,跨文档不再雷同——固定取库里第一个会让所有 PERSON 反事实
+          都变成同一个名字,模型容易凭先验识破,从而抬高 cvg_llm 假阳性;
+      (2) 同一原值每次得到相同假值,确定可复现,不引入随机种子。
+
     参数:
         value:      原始值。
         candidates: 候选替换库。
-        medium:     中等扰动时跳过第一个候选(从更靠后的项里挑),让替换差异更大。
+        medium:     中等扰动时在哈希定位基础上再偏移一位,让替换差异更大。
     返回:
-        一个与原值不同的候选;若都相同则原样返回。
+        一个与原值不同的候选;若候选都与原值相同则原样返回。
     """
-    # medium 模式下从第二个候选起选(差异更大),否则用全部候选。
-    pool = candidates[1:] if medium and len(candidates) > 1 else candidates
-    for candidate in pool:
-        # 选第一个与原值不同的(忽略大小写)。
-        if candidate.lower() != value.lower():
-            return candidate
-    return value
+    # 先排除与原值相同的候选(忽略大小写),保证一定换成不同的值。
+    pool = [candidate for candidate in candidates if candidate.lower() != value.lower()]
+    if not pool:
+        return value
+    # 用原值的稳定哈希定位,使不同原值落到不同候选(确定性、可复现)。
+    idx = int(short_hash(value.lower()), 16) % len(pool)
+    # medium 模式再偏移一位,扩大与原值的差异。
+    if medium and len(pool) > 1:
+        idx = (idx + 1) % len(pool)
+    return pool[idx]
 
 
 def perturb_entity_value(value: str, entity_type: str, level: str = "light") -> str:

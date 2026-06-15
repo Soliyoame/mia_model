@@ -169,27 +169,33 @@ def extract_facts_file(
     min_importance: float = 0.6,
     min_replaceability: float = 0.6,
     min_privacy_specificity: float = 0.5,
+    guarantee_min_facts: int = 1,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
     """Extract verifiable fact units from an attack benchmark JSONL.
 
-    中文说明：第 06 步主入口。对基准里的每篇文档抽实体、按阈值筛掉低质量的，再把合格实体
-    包装成"事实单元"(含主语/关系/实体/上下文/支撑句)写出。
+    中文说明：第 06 步主入口(方案 D：保覆盖 + 质量加权)。对每篇文档抽实体、把合格实体包装成
+    "事实单元"。**三道阈值与 _is_generic_fact 不再是淘汰线，而是"优选标准"**：先选满足阈值的
+    高质量事实(primary)，若某文档不足 guarantee_min_facts，则从未达标的事实里按可攻击性补齐
+    (fallback)。每条事实写入 quality_weight(=attackability_score) 与 selection_tier，质量控制
+    下放到第 11 步的加权聚合：低质量事实权重小、贡献被自动压低，而不再被整篇丢弃。
 
     参数:
         benchmark_path:          攻击基准文件。
         output_path:             事实输出路径(并派生 .manifest/.errors)。
-        max_facts_per_doc:       每篇文档最多产出几条事实。
+        max_facts_per_doc:       每篇文档最多产出几条事实(优选上限)。
         max_entities_per_doc:    每篇文档最多抽几个候选实体。
         max_samples:             最多处理多少篇文档;None 不限。
-        min_importance:          实体重要性下限(低于则跳过)。
-        min_replaceability:      实体可替换性下限。
-        min_privacy_specificity: 实体隐私特异性下限。
+        min_importance:          实体重要性优选阈值(不达标降级为 fallback，不再丢弃)。
+        min_replaceability:      实体可替换性优选阈值。
+        min_privacy_specificity: 实体隐私特异性优选阈值。
+        guarantee_min_facts:     每篇文档保底产出几条(只要有可成句的实体)；用于消除
+                                 "可抽取性=组别"的 selection bias 并保证评估覆盖率。
         resume:                  断点续跑:产物已存在则跳过。
         force:                   强制重跑。
     返回:
-        manifest(字典):事实数量与分布统计;若跳过则带 skipped_existing。
+        manifest(字典):事实数量、按 tier/组/类型的分布、覆盖率、零候选文档数;若跳过则带 skipped_existing。
     """
     output = Path(output_path)
     manifest_path = output.with_suffix(".manifest.json")
@@ -205,34 +211,95 @@ def extract_facts_file(
     samples = 0
     by_group: Counter[str] = Counter()   # 按分组统计事实数
     by_type: Counter[str] = Counter()    # 按实体类型统计事实数
+    by_tier: Counter[str] = Counter()    # 按 primary/fallback 统计事实数
+    docs_with_fact: Counter[str] = Counter()   # 每组"产出>=1条事实"的文档数
+    docs_total: Counter[str] = Counter()       # 每组文档总数
+    zero_candidate_docs = 0                    # 连一个可成句实体都没有的文档数(不可约)
 
     for row in tqdm(read_jsonl(benchmark_path), desc="extract facts", unit="doc"):
         # 到达样本上限就停。
         if max_samples is not None and samples >= max_samples:
             break
         samples += 1
+        group = str(row["group"])
+        docs_total[group] += 1
         try:
             text = str(row.get("text") or "")
-            # 先抽候选实体。
-            entities = extractor.extract(text, max_entities=max_entities_per_doc)
-            kept_for_doc = 0
+            # 抽候选实体(保底覆盖:即便都不过门槛，也会返回最好的若干个)。
+            entities = extractor.extract(
+                text, max_entities=max_entities_per_doc, guarantee_min=max(1, guarantee_min_facts)
+            )
+            # 先把所有能"成句"的实体做成候选事实，并标好 tier，再统一挑选。
+            candidate_facts: list[dict[str, Any]] = []
             for ent in entities:
-                # 本文档已凑够事实数就停。
-                if kept_for_doc >= max_facts_per_doc:
-                    break
+                entity_text = str(ent.get("text") or "")
+                # 复用 entity_extractor 已用正确 finditer 偏移算好的支撑句;它定位准确。
+                # (不要用 _sentence_for_span 基于 text.find 重算——邮件头等重复短行会令 find
+                #  返回错误位置，把实体误配到无关句子，从而被下面的"实体在句中"检查误杀。)
+                sentence = str(
+                    ent.get("supporting_sentence")
+                    or _sentence_for_span(text, int(ent.get("start", 0)), int(ent.get("end", 0)))
+                )
+                # 结构性硬要求:实体必须真出现在所定位句子里(否则无法构造可替换的声明)。
+                if not entity_text or entity_text not in sentence:
+                    continue
                 importance = float(ent.get("importance", 0.0))
                 replaceability = float(ent.get("replaceability", 0.0))
                 privacy_specificity = float(ent.get("privacy_specificity", 0.0))
-                # 三项分数任一不达标就跳过这个实体。
-                if importance < min_importance or replaceability < min_replaceability or privacy_specificity < min_privacy_specificity:
-                    continue
-                entity_text = str(ent.get("text") or "")
-                sentence = _sentence_for_span(text, int(ent.get("start", 0)), int(ent.get("end", 0)))
-                # 实体必须真的出现在所定位的句子里,且该句不能太泛。
-                if not entity_text or entity_text not in sentence or _is_generic_fact(sentence, str(ent.get("type"))):
-                    continue
-                # 生成事实 id 并组装事实单元。
-                fact_id = f"fact_{row['audit_id']}_{kept_for_doc + 1:02d}"
+                # 优选条件:过实体硬门槛 + 三道阈值 + 句子不太泛。任一不满足 → 降级为 fallback。
+                meets_threshold = (
+                    importance >= min_importance
+                    and replaceability >= min_replaceability
+                    and privacy_specificity >= min_privacy_specificity
+                )
+                gate_passed = bool(ent.get("gate_passed", True))
+                is_generic = _is_generic_fact(sentence, str(ent.get("type")))
+                tier = "primary" if (gate_passed and meets_threshold and not is_generic) else "fallback"
+                em = ent.get("entity_metadata") if isinstance(ent.get("entity_metadata"), dict) else ent
+                # 质量权重 = 可攻击性分(检验2 证明它预测信号信噪比)；兜底用三项均值。
+                quality_weight = float(
+                    ent.get("attackability_score")
+                    or (em.get("attackability_score") if isinstance(em, dict) else None)
+                    or ((importance + replaceability + privacy_specificity) / 3.0)
+                )
+                candidate_facts.append(
+                    {
+                        "entity": ent,
+                        "entity_text": entity_text,
+                        "sentence": sentence,
+                        "importance": importance,
+                        "replaceability": replaceability,
+                        "privacy_specificity": privacy_specificity,
+                        "tier": tier,
+                        "quality_weight": round(quality_weight, 4),
+                    }
+                )
+
+            if not candidate_facts:
+                # 连一个可成句的候选都没有:这是方案 D 也无法挽救的不可约样本。
+                zero_candidate_docs += 1
+                continue
+
+            # 挑选:primary 优先(按可攻击性降序)，最多 max_facts_per_doc；
+            # 若不足 guarantee_min_facts，再从 fallback 按可攻击性降序补齐到保底数。
+            primary = sorted(
+                [c for c in candidate_facts if c["tier"] == "primary"],
+                key=lambda c: -c["quality_weight"],
+            )
+            fallback = sorted(
+                [c for c in candidate_facts if c["tier"] == "fallback"],
+                key=lambda c: -c["quality_weight"],
+            )
+            chosen = primary[:max_facts_per_doc]
+            if len(chosen) < max(1, guarantee_min_facts):
+                need = max(1, guarantee_min_facts) - len(chosen)
+                chosen = chosen + fallback[:need]
+
+            for idx, cf in enumerate(chosen, start=1):
+                ent = cf["entity"]
+                entity_text = cf["entity_text"]
+                sentence = cf["sentence"]
+                fact_id = f"fact_{row['audit_id']}_{idx:02d}"
                 fact = {
                     "fact_id": fact_id,
                     "audit_id": row["audit_id"],
@@ -247,21 +314,28 @@ def extract_facts_file(
                     "supporting_sentence": sentence,
                     # factual_claim 暂时直接用支撑句(将来可换成更规范的声明)。
                     "factual_claim": sentence,
-                    "importance": importance,
-                    "replaceability": replaceability,
-                    "privacy_specificity": privacy_specificity,
+                    "importance": cf["importance"],
+                    "replaceability": cf["replaceability"],
+                    "privacy_specificity": cf["privacy_specificity"],
+                    # 方案 D 新增:质量权重(供第 11 步加权聚合)与质量分层标记(供三口径对比)。
+                    "quality_weight": cf["quality_weight"],
+                    "selection_tier": cf["tier"],
                     "entity_metadata": ent,
                 }
                 facts.append(fact)
-                kept_for_doc += 1
-                by_group[str(row["group"])] += 1
+                by_group[group] += 1
                 by_type[str(ent.get("type"))] += 1
+                by_tier[cf["tier"]] += 1
+            if chosen:
+                docs_with_fact[group] += 1
         except Exception as exc:  # keep bad examples auditable without aborting a long run
             # 单篇出错不中断整体:记下错误,继续下一篇。
             errors.append({"audit_id": row.get("audit_id"), "error": str(exc)})
 
     write_jsonl(facts, output)
     write_jsonl(errors, error_path)
+    # 每组覆盖率(产出>=1条事实的文档占比)，用于核验 selection bias 是否已被消除。
+    coverage = {g: (docs_with_fact[g] / docs_total[g] if docs_total[g] else 0.0) for g in docs_total}
     manifest = {
         "output_path": str(output),
         "error_path": str(error_path),
@@ -270,8 +344,17 @@ def extract_facts_file(
         "facts": len(facts),
         "facts_by_group": dict(by_group),
         "facts_by_entity_type": dict(by_type),
+        "facts_by_tier": dict(by_tier),
+        "docs_with_fact_by_group": dict(docs_with_fact),
+        "docs_total_by_group": dict(docs_total),
+        "coverage_by_group": coverage,
+        "zero_candidate_docs": zero_candidate_docs,
         "max_facts_per_doc": max_facts_per_doc,
+        "guarantee_min_facts": guarantee_min_facts,
     }
     write_json(manifest, manifest_path)
-    LOGGER.info("Extracted facts: samples=%s facts=%s errors=%s", samples, len(facts), len(errors))
+    LOGGER.info(
+        "Extracted facts: samples=%s facts=%s (primary=%s fallback=%s) zero_candidate_docs=%s errors=%s",
+        samples, len(facts), by_tier.get("primary", 0), by_tier.get("fallback", 0), zero_candidate_docs, len(errors),
+    )
     return manifest

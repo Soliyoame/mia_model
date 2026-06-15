@@ -32,6 +32,8 @@ def build_pcv_attack_benchmark(
     config_snapshot: dict[str, Any] | None = None,
     split_seed: int | None = None,
     include_spoofed_nonmember: bool = True,
+    reserve_path: str | Path | None = None,
+    include_reserve: bool = True,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -46,6 +48,9 @@ def build_pcv_attack_benchmark(
         config_snapshot:          配置快照,写进 manifest 便于复现。
         split_seed:               切分种子,记入每条记录的 metadata。
         include_spoofed_nonmember: 是否纳入 Spoofed_Non_Member 对照组。
+        reserve_path:             Reserve 组 jsonl 路径(L1 群体校准的零分布来源,可为 None)。
+        include_reserve:          是否纳入 Reserve 校准组(纳入后它会随主流水线跑出 cvg,
+                                  但只用于估计"非成员零分布",评估指标时必须排除它)。
         resume:                   断点续跑:基准/哈希/manifest 都存在则校验后跳过。
         force:                    强制重建。
     返回:
@@ -75,6 +80,12 @@ def build_pcv_attack_benchmark(
         if spoofed_non_member_path is None:
             raise ValueError("spoofed_non_member_path is required when include_spoofed_nonmember=True")
         groups.append(("Spoofed_Non_Member", spoofed_non_member_path, False))
+    # Reserve 校准组:同分布、非成员、与其它组 source 互斥。它随主流水线跑出 cvg,
+    # 仅用于 L1 群体校准估计"非成员零分布",评估指标时必须排除(见 metrics 调用方)。
+    if include_reserve:
+        if reserve_path is None:
+            raise ValueError("reserve_path is required when include_reserve=True")
+        groups.append(("Reserve", reserve_path, False))
 
     records: list[dict[str, Any]] = []
     audit_idx = 0
@@ -117,12 +128,15 @@ def build_pcv_attack_benchmark(
         "num_kb_member": counts["KB_Member"],
         "num_true_non_member": counts["True_Non_Member"],
         "num_spoofed_non_member": counts["Spoofed_Non_Member"],
+        "num_reserve": counts["Reserve"],
         "include_spoofed_nonmember": include_spoofed_nonmember,
+        "include_reserve": include_reserve,
         "spoofed_non_member_switch": "PCV_ENABLE_SPOOFED_NONMEMBER",
         "group_roles": {
             "KB_Member": "positive member class",
             "True_Non_Member": "primary negative class",
             "Spoofed_Non_Member": "experimental control group only",
+            "Reserve": "calibration group only (excluded from evaluation metrics)",
         },
         "benchmark_hash": digest,
         "output_path": str(output),
@@ -150,4 +164,6 @@ def _experimental_role(group: str) -> str:
         return "primary_negative_class"
     if group == "Spoofed_Non_Member":
         return "experimental_control_group"
+    if group == "Reserve":
+        return "calibration_group"
     return "auxiliary_group"

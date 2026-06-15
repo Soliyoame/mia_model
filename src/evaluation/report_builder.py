@@ -16,6 +16,7 @@ from statistics import mean
 from typing import Any
 
 from .metrics import summarize_membership_scores
+from ..scoring.calibration import CALIBRATION_GROUP
 from ..utils.io import read_json, read_jsonl, write_json
 from ..utils.logger import get_logger
 
@@ -66,11 +67,18 @@ def generate_final_report(
 
     benchmark_rows = list(read_jsonl(benchmark_path))
     score_rows = list(read_jsonl(scores_path))
-    # 自动判断主分数字段:有 pcv_score 就用它,否则用旧字段 cg_cms(兼容老数据)。
-    score_key = "pcv_score" if score_rows and "pcv_score" in score_rows[0] else "cg_cms"
-    # 算主攻击指标。
-    metrics = summarize_membership_scores(score_rows, score_key=score_key, threshold=threshold)
-    # 算各分组的分数分布(用于看成员 vs 非成员的差距)。
+    # 自动判断主分数字段:有 pcv_score 就用它,否则退回 cg_cvg(当前 pcv_scorer 产出的
+    # context-gain 字段)。原 fallback 名 cg_cms 经查全历史从未被任何版本产出过,是指向
+    # 虚构字段的死兜底,故改指真实字段 cg_cvg;当前正常流程必有 pcv_score,此兜底仅防御
+    # 缺字段的边缘输入,不影响实际产出的分数。
+    score_key = "pcv_score" if score_rows and "pcv_score" in score_rows[0] else "cg_cvg"
+    # 评估指标必须排除校准组 Reserve:它是 L1 群体校准的非成员零分布,不是测试样本。
+    # 若不排除,会被 roc_auc 当成负类、混入 FPR 分母,使主报告的 AUC/TPR@1%FPR/FPR
+    # 与 analyze_feasibility 口径不一致(后者已剔除 Reserve)。
+    eval_rows = [row for row in score_rows if str(row.get("group")) != CALIBRATION_GROUP]
+    # 算主攻击指标(在排除 Reserve 后的评估样本上)。
+    metrics = summarize_membership_scores(eval_rows, score_key=score_key, threshold=threshold)
+    # 分组分数分布保留所有组(含 Reserve)用于诊断展示:Reserve 的均值应≈True_Non_Member。
     group_scores = _score_distribution(score_rows)
     report = {
         "dataset": dataset,
@@ -134,15 +142,26 @@ def _score_distribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         buckets[str(row.get("group", "unknown"))].append(row)
     out = {}
     for group, group_rows in buckets.items():
-        # 对每个分组求各项分数的平均(字段名兼容新旧两套:cvg_* / cms_*)。
+        # 对每个分组求各项分数的平均,均用当前 pcv_scorer 产出的真实字段
+        # (cvg_rag / cvg_llm / cg_cvg / pcv_score)。原 cms_* / cg_cms 旧兜底经查全历史从未被
+        # 任何版本产出过,是死兜底,已清除;pcv_score 缺失时退回 cg_cvg(真实字段)。
         out[group] = {
             "count": len(group_rows),
-            "cvg_rag_avg": mean([float(row.get("cvg_rag", row.get("cms_rag", 0.0))) for row in group_rows]) if group_rows else 0.0,
-            "cvg_llm_avg": mean([float(row.get("cvg_llm", row.get("cms_llm", 0.0))) for row in group_rows]) if group_rows else 0.0,
-            "cg_cvg_avg": mean([float(row.get("cg_cvg", row.get("cg_cms", 0.0))) for row in group_rows]) if group_rows else 0.0,
-            "pcv_score_avg": mean([float(row.get("pcv_score", row.get("cg_cms", 0.0))) for row in group_rows]) if group_rows else 0.0,
+            "cvg_rag_avg": mean([float(row.get("cvg_rag", 0.0)) for row in group_rows]) if group_rows else 0.0,
+            "cvg_llm_avg": mean([float(row.get("cvg_llm", 0.0)) for row in group_rows]) if group_rows else 0.0,
+            "cg_cvg_avg": mean([float(row.get("cg_cvg", 0.0)) for row in group_rows]) if group_rows else 0.0,
+            "pcv_score_avg": mean([float(row.get("pcv_score", row.get("cg_cvg", 0.0))) for row in group_rows]) if group_rows else 0.0,
         }
     return out
+
+
+def _num(value: Any, digits: int = 4) -> str:
+    """把数值格式化成摘要里的字符串:None→"-",float 定点,其它原样。"""
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.{digits}f}"
+    return str(value)
 
 
 def _render_summary(report: dict[str, Any]) -> str:
@@ -155,19 +174,36 @@ def _render_summary(report: dict[str, Any]) -> str:
     """
     metrics = report.get("main_attack_results", {})
     counts = report.get("data_statistics", {}).get("benchmark_counts", {})
-    # 用 f-string 把关键指标拼成 Markdown 列表与小节。
+    dist = report.get("score_distributions", {})
+
+    # benchmark counts → Markdown 列表(原来直接 str(dict),很难读)。
+    counts_md = "\n".join(f"- {group}: {n}" for group, n in counts.items()) or "- (none)"
+
+    # score_distributions → Markdown 表格(原来直接把整个 dict 糊进去)。
+    dist_header = (
+        "| group | count | cvg_rag_avg | cvg_llm_avg | cg_cvg_avg | pcv_score_avg |\n"
+        "| --- | --- | --- | --- | --- | --- |"
+    )
+    dist_lines = [
+        f"| {group} | {d.get('count', '-')} | {_num(d.get('cvg_rag_avg'))} | "
+        f"{_num(d.get('cvg_llm_avg'))} | {_num(d.get('cg_cvg_avg'))} | {_num(d.get('pcv_score_avg'))} |"
+        for group, d in dist.items()
+    ]
+    dist_md = "\n".join([dist_header, *dist_lines]) if dist_lines else "(no scores)"
+
     return (
         f"# {report['dataset']} PCV-MIA Summary\n\n"
         f"- Created at: {report['created_at']}\n"
-        f"- Benchmark counts: {counts}\n"
-        f"- AUC: {metrics.get('AUC')}\n"
-        f"- Accuracy @ threshold {metrics.get('threshold')}: {metrics.get('Accuracy')}\n"
-        f"- TPR@1%FPR: {metrics.get('TPR@1%FPR')}\n"
-        f"- TPR@5%FPR: {metrics.get('TPR@5%FPR')}\n"
-        f"- FPR True_Non_Member: {metrics.get('FPR-True_Non_Member')}\n"
-        f"- FPR Spoofed_Non_Member control group: {metrics.get('FPR-Spoofed_Non_Member')}\n\n"
+        f"- AUC: {_num(metrics.get('AUC'))}\n"
+        f"- Accuracy @ threshold {metrics.get('threshold')}: {_num(metrics.get('Accuracy'))}\n"
+        f"- TPR@1%FPR: {_num(metrics.get('TPR@1%FPR'))}\n"
+        f"- TPR@5%FPR: {_num(metrics.get('TPR@5%FPR'))}\n"
+        f"- FPR True_Non_Member: {_num(metrics.get('FPR-True_Non_Member'))}\n"
+        f"- FPR Spoofed_Non_Member control group: {_num(metrics.get('FPR-Spoofed_Non_Member'))}\n\n"
+        "## Benchmark counts\n\n"
+        f"{counts_md}\n\n"
         "## Score Distributions\n\n"
-        f"{report.get('score_distributions', {})}\n\n"
+        f"{dist_md}\n\n"
         "## Notes\n\n"
         "RAG retrieval internals are used only in mechanism analysis, not in black-box membership scoring.\n"
     )

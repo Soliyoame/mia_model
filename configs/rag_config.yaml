@@ -32,11 +32,11 @@ generation:
   victim_profile: null
   temperature: 0.0
   max_tokens: 512
-  timeout: 60
-  retries: 2
-  retry_backoff_base: 5
-  retry_backoff_max: 120
-  request_interval_seconds: 1
+  timeout: 120
+  retries: 4
+  retry_backoff_base: 30
+  retry_backoff_max: 300
+  request_interval_seconds: 15
   # 并发 LLM 请求数：1 = 串行（默认，行为与原来完全一致）。
   # 确认 victim API 的限流额度后可调高（如 4~8）以显著缩短墙钟时间。
   max_workers: 1

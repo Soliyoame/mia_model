@@ -31,12 +31,12 @@ from ..utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 # 危险词:出现这些就说明查询在直接打探知识库/上下文,极易暴露攻击意图。
+# 注意:此处只收"高特异性"的探测短语。像单独的 database / indexed 这类词在正常业务文本
+# (合同、财报、技术文档)里很常见,放进来会大量误杀正常查询,故不再单列。
 DANGEROUS_PATTERNS = [
     r"repeat context",
     r"hidden document",
     r"system prompt",
-    r"\bdatabase\b",
-    r"\bindexed\b",
     r"knowledge base membership",
     r"\bmembership\b",
     r"training data",
@@ -138,8 +138,11 @@ def filter_stealth_queries(
 ) -> dict[str, Any]:
     """过滤太像攻击、context probing 或 prompt injection 的 query。
 
-    中文说明：第 09 步主入口。逐条给查询打分，按一串阈值判定"接受"或"拒绝"，分别写到
-    accepted 和 rejected 两个文件。被拒绝的会记下原因。
+    中文说明：第 09 步主入口。先逐条给查询打分并做"单条自检"，再**按 pair 整体**判定
+    接受或拒绝——Q+ 与 Q- 必须共进退,只要对内任一条触发拒绝条件就整对剔除。这样能保证
+    进入第 10 步的永远是完整配对,避免只剩半对、下游 score_pair 把缺失一边按 0 计入而
+    系统性扭曲 cvg。结果分别写到 accepted 和 rejected 两个文件,被拒绝的会记下原因
+    (自身触发的记本身原因,被同伴连累的记 pair_partner_rejected)。
 
     参数:
         queries_path:         上一步的查询文件。
@@ -154,7 +157,8 @@ def filter_stealth_queries(
         resume:               断点续跑:产物已存在则跳过。
         force:                强制重跑。
     返回:
-        manifest(字典):通过/拒绝数量与隐蔽检测率;若跳过则带 skipped_existing。
+        manifest(字典):通过/拒绝的条数与配对数、隐蔽检测率与整对拒绝率;
+        若跳过则带 skipped_existing。
     """
     output = Path(output_path)
     # 没指定拒绝文件路径就自动命名。
@@ -165,10 +169,10 @@ def filter_stealth_queries(
         LOGGER.info("Skipping existing stealth filtered queries: %s", output)
         return {"output_path": str(output), "skipped_existing": True}
 
-    accepted_rows: list[dict[str, Any]] = []
-    rejected_rows: list[dict[str, Any]] = []
     # 只加载一次向量模型,后面所有查询复用它。
     embedder = build_embedding_model(embedding_model, backend="auto")
+    # 第一遍:逐条打分并做"单条自检",记录每条自身是否触发拒绝条件(此时还不下最终结论)。
+    scored: list[dict[str, Any]] = []
     for row in tqdm(read_jsonl(queries_path), desc="stealth filter", unit="query"):
         # 选一个"参照文本"来算相似度:优先原文/真实声明,层层兜底。
         reference_text = (
@@ -180,36 +184,62 @@ def filter_stealth_queries(
             or ""
         )
         scores = _score_query_with_embedder(row["query"], str(reference_text), embedder)
-        # 依次检查各拒绝条件,命中第一个就给出拒绝原因(短路,优先级从高到低)。
-        reject_reason = None
+        # 单条自检:命中第一个条件即记下原因(短路,优先级从高到低)。
+        self_reason = None
         if scores["dangerous_hits"]:
-            reject_reason = "dangerous_terms:" + ",".join(scores["dangerous_hits"])
+            self_reason = "dangerous_terms:" + ",".join(scores["dangerous_hits"])
         elif scores["prompt_injection_score"] > max_prompt_injection:
-            reject_reason = "prompt_injection"
+            self_reason = "prompt_injection"
         elif scores["context_probe_score"] > max_context_probe:
-            reject_reason = "context_probe"
+            self_reason = "context_probe"
         elif scores["naturalness_score"] < min_naturalness:
-            reject_reason = "low_naturalness"
+            self_reason = "low_naturalness"
         elif scores["query_doc_similarity"] < min_similarity:
-            reject_reason = "too_dissimilar"
+            self_reason = "too_dissimilar"
         elif scores["query_doc_similarity"] > max_similarity:
-            reject_reason = "too_similar"
+            self_reason = "too_similar"
+        # 把分数和单条自检结果并进原记录(self_reject_reason 仅为中间诊断字段)。
+        scored.append(
+            {
+                **row,
+                "naturalness_score": scores["naturalness_score"],
+                "context_probe_score": scores["context_probe_score"],
+                "prompt_injection_score": scores["prompt_injection_score"],
+                "query_doc_similarity": scores["query_doc_similarity"],
+                "self_reject_reason": self_reason,
+            }
+        )
 
-        # 把分数和判定结果并进原记录。
-        out = {
-            **row,
-            "naturalness_score": scores["naturalness_score"],
-            "context_probe_score": scores["context_probe_score"],
-            "prompt_injection_score": scores["prompt_injection_score"],
-            "query_doc_similarity": scores["query_doc_similarity"],
-            "accepted": reject_reason is None,
-            "reject_reason": reject_reason,
-        }
-        # 没有拒绝原因 → 通过;否则 → 拒绝。
-        if reject_reason is None:
-            accepted_rows.append(out)
+    # 第二遍:按 pair 整体接受/拒绝。没有 pair_id 的老数据退化为按 query 单独成组,
+    # 保持旧的单条语义(向后兼容)。
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in scored:
+        key = str(r.get("pair_id") or r.get("query_id"))
+        groups.setdefault(key, []).append(r)
+
+    accepted_rows: list[dict[str, Any]] = []
+    rejected_rows: list[dict[str, Any]] = []
+    accepted_pairs = 0
+    rejected_pairs = 0
+    for members in groups.values():
+        # 对内任一条触发拒绝条件,则整对拒绝。
+        failing = [m for m in members if m.get("self_reject_reason")]
+        if failing:
+            rejected_pairs += 1
+            # 被同伴连累的成员标 pair_partner_rejected,注明是谁、因何被拒,便于诊断。
+            partner_reason = "pair_partner_rejected:" + ";".join(
+                f"{m.get('claim_type')}={m.get('self_reject_reason')}" for m in failing
+            )
+            for m in members:
+                m["accepted"] = False
+                m["reject_reason"] = m.get("self_reject_reason") or partner_reason
+                rejected_rows.append(m)
         else:
-            rejected_rows.append(out)
+            accepted_pairs += 1
+            for m in members:
+                m["accepted"] = True
+                m["reject_reason"] = None
+                accepted_rows.append(m)
 
     write_jsonl(accepted_rows, output)
     write_jsonl(rejected_rows, rejected)
@@ -218,8 +248,12 @@ def filter_stealth_queries(
         "rejected_path": str(rejected),
         "accepted": len(accepted_rows),
         "rejected": len(rejected_rows),
-        # 隐蔽检测率 = 被拒绝数 / 总数(衡量原始查询有多容易被识破)。
+        "accepted_pairs": accepted_pairs,
+        "rejected_pairs": rejected_pairs,
+        # 隐蔽检测率(按 query):被拒绝条数 / 总条数。
         "stealth_detection_rate": len(rejected_rows) / max(1, len(accepted_rows) + len(rejected_rows)),
+        # 整对拒绝率(按 pair):有多少完整配对因隐蔽性问题被整对剔除。
+        "pair_rejection_rate": rejected_pairs / max(1, accepted_pairs + rejected_pairs),
     }
     write_json(manifest, output.with_suffix(".manifest.json"))
     LOGGER.info("Stealth filter accepted=%s rejected=%s", len(accepted_rows), len(rejected_rows))

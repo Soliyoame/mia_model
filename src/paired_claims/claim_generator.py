@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,14 +33,35 @@ from ..utils.logger import get_logger
 LOGGER = get_logger(__name__)
 
 
-def _replace_once(text: str, old: str, new: str) -> str:
-    """把 text 里的 old【只替换第一次出现】为 new;old 为空或不存在则原样返回。
+def _find_entity_span(text: str, entity: str) -> tuple[int, int] | None:
+    """在 text 中定位 entity 的首次出现,返回 (start, end);找不到返回 None。
 
-    用"只替换一次"是为了精准替换事实里的那个实体,避免误伤句中其它相同字样。
+    依次尝试三种匹配,容忍事实抽取的实体与原句之间常见的细微差异,减少"明明在句里却
+    匹配不上而整条事实被丢弃"的情况(这种丢弃若与分组相关,会引入 selection bias):
+      1) 精确子串;
+      2) 大小写不敏感;
+      3) 空白容忍——把 entity 内部的连续空白当作 \\s+,匹配跨换行/多空格的写法。
+    用 (start, end) 而非字符串替换,便于在原句精确位置做一次切片替换,不误伤其它相同字样。
     """
-    if not old or old not in text:
-        return text
-    return text.replace(old, new, 1)
+    if not entity:
+        return None
+    # 1) 精确子串。
+    idx = text.find(entity)
+    if idx >= 0:
+        return idx, idx + len(entity)
+    # 2) 大小写不敏感。
+    low_idx = text.lower().find(entity.lower())
+    if low_idx >= 0:
+        return low_idx, low_idx + len(entity)
+    # 3) 空白容忍:实体内部空白放宽成 \s+,其余字符按字面转义。
+    tokens = entity.split()
+    if not tokens:
+        return None
+    pattern = r"\s+".join(re.escape(tok) for tok in tokens)
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return match.start(), match.end()
+    return None
 
 
 def generate_paired_claims_file(
@@ -86,8 +108,10 @@ def generate_paired_claims_file(
         # 真实声明:优先用 factual_claim,没有就用支撑句。
         true_claim = str(fact.get("factual_claim") or fact.get("supporting_sentence") or "")
         entity_type = str(fact.get("entity_type") or "")
-        # 真实实体必须确实出现在真实声明里,否则没法做替换。
-        if not original or original not in true_claim:
+        # 真实实体必须能在真实声明里定位到(精确→大小写不敏感→空白容忍),否则没法做替换。
+        # span 只依赖 true_claim 与 original,与扰动强度无关,故在 level 循环外算一次。
+        span = _find_entity_span(true_claim, original) if original else None
+        if span is None:
             errors.append({"fact_id": fact.get("fact_id"), "error": "original_entity_not_in_claim"})
             continue
         for level in levels:
@@ -100,8 +124,8 @@ def generate_paired_claims_file(
             if not counterfactual or counterfactual == original:
                 errors.append({"fact_id": fact.get("fact_id"), "error": "counterfactual_unchanged", "level": level})
                 continue
-            # 把真实声明里的真实实体替换成假值,得到反事实声明。
-            counterfactual_claim = _replace_once(true_claim, original, counterfactual)
+            # 在定位到的 span 处把实体换成假值(切片替换,容忍大小写/空白差异)。
+            counterfactual_claim = true_claim[: span[0]] + counterfactual + true_claim[span[1] :]
             # 替换若没生效(声明没变),也跳过并记录。
             if counterfactual_claim == true_claim:
                 errors.append({"fact_id": fact.get("fact_id"), "error": "claim_replacement_failed", "level": level})

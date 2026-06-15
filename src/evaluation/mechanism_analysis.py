@@ -85,9 +85,10 @@ def run_mechanism_analysis(
     # 按实体类型/查询类型分桶统计恢复率(成功纠正到原实体或支持真声明记为命中)。
     entity_type_stats = _rate_by_key(parsed, "entity_type", lambda row: bool(row.get("corrects_to_original_entity") or row.get("supports_true_claim")))
     query_type_stats = _rate_by_key(parsed, "query_type", lambda row: bool(row.get("corrects_to_original_entity") or row.get("supports_true_claim")))
-    # Context Gain 的字段名按打分结果实际包含的键自适应(cg_cvg 优先,否则 cg_cms)。
-    group_cg = _mean_by_key(scores, "group", "cg_cvg" if scores and "cg_cvg" in scores[0] else "cg_cms")
-    score_key = "pcv_score" if scores and "pcv_score" in scores[0] else "cg_cms"
+    # Context Gain 字段:cg_cvg 是当前 pcv_scorer 产出的真实 context-gain 字段;score_key 缺
+    # pcv_score 时退回 cg_cvg。原 fallback 名 cg_cms 经查全历史从未被产出过,是死兜底,已清除。
+    group_cg = _mean_by_key(scores, "group", "cg_cvg")
+    score_key = "pcv_score" if scores and "pcv_score" in scores[0] else "cg_cvg"
 
     report = {
         "dataset": dataset,

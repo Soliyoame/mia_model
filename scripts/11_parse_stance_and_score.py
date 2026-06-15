@@ -68,6 +68,7 @@ def main() -> int:
     )
     scoring = config.get("scoring", {})
     # 第二步:把立场聚合成 PCV 分数;打分超参从配置 scoring 段取,缺省给经验默认值。
+    # facts_path 用于按 fact_id 取 quality_weight/selection_tier,启用方案 D 的质量加权聚合。
     score_manifest = compute_pcv_scores(
         dataset=args.dataset,
         parsed_stance_path=parsed_path,
@@ -76,6 +77,7 @@ def main() -> int:
         refusal_penalty=float(scoring.get("refusal_penalty", 0.5)),
         false_acceptance_penalty_value=float(scoring.get("false_acceptance_penalty", 1.0)),
         thresholds=[float(x) for x in scoring.get("thresholds", [0.3, 0.5, 0.7, 1.0])],
+        facts_path=resolve_path(config["paths"]["facts_dir"]) / f"{args.dataset}_facts.jsonl",
         resume=not args.no_resume,
         force=args.force,
     )

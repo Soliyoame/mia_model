@@ -39,12 +39,13 @@ LOGGER = get_logger(__name__)
 def build_rag_prompt(query: str, contexts: list[str]) -> str:
     """把 retrieved context 和 query 包成 generator prompt。
 
-    prompt 明确要求只基于 available records 回答，这是为了让 RAG 和 LLM-only 的差异
-    尽量来自 context，而不是 generator 自身发挥。
+    新版 prompt 与 build_llm_only_prompt 任务对称：同样的核查任务、同样的三个回答出口
+    (Consistent / Inconsistent: <correct value> / I don't know)，唯一差异是这里多了一段
+    "Reference information"(检索内容)并要求"依据参考资料判断"。对称是为了让 RAG 与
+    LLM-only 的差异只来自"有没有检索内容"，而不是 prompt 措辞本身。
 
-    中文说明：把"检索到的文档片段"和"用户查询"拼成一段提示词给大模型。提示词里特意
-    强调"只能依据下面给出的文档来回答"，目的是把 RAG 和 LLM-only 两种模式的差异
-    牢牢限制在"有没有检索内容"上，而不是模型自由发挥带来的噪声。
+    措辞上刻意包装成一个普通的"陈述-资料一致性核查"助手任务，避免 "verify a user's
+    record / private documents" 这类容易触发受害模型拒答的说法。
 
     参数:
         query:    用户查询(要验证的一条声明)。
@@ -55,22 +56,26 @@ def build_rag_prompt(query: str, contexts: list[str]) -> str:
     # 用分隔线把多个检索片段连起来，让模型能区分不同来源。
     joined = "\n\n---\n\n".join(contexts)
     return (
-        "You are verifying a user's record against available documents.\n"
-        "Use only the available documents below. If the user's statement conflicts with them, "
-        "state that it is inconsistent and provide the corrected value. If the documents do not "
-        "support verification, say you do not know.\n\n"
-        f"Available documents:\n{joined}\n\n"
-        f"User query:\n{query}\n\n"
-        "Answer:"
+        "You are a helpful assistant that checks whether a statement matches the "
+        "reference information provided.\n\n"
+        f"Reference information:\n{joined}\n\n"
+        f"Statement to check:\n{query}\n\n"
+        "Decide using the reference information above, and reply with exactly one of:\n"
+        '- "Consistent" — the statement matches the reference information.\n'
+        '- "Inconsistent: <correct value>" — it conflicts; give the correct value from the reference.\n'
+        '- "I don\'t know" — the reference information is not enough to decide.\n'
+        "Reply with only that line."
     )
 
 
 def build_llm_only_prompt(query: str) -> str:
     """LLM-only 不提供 retrieved context，用来估计 generator 自身知识造成的假阳性。
 
-    中文说明：构造"纯大模型"模式的提示词——故意不给任何检索文档。如果模型在没有
-    检索的情况下也能"验证"出某条信息，说明这是它本来就知道的(常识)，而不是因为
-    文档在知识库里。这部分要从攻击信号里扣掉，才不会把"模型常识"误判成"成员"。
+    与 build_rag_prompt 严格对称：相同的核查任务、相同的三个回答出口
+    (Consistent / Inconsistent: <correct value> / I don't know)，仅有的差异是这里没有
+    "Reference information"段、并改为"依据你自己的知识判断"。这样如果模型在没有检索
+    的情况下也能判对，说明那是它本来就知道的(常识)，需要从攻击信号里扣掉，不能误判成
+    "成员"。注意：这里同样给了 "Inconsistent + 正确值" 的出口，避免人为压低 LLM-only。
 
     参数:
         query: 用户查询。
@@ -78,10 +83,14 @@ def build_llm_only_prompt(query: str) -> str:
         不含任何检索内容的 prompt 字符串。
     """
     return (
-        "You are verifying a user's record, but no private retrieved documents are available.\n"
-        "If you cannot verify the value from the query alone, say you do not know.\n\n"
-        f"User query:\n{query}\n\n"
-        "Answer:"
+        "You are a helpful assistant that checks whether a statement matches known "
+        "information.\n\n"
+        f"Statement to check:\n{query}\n\n"
+        "Decide using your own knowledge, and reply with exactly one of:\n"
+        '- "Consistent" — the statement matches what you know.\n'
+        '- "Inconsistent: <correct value>" — it conflicts; give the correct value.\n'
+        '- "I don\'t know" — you do not have enough information to decide.\n'
+        "Reply with only that line."
     )
 
 
@@ -105,6 +114,7 @@ def run_rag_and_llm_only(
     resume: bool = True,
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
+    run_llm_only: bool = True,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -132,6 +142,9 @@ def run_rag_and_llm_only(
         resume:                  断点续跑：跳过已成功的查询。
         force:                   强制重跑：忽略已有结果。
         config_snapshot:         配置快照，写进 manifest 便于复现。
+        run_llm_only:            是否跑 LLM-only 路。L2 shadow 推理只需要 RAG 路
+                                 (LLM-only 与索引无关、跨 shadow 不变，复用主 run 即可)，
+                                 此时传 False 可省掉 K 倍 LLM-only 调用。
     返回:
         manifest(字典)：本次运行的统计与路径信息。
     异常:
@@ -168,8 +181,8 @@ def run_rag_and_llm_only(
         if not query_row.get("accepted", True):
             continue
         qid = str(query_row["query_id"])
-        # 只要 RAG 或 LLM-only 任一边还没成功，就需要处理这条查询。
-        if qid not in done_rag or qid not in done_llm:
+        # 只要 RAG 或(启用了 LLM-only 时)LLM-only 任一边还没成功，就需要处理这条查询。
+        if qid not in done_rag or (run_llm_only and qid not in done_llm):
             pending.append(query_row)
 
     def process(query_row: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int]:
@@ -238,8 +251,8 @@ def run_rag_and_llm_only(
                 "created_at": created_at,
             }
 
-        # —— LLM-only 模式：同理，只有这条查询的 LLM-only 还没成功时才跑 ——
-        if query_id not in done_llm:
+        # —— LLM-only 模式：同理，只有这条查询的 LLM-only 还没成功时才跑(且未关闭该路) ——
+        if run_llm_only and query_id not in done_llm:
             response, error = _call_generator(
                 client,
                 build_llm_only_prompt(query),
@@ -323,6 +336,7 @@ def run_rag_and_llm_only(
         "completed_queries": completed,
         "failures": failures,
         "max_workers": workers,
+        "run_llm_only": run_llm_only,
         "created_at": created_at,
         "config_snapshot": config_snapshot or {},
     }

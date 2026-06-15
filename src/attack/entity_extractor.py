@@ -563,17 +563,20 @@ class EntityExtractor:
         self.ner_confidence_threshold = ner_confidence_threshold
         self.diversity_quotas = diversity_quotas or DEFAULT_DIVERSITY_QUOTAS
 
-    def extract(self, text: str, max_entities: int = 5) -> list[dict[str, Any]]:
-        """Extract high-attackability entities under family diversity quotas.
+    def extract(self, text: str, max_entities: int = 5, guarantee_min: int = 1) -> list[dict[str, Any]]:
+        """Extract high-attackability entities; gates are now *preferences*, not hard drops.
 
-        中文说明：对外的主方法。把"产生候选→合并→打分→过门槛→多样性挑选"整条流程串起来，
-        返回最终选中的若干实体(带分数与理由)。
+        中文说明：对外的主方法(方案 D：保覆盖)。流程改为"产生候选→合并→打分→**优选过门槛者**
+        →若不足保底数则从未过门槛候选里按可攻击性补齐"。门槛不再是"淘汰线"而是"优选标准"——
+        只要文档有任何候选，就保证至少返回 guarantee_min 个(最好的那几个)。每个返回实体带
+        gate_passed 标记(是否过了硬门槛)，便于下游区分 primary / fallback。
 
         参数:
             text:         待抽取的文本。
-            max_entities: 最多返回几个实体。
+            max_entities: 最多返回几个实体(优选上限)。
+            guarantee_min: 每篇文档至少保底返回几个(只要有候选)。补齐时忽略 family 配额。
         返回:
-            选中实体的字典列表;每个含 entity_id、分数、selection_reason 等。
+            选中实体的字典列表;每个含 entity_id、分数、gate_passed、selection_reason 等。
         """
         # 1) 正则候选(主力)。
         raw_candidates = self._regex_candidates(text or "")
@@ -584,19 +587,71 @@ class EntityExtractor:
         candidates = self._merge_candidates(raw_candidates)
         # 4) 给每个候选打分。
         scored = [self._score_candidate(text or "", candidate) for candidate in candidates]
-        # 5) 过"硬门槛"(质量太差的直接淘汰)。
+        # 5) 优选:在配额约束下挑出"过硬门槛"的多样高分实体(质量优先)。
         gated = [candidate for candidate in scored if self._passes_hard_gates(candidate)]
-        # 6) 在配额约束下挑出多样且高分的若干个。
-        selected = self._select_diverse(gated, max_entities=max_entities)
+        primary = self._select_diverse(gated, max_entities=max_entities)
+        for candidate in primary:
+            candidate["gate_passed"] = True
+        # 6) 保覆盖:若过门槛的不足 guarantee_min，从"未过门槛"候选里按可攻击性补齐(忽略配额)。
+        #    这样原本会被整篇淘汰的文档也能保底产出最好的那几个实体。
+        selected = list(primary)
+        if len(selected) < guarantee_min:
+            chosen_keys = {(str(c["type"]), _normalized(str(c["text"]))) for c in selected}
+            ungated = [c for c in scored if not self._passes_hard_gates(c)]
+            fallback = self._select_topk(ungated, guarantee_min - len(selected), exclude=chosen_keys)
+            for candidate in fallback:
+                candidate["gate_passed"] = False
+            selected.extend(fallback)
         # 给选中项编号、补上人类可读的选择理由。
         for idx, candidate in enumerate(selected, start=1):
             candidate["entity_id"] = f"e{idx}"
             candidate["selection_reason"] = _selection_reason(candidate)
             candidate["reason"] = (
                 f"attackability={candidate['attackability_score']:.3f}; "
+                f"gate_passed={candidate.get('gate_passed', True)}; "
                 f"{candidate['selection_reason']}"
             )
         return selected
+
+    def _select_topk(
+        self,
+        candidates: list[dict[str, Any]],
+        k: int,
+        exclude: set[tuple[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """按可攻击性降序取前 k 个(忽略 family 配额，用于保底补齐)。
+
+        参数:
+            candidates: 候选(通常是未过门槛者)。
+            k:          最多取几个。
+            exclude:    已选过的 (type, 规范化文本) 集合，避免与 primary 重复。
+        返回:
+            选中的候选列表(最多 k 个)。
+        """
+        if k <= 0:
+            return []
+        exclude = exclude or set()
+        # 排序与 _select_diverse 一致，保证确定性可复现。
+        ordered = sorted(
+            candidates,
+            key=lambda x: (
+                -float(x["attackability_score"]),
+                -float(x["importance"]),
+                -float(x.get("privacy_specificity", 0.0)),
+                int(x["start"]),
+            ),
+        )
+        picked: list[dict[str, Any]] = []
+        seen = set(exclude)
+        for candidate in ordered:
+            if len(picked) >= k:
+                break
+            key = (str(candidate["type"]), _normalized(str(candidate["text"])))
+            if key in seen:
+                continue
+            picked.append(candidate)
+            seen.add(key)
+        return picked
 
     def _regex_candidates(self, text: str) -> list[dict[str, Any]]:
         """用规则表里的所有正则扫描文本，产出候选实体列表。

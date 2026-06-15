@@ -128,15 +128,21 @@ def build_rag_index(
     resume: bool = True,
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
+    allowed_group: str = "KB_Member",
 ) -> dict[str, Any]:
-    """只用 KB_Member 构建 RAG index。
+    """构建 RAG index（默认只允许 KB_Member；L2 shadow 模式可指定 Reserve）。
 
-    中文说明：本函数是第 03 步的主入口。流程是：读入成员文档 → 严格校验它们确实
-    都是 KB_Member → 逐篇切块 → 把所有块编码成向量 → 写索引、写 docstore、写 manifest。
+    中文说明：本函数是第 03 步的主入口。流程是：读入文档 → 严格校验它们的 group
+    都等于 allowed_group → 逐篇切块 → 把所有块编码成向量 → 写索引、docstore、manifest。
+
+    安全边界：主知识库 allowed_group 固定为 "KB_Member"（成员推理的前提，绝不能松动）。
+    唯一的例外是 L2 的 shadow 索引——它用 Reserve（同分布、非成员、与评估组 source 互斥）
+    构建，用来估计"非成员零分布"，因此调用方需显式传 allowed_group="Reserve"。shadow
+    索引绝不参与"判定某文档是否成员"的 victim 检索，只服务于 per-example 先验校准。
 
     参数:
         dataset:           数据集名字(如 "enron")，仅用于记录与日志。
-        kb_member_path:    成员文档(KB_Member)的 jsonl 文件路径，是唯一允许入库的数据。
+        kb_member_path:    要建索引的文档 jsonl 路径(主库=KB_Member；shadow=Reserve 子集)。
         output_dir:        索引输出目录。
         embedding_model:   使用的向量模型名。
         embedding_backend: 向量后端("auto" 表示自动选真实模型)。
@@ -146,10 +152,11 @@ def build_rag_index(
         resume:            为 True 时，若索引已存在则跳过(断点续跑)。
         force:             为 True 时强制重建，忽略已存在的结果。
         config_snapshot:   本次运行的配置快照，写进 manifest 便于复现实验。
+        allowed_group:     唯一允许入库的 group(默认 "KB_Member"；L2 shadow 传 "Reserve")。
     返回:
         manifest(字典)：记录本次建库的全部元信息；若跳过则返回带 skipped_existing 的字典。
     异常:
-        RuntimeError: 当输入混入了非 KB_Member 文档、或没切出任何块时抛出。
+        RuntimeError: 当输入混入了非 allowed_group 文档、或没切出任何块时抛出。
     """
     # 确保输出目录存在(不存在则创建)。
     out_dir = ensure_dir(output_dir)
@@ -162,11 +169,12 @@ def build_rag_index(
         return {"dataset": dataset, "output_dir": str(out_dir), "skipped_existing": True}
 
     rows = list(read_jsonl(kb_member_path))
-    # 安全闸门：只要发现任何一条不是 KB_Member，立即报错，绝不让非成员污染索引。
-    if any(row.get("group") != "KB_Member" for row in rows):
+    # 安全闸门：只要发现任何一条 group 不等于 allowed_group，立即报错。
+    # 主库 allowed_group="KB_Member"，绝不让非成员污染；shadow 显式传 "Reserve"。
+    if any(row.get("group") != allowed_group for row in rows):
         # 挑出前 5 条违规文档的 id 放进报错信息，方便定位问题。
-        bad = [row.get("doc_id") for row in rows if row.get("group") != "KB_Member"][:5]
-        raise RuntimeError(f"RAG index can only be built from KB_Member. Bad rows: {bad}")
+        bad = [row.get("doc_id") for row in rows if row.get("group") != allowed_group][:5]
+        raise RuntimeError(f"RAG index can only be built from {allowed_group}. Bad rows: {bad}")
 
     docstore: list[dict[str, Any]] = []
     # 逐篇文档切块，并为每个块构造一条记录存进 docstore。
@@ -180,7 +188,7 @@ def build_rag_index(
                     "chunk_id": f"{doc_id}_c{chunk_idx:02d}",
                     "doc_id": doc_id,
                     "dataset": dataset,
-                    "group": "KB_Member",
+                    "group": allowed_group,
                     "text": chunk,
                     # 记录文本 hash，便于校验与追踪。
                     "text_hash": sha256_text(chunk),
@@ -222,10 +230,11 @@ def build_rag_index(
         "created_at": created_at,
         "config_hash": sha256_obj(config_snapshot or {}),
         "config_snapshot": config_snapshot or {},
-        # 把"安全边界"也写进 manifest，明确声明只允许成员、禁止哪些分组。
+        # 把"安全边界"也写进 manifest，明确声明只允许哪个 group。
         "security_boundary": {
-            "allowed_groups": ["KB_Member"],
-            "forbidden_groups": ["True_Non_Member", "Spoof_Seed", "Spoofed_Non_Member", "Reserve"],
+            "allowed_groups": [allowed_group],
+            "forbidden_groups": [g for g in ["KB_Member", "True_Non_Member", "Spoof_Seed", "Spoofed_Non_Member", "Reserve"] if g != allowed_group],
+            "is_shadow_index": allowed_group != "KB_Member",
         },
     }
     write_json(manifest, manifest_path)

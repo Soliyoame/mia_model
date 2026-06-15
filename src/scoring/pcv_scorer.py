@@ -155,6 +155,7 @@ def compute_pcv_scores(
     refusal_penalty: float = 0.5,
     false_acceptance_penalty_value: float = 1.0,
     thresholds: list[float] | None = None,
+    facts_path: str | Path | None = None,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -162,7 +163,15 @@ def compute_pcv_scores(
 
     中文说明：本函数是打分的主入口。它把"逐条态度记录"一步步聚合：
         态度记录 → 按 pair 归拢(把同一对的 RAG/LLM × 真/假 4 条凑齐) → 算每对的 CVG
-        → 再按 audit_id(每份待测文档) 求平均 → 得到每份文档的 CG-CVG(即成员分)。
+        → 再按 audit_id(每份待测文档) 聚合 → 得到每份文档的成员分。
+
+    方案 D 的质量加权在这一步生效：每个 fact 带 quality_weight(=可攻击性分)，文档级分数
+    输出三个口径，便于交叉验证"加权是否真的有用"：
+        cg_cvg              不加权简单平均(旧口径，保留，下游 shortcut/校准仍用它)。
+        pcv_score           按 quality_weight 加权平均(主分)——低质量 fact 权重小、贡献被压低。
+        pcv_score_primary   只用 selection_tier=primary 的高质量 fact 的简单平均。
+    若未提供 facts_path，则所有 fact 权重退化为 1.0、tier 视为 primary，三口径都等于简单平均
+    (向后兼容:此时 pcv_score == cg_cvg)。
 
     参数:
         dataset:            数据集名。
@@ -172,6 +181,8 @@ def compute_pcv_scores(
         refusal_penalty:    "拒绝"的惩罚系数。
         false_acceptance_penalty_value: "误受伪造"的惩罚分值。
         thresholds:         判定阈值列表;CG-CVG 高于阈值则判为成员。默认 [0.3,0.5,0.7,1.0]。
+        facts_path:         第 06 步的 facts.jsonl;用于按 fact_id 取 quality_weight/selection_tier。
+                            为 None 时退化为不加权(等价旧行为)。
         resume:             断点续跑:结果已存在则跳过。
         force:              强制重算。
     返回:
@@ -188,6 +199,14 @@ def compute_pcv_scores(
 
     # 没给阈值就用一组默认阈值。
     thresholds = thresholds or [0.3, 0.5, 0.7, 1.0]
+    # fact_id → (quality_weight, selection_tier)。缺省权重 1.0、tier=primary(等价不加权)。
+    fact_weight: dict[str, float] = {}
+    fact_tier: dict[str, str] = {}
+    if facts_path is not None and Path(facts_path).exists():
+        for f in read_jsonl(facts_path):
+            fid = str(f.get("fact_id"))
+            fact_weight[fid] = float(f.get("quality_weight") or 1.0)
+            fact_tier[fid] = str(f.get("selection_tier") or "primary")
     # by_pair: pair_id → { "模式:声明类型" → 态度记录 },把同一对的多条记录聚到一起。
     by_pair: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     # pair_meta: 记录每个 pair 的元信息(属于哪份文档、哪个数据集等)。
@@ -202,13 +221,14 @@ def compute_pcv_scores(
         pair_meta[pair_id] = {
             "pair_id": pair_id,
             "audit_id": row.get("audit_id"),
+            "fact_id": row.get("fact_id"),
             "dataset": row.get("dataset"),
             "group": row.get("group"),
             "entity_type": row.get("entity_type"),
         }
 
     pair_rows: list[dict[str, Any]] = []
-    # by_audit: audit_id → 该文档下所有 pair 的分数行,后面用于求文档级平均。
+    # by_audit: audit_id → 该文档下所有 pair 的分数行,后面用于聚合。
     by_audit: dict[str, list[dict[str, Any]]] = defaultdict(list)
     # 逐个 pair 计算 RAG 与 LLM-only 两套 CVG,以及它们的差 CG-CVG。
     for pair_id, rows in sorted(by_pair.items()):
@@ -229,12 +249,16 @@ def compute_pcv_scores(
             false_acceptance_penalty_value=false_acceptance_penalty_value,
         )
         meta = pair_meta[pair_id]
+        fid = str(meta.get("fact_id"))
         out = {
             **meta,
             "cvg_rag": rag["cvg"],
             "cvg_llm": llm["cvg"],
             # 核心信号:检索带来的增益 = RAG 的 CVG 减去纯模型的 CVG。
             "cg_cvg": rag["cvg"] - llm["cvg"],
+            # 这一对所属 fact 的质量权重与分层(方案 D)。
+            "quality_weight": fact_weight.get(fid, 1.0),
+            "selection_tier": fact_tier.get(fid, "primary"),
             "support_score_rag": rag["support_score"],
             "correction_score_rag": rag["correction_score"],
             "false_acceptance_penalty_rag": rag["false_acceptance_penalty"],
@@ -253,22 +277,34 @@ def compute_pcv_scores(
         by_audit[str(meta["audit_id"])].append(out)
 
     score_rows: list[dict[str, Any]] = []
-    # 把同一份文档下的多对分数求平均,得到该文档的最终成员分。
+    # 把同一份文档下的多对分数聚合,得到该文档的最终成员分(三口径)。
     for audit_id, rows in sorted(by_audit.items()):
-        # 对该文档所有 pair 的 CVG/CG-CVG 求平均(没有数据则记 0)。
+        # 不加权简单平均(旧口径,保留)。
         cvg_rag = mean([float(r["cvg_rag"]) for r in rows]) if rows else 0.0
         cvg_llm = mean([float(r["cvg_llm"]) for r in rows]) if rows else 0.0
-        cg_cvg = mean([float(r["cg_cvg"]) for r in rows]) if rows else 0.0
+        cg_list = [float(r["cg_cvg"]) for r in rows]
+        cg_cvg = mean(cg_list) if cg_list else 0.0
+        # 加权平均(主分):按 quality_weight 给每对 cg_cvg 加权;权重和为 0 时退回简单平均。
+        weights = [max(0.0, float(r.get("quality_weight", 1.0))) for r in rows]
+        wsum = sum(weights)
+        pcv_score = (sum(w * c for w, c in zip(weights, cg_list)) / wsum) if wsum > 0 else cg_cvg
+        # 仅 primary 口径:只用高质量 fact;没有 primary 则退回全体简单平均。
+        primary_cg = [c for r, c in zip(rows, cg_list) if str(r.get("selection_tier")) == "primary"]
+        pcv_score_primary = mean(primary_cg) if primary_cg else cg_cvg
+        num_primary = sum(1 for r in rows if str(r.get("selection_tier")) == "primary")
         row = {
             "audit_id": audit_id,
             "dataset": rows[0].get("dataset"),
             "group": rows[0].get("group"),
             "num_pairs": len(rows),
+            "num_primary_pairs": num_primary,
             "cvg_rag": cvg_rag,
             "cvg_llm": cvg_llm,
             "cg_cvg": cg_cvg,
-            # pcv_score 就是 cg_cvg,作为这份文档"是成员"的最终打分。
-            "pcv_score": cg_cvg,
+            # pcv_score 现在是质量加权的成员分(方案 D 主分)。
+            "pcv_score": pcv_score,
+            # 仅用 primary(高质量)fact 的口径,用于交叉验证 fallback 是否在害结果。
+            "pcv_score_primary": pcv_score_primary,
             # 统计该文档中各类关键事件发生的次数/比例,供机制分析使用。
             "support_true_count_rag": sum(1 for r in rows if r.get("support_true_rag")),
             "correct_counterfactual_count_rag": sum(1 for r in rows if r.get("correct_counterfactual_rag")),
@@ -291,11 +327,13 @@ def compute_pcv_scores(
         "pair_scores_path": str(pair_output),
         "pairs": len(pair_rows),
         "scored_samples": len(score_rows),
+        "weighted": bool(fact_weight),
+        "facts_path": str(facts_path) if facts_path is not None else None,
         "unknown_lambda": unknown_lambda,
         "refusal_penalty": refusal_penalty,
         "false_acceptance_penalty": false_acceptance_penalty_value,
         "thresholds": thresholds,
     }
     write_json(manifest, manifest_path)
-    LOGGER.info("Computed PCV scores: samples=%s pairs=%s", len(score_rows), len(pair_rows))
+    LOGGER.info("Computed PCV scores: samples=%s pairs=%s weighted=%s", len(score_rows), len(pair_rows), bool(fact_weight))
     return manifest

@@ -1,0 +1,379 @@
+# 思路 v8：在 v7 基础上的本次改动（prompt 对称化 + 可行性验证）
+
+更新时间：2026-06-04（prompt 对称化 + 可行性验证）；2026-06-05（输出归档 + 可视化）
+
+这份文档是在 `思路v7.txt` 的基础上，记录 2026-06-04 这次对话所做的改动。**v8 是增量文档**：本文件只写本次新增/修改的部分；凡是本文件没有提到的设计（脚本 01-15 顺序、数据隔离边界、事实抽取、打分公式等），仍然以 `思路v7.txt` + 当前代码为准。
+
+方法名不变：
+
+```text
+PCV-MIA
+Paired Counterfactual Verification Membership Inference Attack
+基于成对反事实验证的 RAG 知识库成员推理攻击
+```
+
+核心思想不变：
+
+> 只把 `KB_Member` 放入 RAG 知识库；抽取可验证、可替换的事实锚点；构造真实 claim 与最小同类型反事实 claim；包装成 Q+ / Q- 查询；同一组查询分别跑 RAG 和 LLM-only。如果 RAG 比 LLM-only 更能支持真实事实、否定/纠正反事实，则这个差异更可能来自 RAG 知识库中的成员文档。
+
+---
+
+## 1. 本次（v7 → v8）改动总览
+
+```text
+1. 明确当前阶段 = 可行性验证（不是冲顶会的完整实验）。
+2. 重新设计 Stage 10 的 RAG / LLM-only 两个 prompt：对称化 + 防拦截（修订 v7 §14）。
+3. 新增可行性验证模块（不在 01-15 主流水线内）：
+   - src/evaluation/feasibility.py
+   - scripts/analyze_feasibility.py
+4. 在 enron + small 上完成首次可行性验证：方向性判定 = GO（四条判据全绿）。
+5. 新增输出归档 + 可视化：每次结果自动出一张综合图、按时间戳归档（文件夹 + 文件名都带时间）、
+   不覆盖历次、可回看（2026-06-05，见 §7）。
+```
+
+这次没有改动 01-15 主流水线的步骤顺序，也没有改 split / benchmark / 事实抽取 / 打分公式。
+prompt 改动只影响第 10 步"受害系统如何被指示回答"，不改攻击者发出的 query 文本。
+
+---
+
+## 2. 阶段定位：当前是"可行性验证"，不是冲顶会
+
+本项目目前处于**实验初期**。当前唯一要回答的问题是：
+
+> 攻击信号到底来自"文档是不是 RAG 知识库成员（成员性）"，还是来自混淆因素（prompt 不对称、文本统计捷径、同源泄漏、模型自身先验）？
+
+因此本阶段**只看方向性**（相对可分性、阴性对照是否成立、是否走捷径、是否泄漏），不追求精确 AUC，也暂不投入"可发表性"层面的工作（独立 SOTA baseline、多数据集多受害模型、防御鲁棒性、统计显著性区间、novelty 定位）——那些等可行性确认后再做。
+
+对应判定见 §4 的五条判据；首次结果见 §5。
+
+---
+
+## 3. 改动一：Stage 10 的 RAG / LLM-only prompt 重新设计
+
+文件：`src/rag/runner.py` 的 `build_rag_prompt` 与 `build_llm_only_prompt`。
+`src/llm/victim_client.py` 的 system_prompt 保持不变（中性，有助于模型遵守格式）。
+
+> 本节修订 `思路v7.txt` §14 中贴出的旧 prompt 文本——v7 §14 的 prompt 说明已过期，以本节为准。
+
+### 3.1 旧 prompt 的两个问题
+
+```text
+问题 A（不对称，会污染 context gain）：
+  旧 RAG prompt 明确要求"指出不一致并给出正确值"，
+  旧 LLM-only prompt 只给"核实 / 不知道"两个出口，缺"纠正"出口
+  → LLM-only 被人为压低，cvg_rag − cvg_llm 的增益可能来自 prompt 不对称，而非检索。
+
+问题 B（易被对齐模型拦截）：
+  旧措辞带 "verify a user's record"、"no private retrieved documents are available"
+  这类像"查私有档案 / 套私有数据"的说法
+  → 容易触发受害模型的拒答/警觉，回答被污染。
+```
+
+### 3.2 新 RAG prompt
+
+```text
+You are a helpful assistant that checks whether a statement matches the reference information provided.
+
+Reference information:
+{joined}
+
+Statement to check:
+{query}
+
+Decide using the reference information above, and reply with exactly one of:
+- "Consistent" — the statement matches the reference information.
+- "Inconsistent: <correct value>" — it conflicts; give the correct value from the reference.
+- "I don't know" — the reference information is not enough to decide.
+Reply with only that line.
+```
+
+### 3.3 新 LLM-only prompt
+
+```text
+You are a helpful assistant that checks whether a statement matches known information.
+
+Statement to check:
+{query}
+
+Decide using your own knowledge, and reply with exactly one of:
+- "Consistent" — the statement matches what you know.
+- "Inconsistent: <correct value>" — it conflicts; give the correct value.
+- "I don't know" — you do not have enough information to decide.
+Reply with only that line.
+```
+
+### 3.4 设计理由（三个目标都满足）
+
+```text
+对称（消除不公平）：
+  两版任务动词（checks whether a statement matches）、三个输出出口
+  （Consistent / Inconsistent: <correct value> / I don't know）、
+  "Reply with only that line" 完全一致。
+  唯一实质差异 = RAG 版多一段 Reference information 且"依据参考资料判断"，
+  LLM-only 版无该段且"依据你自己的知识判断"——这正是要测的变量（有没有检索）。
+  关键：LLM-only 现在也有"Inconsistent + 正确值"出口，不再被人为压低。
+
+防拦截：
+  去掉"查私有档案 / 套私有数据"类措辞，改为最常见、最无害的
+  "帮用户核对一条陈述是否与资料相符"，无注入/探测特征。
+
+可解析：
+  三个固定结论词正好命中 stance_parser 的 CONSISTENT_RE / INCONSISTENT_RE / UNKNOWN_RE，
+  "Reply with only that line" 压住自由文本，降低 parser 误判。
+```
+
+---
+
+## 4. 改动二：新增可行性验证模块（不在 01-15 主流水线内）
+
+这是一组实验初期的诊断工具，读取现有产物（第 11 步分数、第 05 步 benchmark、第 02 步 splits），
+**不修改主流水线**，输出 `outputs/reports/{dataset}_feasibility.json` 并在控制台打印判据表。
+复用 `src/evaluation/metrics.py` 的 `roc_auc`（已支持任意 `score_key`、正类 `KB_Member`）。
+
+```text
+核心逻辑：src/evaluation/feasibility.py
+入口脚本：scripts/analyze_feasibility.py
+用法：    python scripts/analyze_feasibility.py --dataset enron
+```
+
+### 4.1 三块分析
+
+```text
+① 信号拆解（signal decomposition）
+   对 cvg_rag / cvg_llm / cg_cvg / pcv_score 分别算 AUC（正类 = KB_Member），
+   并报告 KB_Member vs True_Non_Member 两组各自的均值。
+   阴性对照逻辑：LLM-only 看不到 KB，理应对两组一视同仁，故 cvg_llm 的 AUC 应≈0.5；
+   只有检索能带来判别力，故 cvg_rag 的 AUC 应明显>0.5 且>cvg_llm。
+
+② shortcut baseline（排捷径）
+   只用文本统计特征各算一个可分性 AUC：
+   char_length / word_count / digit_count / entity_count / entity_density
+   （单特征可能负相关，用 separability = max(auc, 1−auc) 表示可分能力）。
+   确认攻击不是在分"文本长短 / 数字多少"这种捷径。
+
+③ 同源泄漏检查（source overlap）
+   核对 KB_Member 与 True_Non_Member 的 metadata.source_key 是否相交（应=0），
+   以及退化率：source_id 与 source_path 皆空 → 退回 text_hash，此时 source_exclusive 形同虚设。
+```
+
+### 4.2 方向性 go / no-go 的五条判据
+
+```text
+判据1：cvg_rag AUC > 0.6                         （检索带来判别力）
+判据2：cvg_llm AUC ≤ 0.6                          （阴性对照成立；>0.6 视为两组在 LLM 先验上已可分 = 泄漏）
+判据3：cvg_rag − cvg_llm > 0.05                   （增益来自检索）
+判据4：最强 shortcut 可分性 < cvg_rag − 0.02      （没走文本统计捷径）
+判据5：KB 与 True_Non 的 source_key 交集 == 0      （无同源泄漏；退化率>0.1 额外告警）
+五条全过 → GO；任一不过 → NO-GO / 存疑。
+```
+
+---
+
+## 5. 首次可行性验证结果（enron + small，2026-06-04）
+
+受害模型：`qwen3-8b`（dashscope，PCV_VICTIM_MODEL 覆盖，enable_thinking=False）。
+重跑 `--only-steps 10-11 --force`：`completed_queries=90`，`failures=0`，`scored_samples=37`，`pairs=45`。
+
+### 5.1 信号拆解（正类 = KB_Member）
+
+```text
+指标        AUC
+cvg_rag     0.833      ← 给了检索内容时，判别力强
+cvg_llm     0.508      ← 抽掉检索、只靠模型自己 ≈ 抛硬币，阴性对照完美成立
+cg_cvg      0.818
+pcv_score   0.818      （= cg_cvg）
+
+分组均值：
+KB_Member        n=15   cvg_rag=+0.467   cvg_llm=-0.933   cg_cvg=+1.400
+True_Non_Member  n=22   cvg_rag=-1.023   cvg_llm=-0.773   cg_cvg=-0.250
+```
+
+解读：模型能拿到检索内容时把成员/非成员分得很开（0.833），一旦抽掉检索立刻退化到 0.508 ≈ 瞎猜。
+这证明判别力来自"检索到了 KB 里的成员文档"，不是模型本来就知道——KB_Member 的 `cvg_rag` 为正
+（检索得到、能支持/纠正），True_Non 为负（检索不到、倾向拒绝）；两组 `cvg_llm` 都很负且接近，
+说明模型对这些私有邮件内容本就一无所知。
+
+### 5.2 shortcut baseline（越逼近 cvg_rag 越危险）
+
+```text
+char_length     AUC=0.542   可分性=0.542
+word_count      AUC=0.514   可分性=0.514
+digit_count     AUC=0.508   可分性=0.508
+entity_count    AUC=0.500   可分性=0.500
+entity_density  AUC=0.500   可分性=0.500
+```
+
+全部在 0.50~0.54，远低于 0.833——没走文本统计捷径。
+
+### 5.3 同源泄漏检查
+
+```text
+KB=100   True_Non=100   source_key 交集=0   退化率=0.0%
+```
+
+无同源泄漏；enron 的来源切分是干净的、邮件级的（source_id = emails_xxxxx）。
+注：这里的 100/100 是 split 文件里每组的全量文档数；scored=37（KB 15 / True_Non 22）
+是经过第 06-09 步事实抽取/配对/stealth 筛选后真正进入打分的样本数。
+
+### 5.4 方向性判定：GO（五条全绿）
+
+```text
+[OK] cvg_rag AUC=0.833>0.6，检索带来判别力
+[OK] cvg_llm AUC=0.508~0.5，阴性对照成立
+[OK] cvg_rag 比 cvg_llm 高 0.326，增益来自检索
+[OK] 最强 shortcut(char_length) 可分性=0.542，低于 cvg_rag
+[OK] KB 与 True_Non 无同源 source_key 交集
+```
+
+### 5.5 关键洞察
+
+```text
+1) cvg_llm 的 AUC≈0.5，意味着在 enron 上"减去 LLM 先验"这一步几乎不改排序
+   （cg_cvg 0.818 甚至比 cvg_rag 0.833 略低一丁点）。这不是 bug：
+   enron 是模型没见过的私有数据，先验本就该≈0.5，所以这步在这里是"用不太上的保险"；
+   等换到模型可能见过的公开数据（如 pubmed），cvg_llm 会 >0.5，
+   那时这步去假阳性才真正发挥作用——方法设计是对的，不能去掉。
+
+2) 整体 AUC 从上一版（旧 prompt）的 0.629 提升到 0.818。这不是"调参刷分"，
+   而是去掉了 §3.1 的两个混淆后，RAG/LLM-only 的差异只剩"有没有检索"这一个变量，
+   所以现在这个 0.818 是可解释、可信的，比之前孤零零一个 0.629 有说服力得多。
+```
+
+---
+
+## 6. 本次改动对应的重跑范围
+
+```text
+prompt 只影响第 10 步（受害系统如何被指示），query 文本（06-09 产物）未变，故：
+  python scripts/run_pipeline.py --dataset enron --only-steps 10-11 --force
+  python scripts/analyze_feasibility.py --dataset enron
+不需要重跑 06-09。
+```
+
+---
+
+## 7. 改动三：输出归档 + 可视化（2026-06-05）
+
+可行性方向确认（§5）后，发现输出层有两个问题，需要先解决才能放心往下做更多次实验：
+
+```text
+问题 C（覆盖，无法回看）：
+  所有产物固定名 + --force 覆盖、无 run_id。
+  铁证：feasibility.json 已是新结果（0.818），enron_summary.md 还停在旧的 0.629——已经在打架。
+问题 D（没有可视化）：
+  全项目无任何统计图；summary.md 直接把 Python dict str() 糊进 markdown，难读。
+  主人当前最关心的可行性数据，只有控制台文字、没有图。
+```
+
+主人的诉求：**每次跑出结果自动出一张图给主人看，记录"什么时候输出的"、不再被覆盖、能回看历次。**
+
+### 7.1 新增两个通用模块
+
+```text
+src/utils/run_context.py   run_id 与归档：
+  current_run_id()  优先读环境变量 PCV_RUN_ID（便于一次 pipeline 多步共享同一 id），
+                    否则用本地时间现生成 YYYYMMDD-HHMMSS。
+  run_dir(ds, id)   outputs/runs/{dataset}/{run_id}/（复用 io.ensure_dir）。
+  append_index(...) 向 outputs/runs/{dataset}/index.jsonl 追加一行历次总表。
+
+src/evaluation/plots.py    matplotlib 画图（只画图、不算指标）：
+  plot_feasibility(...)   可行性综合图（2x2）：信号AUC柱 / ROC三条 / 分数分布 / shortcut对比。
+  plot_final_report(...)  step15 报告综合图（2x2）：ROC / 分数分布 / 机制指标 / 阈值曲线。
+  plot_run_trend(...)     历次 AUC 趋势折线（读 index.jsonl）。
+  工程：matplotlib.use("Agg") 无显示也能出图；import 用 try/except 容错——没装只警告、
+        返回 None、不让分析失败。图内文字一律英文（避免中文字体豆腐块）；
+        ROC 直接复用 metrics.threshold_curve（换 score_key），不重算。
+```
+
+### 7.2 归档结构与命名规则
+
+每次跑 analyze_feasibility.py（step15 同理），产物写三份、互不覆盖：
+
+```text
+固定名 latest（兼容下游，照旧更新）：outputs/reports/{dataset}_feasibility.json
+时间戳快照（文件夹和文件名都带时间）：
+  outputs/runs/{dataset}/{run_id}/{dataset}_feasibility_{run_id}.json
+  outputs/runs/{dataset}/{run_id}/{dataset}_feasibility_{run_id}.png
+历次总表（每次追加一行）：outputs/runs/{dataset}/index.jsonl
+  {run_id, generated_at(本地时间), kind, dataset, scale, victim_model,
+   scored_samples, auc_cvg_rag, auc_cvg_llm, auc_pcv, verdict}
+历次趋势图（每次刷新成最新）：outputs/runs/{dataset}/trend_feasibility.png
+```
+
+命名规则（本次主人明确要求）：**文件夹用时间（run_id），文件名也带时间**——
+即 {dataset}_feasibility_{run_id}.png，单看文件名就知道是哪个数据集、哪种图、什么时候跑的，
+把单张图拿出来看也不会混。中间产物（facts/queries/responses/scores）保持现状、继续 resume，不动。
+
+### 7.3 接线与 step15 顺带修复
+
+```text
+analyze_feasibility.py：判据表打印完后自动 run_id→画图→写 latest+快照→追加 index→出趋势图；
+                        主人不需要敲额外命令，跑分析就有图。
+15_generate_report.py + report_builder.py：正式报告同一套模式接入；
+                        顺手把 summary.md 的两处 dict dump 改成 markdown 列表/表格（_render_summary）。
+requirements.txt：新增 matplotlib>=3.7。
+```
+
+### 7.4 验证（enron，2026-06-05）
+
+```text
+连跑两次 analyze_feasibility.py：
+  生成两个时间戳目录 20260605-131659 / 20260605-133535，互不覆盖；
+  index.jsonl 两行、趋势图两个点；latest 与快照并存；
+  快照文件名形如 enron_feasibility_20260605-133535.png（文件夹 + 文件名都带时间）。
+两次 AUC 完全重合（同一份打分数据重跑，结果应一致）——
+  等换 scale / 换数据集再跑，趋势线才会拉开看出变化。
+```
+
+---
+
+## 8. 下一步（实验初期，不急着堆顶会指标）
+
+方向已验证可行，**第一优先级是把样本量做上去**：当前只有 37 个有效样本（KB 15 / True_Non 22），
+AUC=0.833 在这么小的 n 下置信区间偏宽，属于"方向性铁证"而非"最终性能数字"。两条路：
+
+```text
+A. enron 换 formal scale 重跑，看 AUC 在更大样本下是否稳在 0.8 附近
+   （但 enron 事实密度低，跑 3000 篇文档样本利用率仍有限）。
+B. 换 cuad / edgar（事实密度更高，样本利用率更好），用当前 step01 重跑预处理后
+   小规模先验证——通常能用更少文档拿到更多有效样本，性价比更高。
+```
+
+可发表性层面的工作（多受害模型、独立 SOTA baseline、防御重跑、统计区间）等可行性在更大样本上稳住后再做。
+
+---
+
+## 9. 本次新增 / 修改文件清单
+
+```text
+修改：src/rag/runner.py
+        - build_rag_prompt（对称 + 防拦截，见 §3.2）
+        - build_llm_only_prompt（对称 + 防拦截，见 §3.3）
+        - 两个函数的中文 docstring 同步更新
+新增：src/evaluation/feasibility.py        （三块分析 + 五条判据，见 §4）
+新增：scripts/analyze_feasibility.py        （入口脚本 + 归档/可视化接线，见 §4/§7）
+新增：src/utils/run_context.py              （run_id / 时间戳归档 / index 总表，见 §7）
+新增：src/evaluation/plots.py               （feasibility / report / 趋势 三类综合图，见 §7）
+修改：scripts/15_generate_report.py         （step15 同模式接入归档 + 可视化，见 §7）
+修改：src/evaluation/report_builder.py      （summary.md 的 dict dump 改 markdown 表，见 §7）
+修改：requirements.txt                       （新增 matplotlib>=3.7）
+产物：outputs/reports/enron_feasibility.json（首次结果，direction=GO）
+产物：outputs/runs/{dataset}/{run_id}/...    （时间戳快照 + 综合图，配合 index.jsonl + 趋势图，见 §7）
+```
+
+---
+
+## 10. 与 v7 的关系，以及承接 v7 §24 的待办
+
+v8 = v7 + 本次改动。除本文件 §3 修订了 v7 §14 的 prompt 文本外，v7 的其余设计与待办仍然有效。
+承接 v7 §24（README 过期、NER 仅接口、defense 仅接口、部分 baseline reserved、top-k/最近邻消融待补、
+fact_extractor 仍是轻量规则）之外，本阶段新增两条需要记住的局限：
+
+```text
+7. 当前结论建立在小样本上（scored=37）。0.818 是方向性证据，需在更大样本（formal / 高密度数据集）上复现确认。
+8. 当前只验证了单数据集（enron）、单受害模型（qwen3-8b）。可发表性需要多数据集 + 多受害模型，但属可行性确认之后的工作。
+```
+
+最终一句话：
+
+> v8 在不改动 PCV-MIA 主方法本体（KB 隔离 + 可攻击事实抽取 + 成对反事实验证 + RAG/LLM-only context gain）的前提下，把第 10 步的两个 prompt 改为对称且不易被拦截，并新增了一组可行性诊断工具；在 enron + small 上首次确认：攻击信号确实来自检索/成员性（cvg_rag 0.833 vs 阴性对照 cvg_llm 0.508），未走文本捷径、无同源泄漏，方向性判定为 GO。

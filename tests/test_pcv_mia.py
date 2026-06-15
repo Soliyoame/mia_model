@@ -31,8 +31,9 @@ from src.paired_claims.claim_generator import generate_paired_claims_file
 from src.parsing.stance_parser import parse_stance_files
 from src.rag.embeddings import build_embedding_model
 from src.scoring.pcv_scorer import compute_pcv_scores
+from src.fact_extraction.fact_extractor import extract_facts_file
 from src.utils.env import env_str
-from src.utils.io import read_jsonl, write_jsonl
+from src.utils.io import read_jsonl, write_jsonl, write_json
 
 
 WORKSPACE_TMP = Path(__file__).resolve().parents[1] / ".pytest_tmp"
@@ -310,7 +311,74 @@ class PcvMiaTests(unittest.TestCase):
             # context gain = RAG 增益 - LLM-only 增益 = 2.0 - (-1.0) = 3.0。
             self.assertEqual(row["cg_cvg"], 3.0)
             # 最终 pcv_score 取 context gain,体现"扣除 LLM-only 自身恢复"后的成员信号。
+            # 未提供 facts_path 时权重退化为 1.0(向后兼容):加权平均 == 简单平均 == cg_cvg。
             self.assertEqual(row["pcv_score"], 3.0)
+
+    def test_weighted_pcv_score_three_views(self) -> None:
+        """方案 D:质量加权聚合给出三口径(cg_cvg/pcv_score/pcv_score_primary)且数值正确。"""
+        with temporary_dir() as tmp:
+            parsed = tmp / "parsed.jsonl"
+            scores = tmp / "scores.jsonl"
+            facts = tmp / "facts.jsonl"
+            # 两条 fact:高质量(primary,权重0.8) 与 低质量(fallback,权重0.2)。
+            write_jsonl(
+                [
+                    {"fact_id": "f1", "quality_weight": 0.8, "selection_tier": "primary"},
+                    {"fact_id": "f2", "quality_weight": 0.2, "selection_tier": "fallback"},
+                ],
+                facts,
+            )
+            base = {"audit_id": "a1", "dataset": "toy", "group": "KB_Member", "entity_type": "MONEY"}
+            # pair1(f1): cvg_rag=2.0, cvg_llm=-1.0 -> cg_cvg=3.0;pair2(f2): cvg_rag=1.5, cvg_llm=0 -> cg_cvg=1.5。
+            write_jsonl(
+                [
+                    {**base, "pair_id": "p1", "fact_id": "f1", "mode": "rag", "claim_type": "true", "supports_true_claim": True},
+                    {**base, "pair_id": "p1", "fact_id": "f1", "mode": "rag", "claim_type": "counterfactual", "corrects_to_original_entity": True},
+                    {**base, "pair_id": "p1", "fact_id": "f1", "mode": "llm_only", "claim_type": "true", "says_unknown": True},
+                    {**base, "pair_id": "p1", "fact_id": "f1", "mode": "llm_only", "claim_type": "counterfactual", "says_unknown": True},
+                    {**base, "pair_id": "p2", "fact_id": "f2", "mode": "rag", "claim_type": "true", "supports_true_claim": True},
+                    {**base, "pair_id": "p2", "fact_id": "f2", "mode": "rag", "claim_type": "counterfactual", "rejects_counterfactual": True},
+                    {**base, "pair_id": "p2", "fact_id": "f2", "mode": "llm_only", "claim_type": "true"},
+                    {**base, "pair_id": "p2", "fact_id": "f2", "mode": "llm_only", "claim_type": "counterfactual"},
+                ],
+                parsed,
+            )
+            compute_pcv_scores("toy", parsed, scores, unknown_lambda=0.5, facts_path=facts, force=True)
+            row = list(read_jsonl(scores))[0]
+            # 不加权简单平均: (3.0 + 1.5) / 2 = 2.25
+            self.assertEqual(row["cg_cvg"], 2.25)
+            # 质量加权: (0.8*3.0 + 0.2*1.5) / (0.8+0.2) = 2.7
+            self.assertAlmostEqual(row["pcv_score"], 2.7)
+            # 仅 primary 口径: 只用 f1(primary) -> 3.0
+            self.assertEqual(row["pcv_score_primary"], 3.0)
+            self.assertEqual(row["num_primary_pairs"], 1)
+
+    def test_fact_extraction_guarantees_coverage(self) -> None:
+        """方案 D:每篇有可成句实体的文档都保底产出事实,且每条带 quality_weight/selection_tier。"""
+        with temporary_dir() as tmp:
+            bench = tmp / "bench.jsonl"
+            facts = tmp / "facts.jsonl"
+            write_jsonl(
+                [
+                    {
+                        "audit_id": "a1", "dataset": "toy", "group": "KB_Member", "doc_id": "d1",
+                        "text": "Delta Logistics received $48,720 from Orion Capital on March 12, 2022 under the service agreement.",
+                    },
+                ],
+                bench,
+            )
+            manifest = extract_facts_file(bench, facts, guarantee_min_facts=1, force=True)
+            rows = list(read_jsonl(facts))
+            # 该文档必须保底产出至少一条事实。
+            self.assertGreaterEqual(len(rows), 1)
+            for r in rows:
+                self.assertIn("quality_weight", r)
+                self.assertIn(r["selection_tier"], {"primary", "fallback"})
+                self.assertGreaterEqual(float(r["quality_weight"]), 0.0)
+            # manifest 记录覆盖率与分层统计。
+            self.assertIn("coverage_by_group", manifest)
+            self.assertIn("facts_by_tier", manifest)
+            self.assertEqual(manifest["coverage_by_group"]["KB_Member"], 1.0)
 
 
 if __name__ == "__main__":

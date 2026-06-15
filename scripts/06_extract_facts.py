@@ -60,10 +60,12 @@ def main() -> int:
         max_facts_per_doc=int(fact_cfg.get("max_facts_per_doc", 2)),
         max_entities_per_doc=int(fact_cfg.get("max_entities_per_doc", 8)),
         max_samples=fact_cfg.get("max_samples"),
-        # 三个阈值用于过滤"不值得验证"的事实:重要性、可替换性、隐私特异性都要达标。
+        # 三个阈值现在是"优选标准"(不达标降级为 fallback，不再整篇丢弃):重要性、可替换性、隐私特异性。
         min_importance=float(fact_cfg.get("min_importance", 0.6)),
         min_replaceability=float(fact_cfg.get("min_replaceability", 0.6)),
         min_privacy_specificity=float(fact_cfg.get("min_privacy_specificity", 0.5)),
+        # 方案 D:每篇文档保底产出几条事实(只要有可成句实体),保证评估覆盖率、消除 selection bias。
+        guarantee_min_facts=int(fact_cfg.get("guarantee_min_facts", 1)),
         resume=not args.no_resume,
         force=args.force,
     )

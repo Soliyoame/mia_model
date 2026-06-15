@@ -28,15 +28,16 @@ KB isolation
 
 ## 当前状态
 
-当前仓库实现的是 PCV-MIA 主流程和实验评估框架。需要特别注意以下几点：
+当前仓库实现的是 PCV-MIA 主流程和实验评估框架。**当前阶段定位是可行性验证**（确认攻击信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验等混淆因素），不是冲顶会的完整实验。成员分校准已从朴素的 `cg_cvg` 升级到 L1 群体校准与 L2 shadow 逐样本校准（见后文同名章节）。需要特别注意以下几点：
 
 - RAG index 只能由 `KB_Member` 构建，代码中有硬检查。
-- `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 都不能进入 `indexes/`。
+- `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 都不能进入 `indexes/`（`Reserve` 会从第 05 步起进入 benchmark 充当 L1 群体校准的零分布，但绝不进 RAG index）。
 - hashing embedding fallback 已经移除，当前默认使用真实 `sentence-transformers/all-MiniLM-L6-v2`。
 - 如果显式配置 `hashing` 或 `backend: hashing`，代码会直接报错。
 - 没有安装或无法加载 `sentence-transformers` 模型时，流程会失败，而不是静默换成 fallback。
 - `json_vector_fallback` 只是在没有 FAISS 时保存真实 embedding 向量的索引存储 fallback，不是 hashing embedding。
 - `Spoofed_Non_Member` 是可选 hard negative 对照组，不是 PCV-MIA 主方法必需部分。
+- `Reserve` 组从第 05 步起被纳入 benchmark，随主流水线跑出 `cvg_rag`，仅作为 L1 群体校准的"非成员零分布"；评估指标时必须排除（开关 `PCV_ENABLE_RESERVE_CALIBRATION`，默认 true）。
 - 当前 NER 只是 `EntityExtractor` 的可注入候选源接口，默认没有自动加载 NER 模型。
 - 部分 baseline 和 defense 是 reserved interface，不能当成已完成论文实验结果。
 
@@ -108,6 +109,7 @@ PyYAML
 tqdm
 numpy
 sentence-transformers
+matplotlib
 ```
 
 可选加速依赖：
@@ -119,6 +121,7 @@ faiss-cpu
 说明：
 
 - `sentence-transformers` 是当前正式流程的核心依赖。
+- `matplotlib` 用于评估结果可视化（ROC / 分数分布 / 信号 AUC / 历次趋势图）；缺失时只警告不出图，不让分析失败。
 - `faiss-cpu` 只是检索索引加速依赖；没有 FAISS 时会使用 JSON 向量索引存储。
 - 不再支持 hashing embedding 作为实验 fallback。
 
@@ -139,23 +142,26 @@ PCV_VICTIM_PROFILE=openai_api
 PCV_SIBLING_API_KEY=your-sibling-key
 PCV_SIBLING_BASE_URL=https://your-provider/v1
 PCV_SIBLING_MODEL=your-sibling-model
-PCV_SIBLING_PROFILE=openai_api
+PCV_SIBLING_PROFILE=dashscope_qwen
 
 # 可选，对照组开关；默认 false
 PCV_ENABLE_SPOOFED_NONMEMBER=false
 ```
 
-配置优先级：
+配置优先级（选择哪个 profile）：
 
 ```text
-CLI profile > .env 中的 PCV_* 变量 > configs/llm_profiles.yaml 默认值
+CLI --profile > .env 的 PCV_VICTIM_PROFILE / PCV_SIBLING_PROFILE > 脚本配置 > configs/llm_profiles.yaml 的 active
 ```
 
-当前主要 profile：
+`configs/llm_profiles.yaml` 内置两个 profile：
 
 ```text
-openai_api
+openai_api      OpenAI 官方接口，默认模型 gpt-4.1-mini
+dashscope_qwen  阿里云 DashScope OpenAI 兼容接口，默认模型 qwen3-235b-a22b
 ```
+
+仓库当前默认 victim active 是 `openai_api`，sibling active 是 `dashscope_qwen`。profile 只决定接口风格和 system prompt；真实的 `base_url`、`model`、`api_key` 仍由 `.env` 中的 `PCV_VICTIM_*` / `PCV_SIBLING_*` 覆盖。
 
 第 10 步必须配置 `PCV_VICTIM_*`。第 04 步只有在 `PCV_ENABLE_SPOOFED_NONMEMBER=true` 时才需要 `PCV_SIBLING_*`。
 
@@ -215,10 +221,10 @@ split:
   source_exclusive: true
   scale: small
   small:
-    KB_Member: 100
-    True_Non_Member: 100
-    Spoof_Seed: 500
-    Reserve: 200
+    KB_Member: 500
+    True_Non_Member: 500
+    Spoof_Seed: 100
+    Reserve: 500
   formal:
     KB_Member: 3000
     True_Non_Member: 3000
@@ -254,6 +260,8 @@ generation:
   max_tokens: 512
   timeout: 60
   retries: 2
+  retry_backoff_base: 5
+  retry_backoff_max: 120
   request_interval_seconds: 1
   max_workers: 1
 ```
@@ -476,6 +484,8 @@ datasets/benchmarks/enron_benchmark_manifest.json
 
 如果 `PCV_ENABLE_SPOOFED_NONMEMBER=false`，benchmark 只包含 `KB_Member` 和 `True_Non_Member`。如果为 true，会额外包含 `Spoofed_Non_Member`。
 
+默认还会纳入 `Reserve` 组作为 L1 群体校准的零分布来源（开关 `PCV_ENABLE_RESERVE_CALIBRATION`，默认 true）；其 `experimental_role` 标为 `calibration_group`，`in_knowledge_base=false`，评估时会被排除。`benchmark_manifest.json` 中以 `num_reserve` 记录其数量。
+
 ### 06. 抽取可验证事实
 
 ```powershell
@@ -690,6 +700,53 @@ outputs/reports/enron_report_table.html
 outputs/reports/enron_report_table.md
 ```
 
+## 辅助脚本（不在 01-15 主流水线）
+
+这些脚本读取主流水线产物做诊断/校准，不修改主流水线，也不重跑 LLM。
+
+### 可行性验证
+
+```powershell
+python scripts/analyze_feasibility.py --dataset enron
+```
+
+读取第 11 步分数、第 05 步 benchmark、第 02 步 splits，跑三块分析（信号拆解 / shortcut 排捷径 / 同源泄漏检查），在控制台打印方向性判据表，并接入 L1 校准对比（评估时排除 Reserve）。
+
+方向性 go / no-go 五条判据：
+
+```text
+判据1：cvg_rag AUC > 0.6                    （检索带来判别力）
+判据2：cvg_llm AUC ≤ 0.6                     （阴性对照成立；>0.6 视为 LLM 先验已可分=泄漏）
+判据3：cvg_rag − cvg_llm > 0.05              （增益来自检索）
+判据4：最强 shortcut 可分性 < cvg_rag − 0.02 （没走文本统计捷径）
+判据5：KB 与 True_Non 的 source_key 交集 == 0（无同源泄漏）
+```
+
+每次运行会按时间戳归档、不覆盖历次，并出一张综合图：
+
+```text
+固定名 latest：     outputs/reports/{dataset}_feasibility.json
+带时间戳快照：      outputs/runs/{dataset}/{run_id}/{dataset}_feasibility_{run_id}.json + .png
+历次总表（追加）：  outputs/runs/{dataset}/index.jsonl
+历次 AUC 趋势图：   outputs/runs/{dataset}/trend_feasibility.png
+```
+
+### L2 shadow 校准
+
+见上文「L2 shadow 逐样本校准」章节：
+
+```powershell
+python scripts/run_l2_shadow.py --dataset enron --num-shadows 4
+```
+
+### 泄漏诊断（临时工具）
+
+```powershell
+python scripts/_diag_leakage.py --dataset enron
+```
+
+只读现有产物，做 bootstrap 置信区间 + KB/True_Non 两组的 LLM-only/RAG 行为分解 + entity_type/难度/文本统计对比，用于定位"信号是否来自成员性、还是预训练污染等混淆因素"。不调用 API。
+
 ## 核心模块
 
 ```text
@@ -706,9 +763,10 @@ src/prepare/
 
 src/rag/
   embeddings.py     真实 sentence-transformers embedding；禁用 hashing
-  index_builder.py  只用 KB_Member 构建 index
+  index_builder.py  只用 KB_Member 构建 index（显式 allowed_group="Reserve" 才能建 shadow 索引）
   retriever.py      top-k 检索，支持 FAISS 或 JSON vector store
-  runner.py         RAG / LLM-only 双路推理
+  runner.py         RAG / LLM-only 双路推理（run_llm_only 开关，shadow 只跑 RAG）
+  shadow_runner.py  建 K 个 Reserve-shadow + 跑 RAG，供 L2 per-example 校准
 
 src/attack/
   entity_extractor.py        Attackable Fact Extractor
@@ -729,6 +787,7 @@ src/parsing/
 
 src/scoring/
   pcv_scorer.py  CVG、CG-CVG、PCV score
+  calibration.py L1 群体校准（经验百分位 / z-score）+ L2 shadow per-example 校准（Φ(z)）
 
 src/spoof/
   generator.py  可选 Spoofed_Non_Member 对照组生成
@@ -741,7 +800,9 @@ src/defenses/
 
 src/evaluation/
   metrics.py              membership 指标
+  feasibility.py          可行性验证（信号拆解 / shortcut / 同源泄漏 + 五判据）
   mechanism_analysis.py   机制分析
+  plots.py                评估结果可视化（ROC / 分数分布 / 信号 AUC / 趋势图）
   report_builder.py       最终报告
 
 src/llm/
@@ -959,6 +1020,56 @@ PCV_SCORE(x) = average(CG-CVG over all fact pairs from document x)
 pcv_score = cg_cvg
 ```
 
+## L1 群体校准（Reserve 零分布）
+
+`cg_cvg = cvg_rag - cvg_llm` 是一个朴素的 per-example 校准（用样本自己的 LLM-only 分减去先验），有三个统计缺陷：
+
+- **零点估错**：即便 x 非成员，RAG 也可能检索到语义近邻的成员文档，把 `cvg_rag` 抬高，所以非成员的 `cg_cvg` 期望并非 0。
+- **未校准方差**：不同文档的 `cg_cvg` 在非成员世界下波动幅度不同，全局阈值对高方差样本不公平。
+- **只是点估计**：`A − B` 没有统计语义，不是假设检验。
+
+L1 群体校准（`src/scoring/calibration.py`）用 `Reserve` 组当"非成员零分布"修正这三点：
+
+- `Reserve` 同分布、非成员、与评估组（`KB_Member` / `True_Non_Member`）source 互斥；从第 05 步起纳入 benchmark，随主流水线 06→11 跑出 `cvg_rag`。
+- 对每个待测样本，按它的 `cvg_rag` 在 Reserve 分布中的位置算两种校准分（都写回每行）：
+  - `pcv_score_calibrated`：经验百分位（mid-rank 处理 ties），取值 [0,1]，不假设正态、小样本更稳；**默认主校准分**。
+  - `pcv_score_calibrated_z`：z-score = `(cvg_rag − μ_reserve) / σ_reserve`。
+- **评估指标必须排除 Reserve**：它是校准料不是测试样本。`analyze_feasibility` 在算 AUC / TPR 前已剔除 Reserve——校准用 Reserve、评估排除 Reserve，两者零重叠。
+
+`scripts/analyze_feasibility.py` 会并排打印旧终分 `cg_cvg` 与校准分的 `AUC / TPR@1%FPR / TPR@5%FPR`；校准收益主要落在低 FPR 区，**重点看 TPR@1%FPR**。Reserve 经 06–09 筛选后有效样本可能偏少，零分布不稳时可调大 `configs/data_config.yaml` 的 `Reserve` 目标。
+
+> LLM-only 可视为"空 KB shadow"的极端特例，因此 `cg_cvg` 是本校准框架在"参考只有一个、且为空索引"时的退化版本；二者并存便于对比，`pcv_score`（= cg_cvg）字段保留不动。
+
+## L2 shadow 逐样本校准（per-example，offline LiRA）
+
+L1 的经验百分位 / z-score 都是对 `cvg_rag` 的**全局单调变换**：AUC 只看排序，单调变换不改 AUC，所以 L1 校准分的 AUC 恒等于 `cvg_rag`（实测 small 0.936、formal 0.835）。L1 能做标定、甩 `cvg_llm` 噪声、改善低 FPR 区，但**扣不掉 per-example 先验泄漏**——即"某个样本的事实本身先验可验证性就更高"这种逐样本偏差。
+
+放大样本（small→formal）后诊断出：enron 上 `cvg_llm AUC=0.606 CI[0.542,0.672]`，下界 > 0.5，说明 victim 模型在无检索时也能部分区分两组（enron 是公开数据集，几乎肯定被预训练见过）。这种先验不在任何可观测表层特征里（类型/难度/文本统计两组均衡），难度回归式的捷径抓不到，只能用 shadow 直接估。
+
+L2（`src/scoring/calibration.py` 的 `calibrate_l2_shadow`，入口 `src/rag/shadow_runner.py`）对每个评估目标 x 估计它**自己的**非成员零分布：
+
+```text
+1. 从 Reserve 采 K 个子集，各建一个 shadow RAG 索引（纯 embedding、不花 API）。
+   Reserve 与所有评估目标 source 互斥，故 K 个 shadow 对全体目标天然都是 OUT 世界，
+   全体目标共享（成本 = K 倍而非 N×K）。
+2. 评估 query 在每个 shadow 上只跑 RAG（LLM-only 与索引无关、复用主 run，省 K 倍调用）。
+3. 同一目标 x 在 K 个 shadow 上的 cvg_rag 即其 OUT 分布 (μ_out(x), σ_out(x))。
+4. per-example 标准化：z(x) = (cvg_rag_victim(x) − μ_out(x)) / σ_out(x)
+   L2 分 = Φ(z) ∈[0,1]（单边，越高越像成员）；σ_out 退化时用全体中位数兜底。
+```
+
+写回每行的字段：`pcv_score_l2`（= Φ(z)，主 L2 分）、`pcv_score_l2_z`、`l2_mu_out`、`l2_sigma_out`、`l2_n_shadows`。
+
+PCV-MIA 做 L2 的天然优势（论文卖点）：传统 MIA 做 LiRA 要训几百个 shadow model，而这里"模型"是 RAG 索引，建 shadow 只是 re-embed + 重建索引（秒级、近免费），所以负担得起 per-example 校准。
+
+运行（辅助脚本，不在 01-15 主流水线）：
+
+```powershell
+python scripts/run_l2_shadow.py --dataset enron --num-shadows 4
+```
+
+成本 = 对评估 query 跑 K 遍 RAG（LLM-only 复用主 run，不重跑），强烈建议 resume。脚本会打印 `cg_cvg` / L1 / L2 三方 AUC 对比与阴性对照。go/no-go：L2 分应使 True_Non 的 Φ(z)≈0.5（先验扣净）、KB→1，且 AUC 超过 `cg_cvg`。当前状态：代码完成、离线单元测试通过（扣先验机制已验证），真实 K-shadow 运行待跑。
+
 ## 指标
 
 最终报告中的主指标包括：
@@ -1150,13 +1261,22 @@ configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 - 不要提交 `.env`、API key、私有数据集或大型生成产物。
 - `configs/llm_profiles.yaml` 只保存环境变量名和非敏感默认配置，不写真实密钥。
 - RAG 知识库只能由 `KB_Member` 构建。
-- `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 不能进入 index。
+- `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 不能进入 index（`Reserve` 仅进 benchmark 当校准组，且评估时排除）。
 - attack benchmark 会保存 `.sha256`，不要手动修改后继续复用旧 hash。
 - 修改 fact extraction、query generation、retrieval、generation 或 scoring 后，应从受影响阶段重跑。
 - 正式报告前检查各 manifest 的 `created_at`、`config_snapshot`、`config_hash`，避免新旧 artifacts 混用。
 
 ## 研究记录
 
-仓库根目录下的 `思路v*.txt`、`baseline.txt`、`thesislogic.txt` 是研究记录，不是运行入口。
+仓库根目录下的 `思路v2.txt`~`思路v9.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
 
-其中 [思路v7.txt](思路v7.txt) 是当前代码思路的详细说明，README 是面向运行和复现的操作文档。两者都应以后续代码变更同步更新。
+- [思路v9.txt](思路v9.txt) 是**最新**增量文档（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
+- [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
+- [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
+- 新旧说法冲突时，以 `思路v8.txt` + `思路v9.txt` + 当前代码为准；这三者没提到的细节再回 `思路v7.txt`。
+- **当前阶段定位 = 可行性验证**（确认信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验），非冲顶会的完整实验。
+- v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
+- `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。
+- `分类器.txt` 是关于 MIA 元分类器方向的调研笔记；其中提到的 `GradientBoostingClassifier` 等分类器属于后续设想，当前代码尚未引入，主方法仍是 CG-CVG 阈值判定。
+
+README 是面向运行和复现的操作文档，应与 `思路v8.txt` / `思路v9.txt` 和代码同步更新。

@@ -7,7 +7,7 @@
 
 active:
   sibling: dashscope_qwen
-  victim: dashscope_qwen
+  victim: openai_api
 
 sibling:
   profiles:

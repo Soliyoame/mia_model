@@ -19,9 +19,12 @@ fact_extraction:
   max_facts_per_doc: 2
   max_entities_per_doc: 8
   max_samples: null
+  # 以下三项现在是"优选阈值"(达标=primary 高质量事实;不达标降级为 fallback，不再整篇丢弃)。
   min_importance: 0.6
   min_replaceability: 0.6
   min_privacy_specificity: 0.5
+  # 方案 D:每篇文档保底产出的事实数(只要有可成句实体)。保证评估覆盖率、消除"可抽取性=组别"的 selection bias。
+  guarantee_min_facts: 1
 
 paired_claims:
   perturbation_levels: [light]

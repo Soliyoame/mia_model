@@ -55,12 +55,16 @@ def main() -> int:
     split_manifest = read_json(split_dir / "split_manifest.json")
     # 是否并入仿造非成员对照组,与第 4 步同一个开关保持一致。
     include_spoofed = env_bool("PCV_ENABLE_SPOOFED_NONMEMBER", default=False)
+    # 是否并入 Reserve 校准组(L1 群体校准的零分布来源),默认开启;评估时会被排除。
+    include_reserve = env_bool("PCV_ENABLE_RESERVE_CALIBRATION", default=True)
     manifest = build_pcv_attack_benchmark(
         dataset=args.dataset,
         kb_member_path=split_dir / "kb_member.jsonl",
         true_non_member_path=split_dir / "true_non_member.jsonl",
         spoofed_non_member_path=spoofed_dir / "spoofed_non_member.jsonl",
         include_spoofed_nonmember=include_spoofed,
+        reserve_path=split_dir / "reserve.jsonl",
+        include_reserve=include_reserve,
         output_path=out_dir / f"{args.dataset}_attack_benchmark.jsonl",
         config_snapshot=config,
         # 透传切分时的随机种子,把基准和它依赖的切分关联起来,便于追溯。
