@@ -75,8 +75,8 @@ def _roc_points(score_rows: list[dict[str, Any]], score_key: str) -> tuple[list[
 def _ax_signal_auc(ax: Any, report: dict[str, Any]) -> None:
     """子图:信号拆解 AUC 柱状(cvg_rag/cvg_llm/cg_cvg/pcv_score/calib)+ 0.5 基准线。"""
     auc = report.get("signal_decomposition", {}).get("auc", {})
-    keys = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "pcv_score_calibrated"]
-    labels = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "calib"]
+    keys = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "pcv_score_calibrated_z"]
+    labels = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "calib(z)"]
     vals = [float(auc.get(k) or 0.0) for k in keys]
     # cvg_rag 绿、cvg_llm(阴性对照)灰、calib(L1 校准分)紫、其余蓝。
     def _color(k: str) -> str:
@@ -84,7 +84,7 @@ def _ax_signal_auc(ax: Any, report: dict[str, Any]) -> None:
             return _C_POS
         if k == "cvg_llm":
             return _C_MUTED
-        if k == "pcv_score_calibrated":
+        if k == "pcv_score_calibrated_z":
             return _C_CALIB
         return _C_ACCENT
     colors = [_color(k) for k in keys]

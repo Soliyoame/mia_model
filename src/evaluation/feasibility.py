@@ -27,7 +27,13 @@ from statistics import mean
 from typing import Any
 
 from .metrics import roc_auc, summarize_membership_scores
-from ..scoring.calibration import PERCENTILE_KEY, calibrate_membership_scores
+from ..scoring.calibration import (
+    CALIBRATION_SOURCE_KEY,
+    PERCENTILE_KEY,
+    PRIMARY_CALIBRATED_KEY,
+    ZSCORE_KEY,
+    calibrate_membership_scores,
+)
 from ..utils.io import read_jsonl, write_json
 from ..utils.logger import get_logger
 
@@ -41,7 +47,7 @@ CALIBRATION_GROUP = "Reserve"
 _NUMBER_RE = re.compile(r"\d[\d.,]*")
 # 信号拆解与分组均值都关心这几个字段(含三口径成员分 + L1 校准后的成员分)。
 # cg_cvg=不加权简单平均; pcv_score=质量加权(方案D主分); pcv_score_primary=仅高质量primary口径。
-_SCORE_KEYS = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "pcv_score_primary", PERCENTILE_KEY]
+_SCORE_KEYS = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "pcv_score_primary", ZSCORE_KEY, PERCENTILE_KEY]
 # shortcut baseline 用的文本统计特征。
 _SHORTCUT_KEYS = ["char_length", "word_count", "digit_count", "entity_count", "entity_density"]
 
@@ -172,18 +178,43 @@ def _verdict(signal: dict[str, Any], shortcut: dict[str, Any], overlap: dict[str
 
 
 def _calibration_comparison(eval_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """对比旧终分 cg_cvg 与 L1 校准分:AUC / TPR@1%FPR / TPR@5%FPR(正类=KB_Member)。
+    """并列四个终分(正类=KB_Member):cvg_rag / z-score(L1 主) / 经验百分位(L1 辅) / cg_cvg,
+    各报 AUC / TPR@1%FPR / TPR@5%FPR。
 
-    校准的收益主要落在低 FPR 区,所以这里以 TPR@1%FPR 为重点对比项,而非只看 AUC。
-    输入应为已剔除校准组(Reserve)的待测样本行。
+    收益主要落在低 FPR 区,故以 TPR@1%FPR 为重点。四档并列是为了一眼看出该上报哪档:
+    z-score(标准化 cvg_rag、不扣先验,干净集最强)、cg_cvg(全局扣 cvg_llm,污染集才划算)、
+    经验百分位(顶端坍缩、低 FPR 常 n/a,仅作直观对照)。输入应为已剔除 Reserve 的待测行。
     """
     def _pick(score_key: str) -> dict[str, Any]:
         s = summarize_membership_scores(eval_rows, score_key=score_key)
-        return {"AUC": s["AUC"], "TPR@1%FPR": s["TPR@1%FPR"], "TPR@5%FPR": s["TPR@5%FPR"]}
+        return {"AUC": s["AUC"], "Accuracy": s["Accuracy@best"], "TPR@1%FPR": s["TPR@1%FPR"], "TPR@5%FPR": s["TPR@5%FPR"]}
 
     return {
-        "cg_cvg": _pick("cg_cvg"),                 # 旧:cvg_rag − cvg_llm
-        PERCENTILE_KEY: _pick(PERCENTILE_KEY),     # 新:相对 Reserve 零分布的经验百分位
+        CALIBRATION_SOURCE_KEY: _pick(CALIBRATION_SOURCE_KEY),  # cvg_rag 原始检索信号(不扣先验)
+        ZSCORE_KEY: _pick(ZSCORE_KEY),                          # L1 主:z-score(标准化 cvg_rag,严格保序)
+        PERCENTILE_KEY: _pick(PERCENTILE_KEY),                  # L1 辅:经验百分位(顶端坍缩,低 FPR 易 n/a)
+        "cg_cvg": _pick("cg_cvg"),                              # 减法:cvg_rag − cvg_llm(污染集才划算)
+    }
+
+
+def _threshold_table(eval_rows: list[dict[str, Any]], score_key: str = CALIBRATION_SOURCE_KEY) -> dict[str, Any]:
+    """阈值→FPR/TPR/Accuracy 关系曲线 + 全局 AUC/TPR@1%/TPR@5%(默认分=cvg_rag)。
+
+    固定一个分、扫所有判定阈值,展示阈值如何 trade-off FPR/TPR;
+    全局 AUC=整条曲线面积、TPR@x%FPR=FPR≤x% 段能达到的最高 TPR(都与单个阈值无关)。
+    输入应为已剔除 Reserve 的待测行。
+    """
+    s = summarize_membership_scores(eval_rows, score_key=score_key)
+    return {
+        "score_key": score_key,
+        "AUC": s["AUC"],
+        "Accuracy@best": s["Accuracy@best"],
+        "TPR@1%FPR": s["TPR@1%FPR"],
+        "TPR@5%FPR": s["TPR@5%FPR"],
+        "curve": [
+            {"threshold": r["threshold"], "FPR": r["FPR"], "TPR": r["TPR"], "Accuracy": r["Accuracy"]}
+            for r in sorted(s["threshold_curve"], key=lambda x: float(x["threshold"]))
+        ],
     }
 
 
@@ -218,6 +249,7 @@ def analyze_feasibility(
     overlap = _source_overlap(Path(splits_dir))
     verdict = _verdict(signal, shortcut, overlap)
     comparison = _calibration_comparison(eval_rows)
+    threshold_table = _threshold_table(eval_rows)
 
     report = {
         "dataset": dataset,
@@ -237,6 +269,7 @@ def analyze_feasibility(
             "comparison": comparison,
         },
         "verdict": verdict,
+        "threshold_table": threshold_table,
     }
     write_json(report, output_path)
     LOGGER.info("Feasibility analysis written: %s (direction=%s)", output_path, verdict["direction"])

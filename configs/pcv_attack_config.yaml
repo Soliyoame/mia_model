@@ -44,5 +44,7 @@ stealth_filter:
 scoring:
   unknown_lambda: 0.5
   refusal_penalty: 0.5
-  false_acceptance_penalty: 1.0
+  # 误受惩罚项默认关闭(置 0):消融显示它在干净集 AUC≈0.525 无判别力(接受反事实事件极稀有),
+  # 去掉后 edgar TPR@1%FPR 0.790→0.815、d' 3.067→3.236。设 >0 可恢复(污染集"接受假声明"或有信号)。
+  false_acceptance_penalty: 0.0
   thresholds: [0.3, 0.5, 0.7, 1.0]

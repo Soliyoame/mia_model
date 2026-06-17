@@ -28,7 +28,7 @@ KB isolation
 
 ## 当前状态
 
-当前仓库实现的是 PCV-MIA 主流程和实验评估框架。**当前阶段定位是可行性验证**（确认攻击信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验等混淆因素），不是冲顶会的完整实验。成员分校准已从朴素的 `cg_cvg` 升级到 L1 群体校准与 L2 shadow 逐样本校准（见后文同名章节）。需要特别注意以下几点：
+当前仓库实现的是 PCV-MIA 主流程和实验评估框架。**当前阶段定位是可行性验证**（确认攻击信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验等混淆因素），不是冲顶会的完整实验。成员分校准已从朴素的 `cg_cvg` 升级到 L1 群体校准（主分=z-score）与 L2 shadow 逐样本校准（见后文同名章节）；干净集（edgar）上实测最强终分是 cvg_rag/z-score（去误受后 AUC 0.954 / TPR@1%FPR 0.815 / Accuracy 0.934）。需要特别注意以下几点：
 
 - RAG index 只能由 `KB_Member` 构建，代码中有硬检查。
 - `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 都不能进入 `indexes/`（`Reserve` 会从第 05 步起进入 benchmark 充当 L1 群体校准的零分布，但绝不进 RAG index）。
@@ -300,7 +300,7 @@ stealth_filter:
 scoring:
   unknown_lambda: 0.5
   refusal_penalty: 0.5
-  false_acceptance_penalty: 1.0
+  false_acceptance_penalty: 0.0   # 2026-06-17：误受惩罚项默认关闭（消融：干净集单项 AUC≈0.525 死重）；设 >0 可恢复
   thresholds: [0.3, 0.5, 0.7, 1.0]
 ```
 
@@ -583,7 +583,11 @@ cvg_rag
 cvg_llm
 cg_cvg
 pcv_score
+pcv_score_primary
 ```
+
+其中 `pcv_score` 是当前主分，按 fact 的 `quality_weight` 对 pair-level `CG-CVG`
+加权；`cg_cvg` 是不加权均值，保留为诊断和消融口径。
 
 ### 12. 运行 baselines
 
@@ -1007,19 +1011,25 @@ pair-level 公式：
 
 ```text
 CVG = SupportScore(Q+) + CorrectionScore(Q-) - FalseAcceptancePenalty(Q-)
+      # 2026-06-17：误受惩罚项默认关闭（false_acceptance_penalty=0），消融证其单项 AUC≈0.525 是死重；
+      # 故当前默认 CVG = SupportScore(Q+) + CorrectionScore(Q-)；config 设 >0 可恢复（污染集或有用）。
 CG-CVG = CVG_RAG - CVG_LLM
 ```
 
 文档级分数：
 
 ```text
-PCV_SCORE(x) = average(CG-CVG over all fact pairs from document x)
+score_i = CG-CVG_i
+cg_cvg(x) = average_i(score_i)
+pcv_score(x) = sum_i quality_weight_i * score_i / sum_i quality_weight_i
+pcv_score_primary(x) = average_i(score_i where selection_tier_i = primary)
 ```
 
 当前代码中：
 
 ```text
-pcv_score = cg_cvg
+pcv_score 是主分；只有未提供 facts_path 或所有 fact 权重等价时，才退化为 cg_cvg。
+predicted_member_t* 这类阈值字段按 pcv_score 判定。
 ```
 
 ## L1 群体校准（Reserve 零分布）
@@ -1034,17 +1044,17 @@ L1 群体校准（`src/scoring/calibration.py`）用 `Reserve` 组当"非成员�
 
 - `Reserve` 同分布、非成员、与评估组（`KB_Member` / `True_Non_Member`）source 互斥；从第 05 步起纳入 benchmark，随主流水线 06→11 跑出 `cvg_rag`。
 - 对每个待测样本，按它的 `cvg_rag` 在 Reserve 分布中的位置算两种校准分（都写回每行）：
-  - `pcv_score_calibrated`：经验百分位（mid-rank 处理 ties），取值 [0,1]，不假设正态、小样本更稳；**默认主校准分**。
-  - `pcv_score_calibrated_z`：z-score = `(cvg_rag − μ_reserve) / σ_reserve`。
+  - `pcv_score_calibrated_z`：z-score = `(cvg_rag − μ_reserve) / σ_reserve`；**默认主校准分**（`PRIMARY_CALIBRATED_KEY`，2026-06-17 由经验百分位改来）。严格单调保序，AUC/TPR 恒等 `cvg_rag`、低 FPR 不坍缩，且无量纲可跨集比较。
+  - `pcv_score_calibrated`：历史字段名，Reserve-calibrated `cvg_rag` 经验百分位（mid-rank 处理 ties），取值 [0,1]；降为**辅助分**——它是阶梯函数，超 Reserve 上界的样本并列封顶 1.0（顶端坍缩），会压低 AUC、且低 FPR 区常取不到阈值（TPR@1%FPR=n/a）。
 - **评估指标必须排除 Reserve**：它是校准料不是测试样本。`analyze_feasibility` 与第 15 步主报告 `generate_final_report` 在算 AUC / TPR / FPR 前均已剔除 Reserve——校准用 Reserve、评估排除 Reserve，两者零重叠。
 
-`scripts/analyze_feasibility.py` 会并排打印旧终分 `cg_cvg` 与校准分的 `AUC / TPR@1%FPR / TPR@5%FPR`；校准收益主要落在低 FPR 区，**重点看 TPR@1%FPR**。Reserve 经 06–09 筛选后有效样本可能偏少，零分布不稳时可调大 `configs/data_config.yaml` 的 `Reserve` 目标。
+`scripts/analyze_feasibility.py` 的 `[1.5]` 段并排打印四档终分（`cvg_rag` / z-score / 经验百分位 / `cg_cvg`）的 `AUC / Accuracy / TPR@1%FPR / TPR@5%FPR`；`[1.6]` 段输出**阈值-指标关系表**（固定 `cvg_rag`，扫所有判定阈值给 FPR/TPR/Accuracy，标注 ≤1%/≤5%FPR 区，并给全局 AUC/Accuracy/TPR@1%·5%FPR；report json 亦存 `threshold_table`）。校准收益主要落在低 FPR 区，**重点看 TPR@1%FPR**。Reserve 经 06–09 筛选后有效样本可能偏少，零分布不稳时可调大 `configs/data_config.yaml` 的 `Reserve` 目标。
 
-> LLM-only 可视为"空 KB shadow"的极端特例，因此 `cg_cvg` 是本校准框架在"参考只有一个、且为空索引"时的退化版本；二者并存便于对比，`pcv_score`（= cg_cvg）字段保留不动。
+> LLM-only 可视为"空 KB shadow"的极端特例，因此 `cg_cvg` 是本校准框架在"参考只有一个、且为空索引"时的退化版本；`cg_cvg` 与 `pcv_score` 并存便于对比：前者是不加权诊断口径，后者是质量加权主分。
 
 ## L2 shadow 逐样本校准（per-example，offline LiRA）
 
-L1 的经验百分位 / z-score 都是对 `cvg_rag` 的**全局单调变换**：AUC 只看排序，单调变换不改 AUC，所以 L1 校准分的 AUC 恒等于 `cvg_rag`（实测 small 0.936、formal 0.835）。L1 能做标定、甩 `cvg_llm` 噪声、改善低 FPR 区，但**扣不掉 per-example 先验泄漏**——即"某个样本的事实本身先验可验证性就更高"这种逐样本偏差。
+L1 的 **z-score** 是对 `cvg_rag` 的**严格单调线性变换**：AUC/TPR@FPR 恒等于 `cvg_rag`（实测 small 0.936、edgar 0.954）。**注意经验百分位不是严格单调**——它是阶梯函数会"顶端坍缩"（超 Reserve 上界的样本并列封顶 1.0），实测 edgar AUC 0.954→0.919、TPR@1%FPR 由 0.815 变 n/a；这正是 2026-06-17 把 L1 主分由百分位改成 z-score 的原因。L1（无论哪种）能做标定、甩 `cvg_llm` 噪声、改善低 FPR 区，但**扣不掉 per-example 先验泄漏**——即"某个样本的事实本身先验可验证性就更高"这种逐样本偏差。
 
 放大样本（small→formal）后诊断出：enron 上 `cvg_llm AUC=0.606 CI[0.542,0.672]`，下界 > 0.5，说明 victim 模型在无检索时也能部分区分两组（enron 是公开数据集，几乎肯定被预训练见过）。这种先验不在任何可观测表层特征里（类型/难度/文本统计两组均衡），难度回归式的捷径抓不到，只能用 shadow 直接估。
 
@@ -1270,13 +1280,14 @@ configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 
 ## 研究记录
 
-仓库根目录下的 `思路v2.txt`~`思路v10.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
+仓库根目录下的 `思路v2.txt`~`思路v11.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
 
-- [思路v10.txt](思路v10.txt) 是**最新**增量文档（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
+- [思路v11.txt](思路v11.txt) 是**最新**增量文档（终分层精炼：L1 主分→z-score、去误受项、per-term 去偏对照、门控否决、阈值-指标关系表 + Accuracy 输出；全程离线消融裁决，含两个被数据否决的方向）。
+- [思路v10.txt](思路v10.txt) 是 v9 的增量（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
 - [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
 - [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
 - [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
-- 新旧说法冲突时，以 `思路v10.txt` + `思路v9.txt` + 当前代码为准；这些没提到的细节再回 `思路v8.txt` / `思路v7.txt`。
+- 新旧说法冲突时，以 `思路v11.txt` + `思路v10.txt` + 当前代码为准；这些没提到的细节再回 `思路v9.txt` / `思路v8.txt` / `思路v7.txt`。
 - **当前阶段定位 = 可行性验证**（确认信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验），非冲顶会的完整实验。
 - v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
 - `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。

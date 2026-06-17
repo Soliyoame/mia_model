@@ -75,7 +75,7 @@ def main() -> int:
         output_path=scores_dir / f"{args.dataset}_pcv_scores.jsonl",
         unknown_lambda=float(scoring.get("unknown_lambda", 0.5)),
         refusal_penalty=float(scoring.get("refusal_penalty", 0.5)),
-        false_acceptance_penalty_value=float(scoring.get("false_acceptance_penalty", 1.0)),
+        false_acceptance_penalty_value=float(scoring.get("false_acceptance_penalty", 0.0)),
         thresholds=[float(x) for x in scoring.get("thresholds", [0.3, 0.5, 0.7, 1.0])],
         facts_path=resolve_path(config["paths"]["facts_dir"]) / f"{args.dataset}_facts.jsonl",
         resume=not args.no_resume,

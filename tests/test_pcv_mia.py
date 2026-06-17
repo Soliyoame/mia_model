@@ -343,7 +343,7 @@ class PcvMiaTests(unittest.TestCase):
                 ],
                 parsed,
             )
-            compute_pcv_scores("toy", parsed, scores, unknown_lambda=0.5, facts_path=facts, force=True)
+            compute_pcv_scores("toy", parsed, scores, unknown_lambda=0.5, facts_path=facts, thresholds=[2.5], force=True)
             row = list(read_jsonl(scores))[0]
             # 不加权简单平均: (3.0 + 1.5) / 2 = 2.25
             self.assertEqual(row["cg_cvg"], 2.25)
@@ -352,6 +352,8 @@ class PcvMiaTests(unittest.TestCase):
             # 仅 primary 口径: 只用 f1(primary) -> 3.0
             self.assertEqual(row["pcv_score_primary"], 3.0)
             self.assertEqual(row["num_primary_pairs"], 1)
+            # 阈值判定应跟随主分 pcv_score,而不是旧口径 cg_cvg。
+            self.assertTrue(row["predicted_member_t2.5"])
 
     def test_fact_extraction_guarantees_coverage(self) -> None:
         """方案 D:每篇有可成句实体的文档都保底产出事实,且每条带 quality_weight/selection_tier。"""

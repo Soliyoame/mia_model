@@ -153,7 +153,7 @@ def compute_pcv_scores(
     output_path: str | Path,
     unknown_lambda: float = 0.5,
     refusal_penalty: float = 0.5,
-    false_acceptance_penalty_value: float = 1.0,
+    false_acceptance_penalty_value: float = 0.0,  # 默认关闭误受项(消融:干净集 AUC≈0.525 无判别力);设 >0 可恢复
     thresholds: list[float] | None = None,
     facts_path: str | Path | None = None,
     resume: bool = True,
@@ -180,7 +180,7 @@ def compute_pcv_scores(
         unknown_lambda:     "不知道"的惩罚系数。
         refusal_penalty:    "拒绝"的惩罚系数。
         false_acceptance_penalty_value: "误受伪造"的惩罚分值。
-        thresholds:         判定阈值列表;CG-CVG 高于阈值则判为成员。默认 [0.3,0.5,0.7,1.0]。
+        thresholds:         判定阈值列表;pcv_score 高于阈值则判为成员。默认 [0.3,0.5,0.7,1.0]。
         facts_path:         第 06 步的 facts.jsonl;用于按 fact_id 取 quality_weight/selection_tier。
                             为 None 时退化为不加权(等价旧行为)。
         resume:             断点续跑:结果已存在则跳过。
@@ -292,6 +292,19 @@ def compute_pcv_scores(
         primary_cg = [c for r, c in zip(rows, cg_list) if str(r.get("selection_tier")) == "primary"]
         pcv_score_primary = mean(primary_cg) if primary_cg else cg_cvg
         num_primary = sum(1 for r in rows if str(r.get("selection_tier")) == "primary")
+        # per-term 去偏 + 门控信号(消融发现先验泄漏只在 correction 项,support 几乎不漏):
+        #   correction_llm = LLM-only 对反事实的纠正程度,是"该样本是否已被 LLM 知道"的污染门控信号。
+        #   cvg_debiased = sup_rag + (cor_rag - cor_llm):只扣有泄漏的 correction 项、不动干净的 support,
+        #   比整体减 cg_cvg 去偏更准(详见消融)。cvg_rag 本身不变,这是旁加的新终分。
+        correction_llm = mean([float(r.get("correction_score_llm", 0.0)) for r in rows]) if rows else 0.0
+        cvg_debiased = mean(
+            [
+                float(r.get("support_score_rag", 0.0))
+                + float(r.get("correction_score_rag", 0.0))
+                - float(r.get("correction_score_llm", 0.0))
+                for r in rows
+            ]
+        ) if rows else 0.0
         row = {
             "audit_id": audit_id,
             "dataset": rows[0].get("dataset"),
@@ -300,7 +313,9 @@ def compute_pcv_scores(
             "num_primary_pairs": num_primary,
             "cvg_rag": cvg_rag,
             "cvg_llm": cvg_llm,
+            "correction_llm": correction_llm,    # 门控信号:LLM-only 对反事实的纠正(污染/先验指标)
             "cg_cvg": cg_cvg,
+            "cvg_debiased": cvg_debiased,         # per-term 去偏终分:sup_rag+(cor_rag-cor_llm)
             # pcv_score 现在是质量加权的成员分(方案 D 主分)。
             "pcv_score": pcv_score,
             # 仅用 primary(高质量)fact 的口径,用于交叉验证 fallback 是否在害结果。
@@ -313,9 +328,9 @@ def compute_pcv_scores(
             "unknown_rate_rag": sum(1 for r in rows if r.get("unknown_rag")) / max(1, len(rows)),
             "unknown_rate_llm": sum(1 for r in rows if r.get("unknown_llm")) / max(1, len(rows)),
         }
-        # 对每个阈值,记录"这份文档是否会被判为成员"(分数 ≥ 阈值即判为成员)。
+        # 对每个阈值,记录"这份文档是否会被判为成员"(主分 pcv_score ≥ 阈值即判为成员)。
         for threshold in thresholds:
-            row[f"predicted_member_t{threshold}"] = bool(cg_cvg >= threshold)
+            row[f"predicted_member_t{threshold}"] = bool(pcv_score >= threshold)
         score_rows.append(row)
 
     # 写出成对分数与文档级分数两个文件。

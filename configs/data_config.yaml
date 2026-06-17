@@ -22,10 +22,10 @@ split:
   source_exclusive: true
   scale: small
   small:
-    KB_Member: 500
-    True_Non_Member: 500
+    KB_Member: 100
+    True_Non_Member: 100
     Spoof_Seed: 100
-    Reserve: 500
+    Reserve: 100
   formal:
     KB_Member: 3000
     True_Non_Member: 3000

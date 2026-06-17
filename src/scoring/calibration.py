@@ -13,10 +13,19 @@ True_Non_Member)source 互斥,随主流水线跑出 `cvg_rag` 后,只用来刻�
   ② 没校准方差:全局阈值对高方差样本不公平。用 Reserve 群体的离散程度做标准化。
   ③ 点估计不是假设检验:把"差值"换成经验百分位 / z-score,有统计语义。
 
-提供两种校准分(都写回每行,默认主分用经验百分位,小样本下不假设正态、更稳健):
-  - pcv_score_calibrated   经验百分位:Reserve 中 cvg_rag ≤ 本样本的比例(mid-rank 处理 ties),
+提供两种校准分(都写回每行)。**默认主分 = z-score**(PRIMARY_CALIBRATED_KEY):它是
+source_key 的严格单调线性变换,保序、不制造 ties,故 AUC 与 TPR@FPR 同 source_key 完全一致、
+低 FPR 不坍缩,且无量纲可跨集比较、能接 Φ(z) 变 p 值。经验百分位降为辅助:实测它是基于
+Reserve 的阶梯函数,所有 source_key 超过 Reserve 上界的样本并列封顶到 1.0(顶端坍缩),既压低
+AUC(edgar 0.947→0.919)、又使 1%FPR 取不到阈值(TPR@1%FPR=n/a),故不再当主分。
+最终上报选哪档看预训练污染(cvg_llm AUC):干净集用 z-score(不扣先验);污染集用 cg_cvg
+(全局扣)或 L2(逐样本扣)。三档在 feasibility 对比表并列。
+注意:字段名 `pcv_score_calibrated` 是历史命名;默认 source_key 是 `cvg_rag`，
+因此当前含义是 Reserve-calibrated RAG-CVG percentile，而不是对质量加权
+`pcv_score` 的直接校准:
+  - pcv_score_calibrated   经验百分位:Reserve 中 source_key ≤ 本样本的比例(mid-rank 处理 ties),
                            取值 [0,1],越高越像成员。
-  - pcv_score_calibrated_z z-score:(cvg_rag − μ_reserve) / σ_reserve。
+  - pcv_score_calibrated_z z-score:(source_key − μ_reserve) / σ_reserve。
 
 L1 = 只用一个全局 (μ, σ) / 一条经验分布,所有待测样本共用(不建 shadow、不逐样本)。
 评估指标必须排除 Reserve(它是校准料,不是测试样本),本模块返回的 eval_rows 已剔除它。
@@ -40,6 +49,8 @@ CALIBRATION_SOURCE_KEY = "cvg_rag"
 # 写回每行的校准分字段名。
 PERCENTILE_KEY = "pcv_score_calibrated"
 ZSCORE_KEY = "pcv_score_calibrated_z"
+# L1 默认主校准分:z-score(严格单调保序、低 FPR 不坍缩;经验百分位仅作辅助/直观展示)。
+PRIMARY_CALIBRATED_KEY = ZSCORE_KEY
 # L2(per-example shadow)校准分字段名。
 L2_KEY = "pcv_score_l2"          # 主 L2 分:Φ(z) ∈[0,1],越高越像成员
 L2_Z_KEY = "pcv_score_l2_z"      # per-example z-score
@@ -135,6 +146,7 @@ def calibrate_membership_scores(
         "source_key": source_key,
         "percentile_key": PERCENTILE_KEY,
         "zscore_key": ZSCORE_KEY,
+        "primary_key": PRIMARY_CALIBRATED_KEY,  # 下游应优先用这个当 L1 主分(=z-score)
         "degenerate": degenerate,
     }
 

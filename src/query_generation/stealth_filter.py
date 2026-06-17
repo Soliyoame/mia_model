@@ -113,8 +113,10 @@ def _naturalness_score(query: str) -> float:
     if not words:
         return 0.0
     length = len(words)
-    # 词数在 18~90 之间最自然;偏离 45 越远分越低(最低 0.2)。
-    length_score = 1.0 if 18 <= length <= 90 else max(0.2, 1.0 - abs(length - 45) / 100)
+    # 词数甜区 10~90 视为自然。下限从 18 下调到 10:第 08 步已把回答格式 tail 交给第 10 步
+    # runner,核验问句普遍更短("前缀 + 短 claim"常只有十几词),沿用 18 会把正常短问句误判为
+    # 不自然;偏离甜区时按距 45 越远分越低(最低 0.2)。
+    length_score = 1.0 if 10 <= length <= 90 else max(0.2, 1.0 - abs(length - 45) / 100)
     # 正常以 ? 或 . 结尾更像人话。
     punctuation_score = 0.9 if query.strip().endswith(("?", ".")) else 0.7
     # 含 {{ 模板符或 ``` 代码块,显得不自然,扣到 0.6。

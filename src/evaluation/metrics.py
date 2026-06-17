@@ -170,9 +170,13 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     """
     curve = threshold_curve(rows, score_key=score_key)
     fixed = rates_at_threshold(rows, threshold=threshold, score_key=score_key)
+    # Accuracy@best:扫所有阈值能达到的最高准确率(=攻击正确判定成员/非成员的最高比率)。
+    # 注意是"最优阈值下"的准确率,严格比较时该用独立验证集定阈,这里作方向性参考。
+    best_acc = max((float(r["Accuracy"]) for r in curve), default=0.0)
     return {
         "AUC": roc_auc(rows, score_key=score_key),
         **fixed,
+        "Accuracy@best": best_acc,
         "TPR@1%FPR": tpr_at_fpr(curve, 0.01),
         "TPR@5%FPR": tpr_at_fpr(curve, 0.05),
         "threshold_curve": curve,

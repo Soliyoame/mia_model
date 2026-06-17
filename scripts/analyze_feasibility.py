@@ -25,7 +25,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.feasibility import analyze_feasibility
 from src.evaluation.plots import plot_feasibility, plot_run_trend
-from src.scoring.calibration import PERCENTILE_KEY, calibrate_membership_scores
+from src.scoring.calibration import (
+    CALIBRATION_SOURCE_KEY,
+    PERCENTILE_KEY,
+    PRIMARY_CALIBRATED_KEY,
+    ZSCORE_KEY,
+    calibrate_membership_scores,
+)
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json
 from src.utils.logger import setup_logging
 from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, run_dir
@@ -77,7 +83,7 @@ def main() -> int:
     sig = report["signal_decomposition"]
     print(f"\n===== PCV-MIA 可行性验证: {args.dataset} (scored={report['scored_samples']}, eval={report.get('eval_samples')}) =====\n")
     print("[1] 信号拆解 AUC (正类=KB_Member,已排除 Reserve 校准组):")
-    for key in ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", PERCENTILE_KEY]:
+    for key in ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", ZSCORE_KEY, PERCENTILE_KEY]:
         print(f"    {key:22s} AUC = {_fmt(sig['auc'].get(key))}")
     print("\n    分组均值:")
     for group, m in sig["group_means"].items():
@@ -95,10 +101,26 @@ def main() -> int:
     )
     if calib.get("degenerate"):
         print("    [!] 零分布退化(Reserve 太少或 cvg_rag 全相同)——校准分不可靠,建议增大 split 的 reserve 目标。")
-    print(f"    {'终分':22s} {'AUC':>8s} {'TPR@1%FPR':>11s} {'TPR@5%FPR':>11s}")
-    for label, key in [("cg_cvg(旧:减法)", "cg_cvg"), ("校准分(新:Reserve)", PERCENTILE_KEY)]:
+    print(f"    {'终分':22s} {'AUC':>8s} {'Acc':>7s} {'TPR@1%FPR':>11s} {'TPR@5%FPR':>11s}")
+    for label, key in [
+        ("cvg_rag(原始不扣)", CALIBRATION_SOURCE_KEY),
+        ("z-score(L1主,推荐)", ZSCORE_KEY),
+        ("经验百分位(L1辅)", PERCENTILE_KEY),
+        ("cg_cvg(减法)", "cg_cvg"),
+    ]:
         row = cmp.get(key, {})
-        print(f"    {label:22s} {_fmt(row.get('AUC')):>8s} {_fmt(row.get('TPR@1%FPR')):>11s} {_fmt(row.get('TPR@5%FPR')):>11s}")
+        print(f"    {label:22s} {_fmt(row.get('AUC')):>8s} {_fmt(row.get('Accuracy')):>7s} {_fmt(row.get('TPR@1%FPR')):>11s} {_fmt(row.get('TPR@5%FPR')):>11s}")
+
+    # [1.6] 阈值-指标关系表(默认分 cvg_rag):看阈值如何 trade-off FPR/TPR,及 AUC/TPR@x%FPR 的来源
+    tt = report.get("threshold_table", {})
+    print()
+    print(f"[1.6] 阈值-指标关系表 (分={tt.get('score_key')}): "
+          f"AUC={_fmt(tt.get('AUC'))} Accuracy={_fmt(tt.get('Accuracy@best'))} TPR@1%FPR={_fmt(tt.get('TPR@1%FPR'))} TPR@5%FPR={_fmt(tt.get('TPR@5%FPR'))}")
+    print(f"    {'阈值':>8s} {'FPR':>7s} {'TPR':>7s} {'Acc':>7s}  低FPR区")
+    for tr in tt.get("curve", []):
+        fpr = float(tr.get("FPR", 0.0))
+        mark = "<=1%FPR" if fpr <= 0.01 else ("<=5%FPR" if fpr <= 0.05 else "")
+        print(f"    {float(tr['threshold']):>8.3f} {fpr:>7.3f} {float(tr['TPR']):>7.3f} {float(tr['Accuracy']):>7.3f}  {mark}")
 
     print("\n[2] shortcut baseline(文本统计特征可分性,越逼近 cvg_rag 越危险):")
     for key, value in report["shortcut_baseline"].items():
@@ -153,9 +175,10 @@ def main() -> int:
             "auc_cvg_rag": auc.get("cvg_rag"),
             "auc_cvg_llm": auc.get("cvg_llm"),
             "auc_pcv": auc.get("pcv_score"),
-            "auc_calibrated": auc.get(PERCENTILE_KEY),
+            "auc_calibrated": auc.get(PRIMARY_CALIBRATED_KEY),
+            "auc_calibrated_pct": auc.get(PERCENTILE_KEY),
             "tpr1_cg_cvg": cmp.get("cg_cvg", {}).get("TPR@1%FPR"),
-            "tpr1_calibrated": cmp.get(PERCENTILE_KEY, {}).get("TPR@1%FPR"),
+            "tpr1_calibrated": cmp.get(PRIMARY_CALIBRATED_KEY, {}).get("TPR@1%FPR"),
             "reserve_count": report.get("calibration", {}).get("reference_count"),
             "verdict": verdict.get("direction"),
         },
