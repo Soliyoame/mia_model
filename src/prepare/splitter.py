@@ -50,18 +50,24 @@ def _source_exclusive_slices(
     records: list[dict[str, Any]],
     targets: dict[str, int],
     rng: random.Random,
+    per_source_cap: int | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], int]:
     """按"来源互斥"方式切分记录:同一来源的所有记录只会落进同一组。
 
     先把记录按 source_key 聚成桶并打乱顺序,再依次填满各组的目标数量;一旦某桶的记录
     超出当前组的剩余名额,多出来的部分直接丢弃(不跨组分配),以严格保证组间来源不重叠。
 
+    per_source_cap 用于按「独立文档数」控制规模:限制单个来源对一个组最多贡献的 chunk 数,
+    逼迫覆盖更多来源(覆盖文档数 ≈ 目标数 / per_source_cap),从而把有效独立样本数从 chunk
+    数拉回到文档数。None 表示不限制(单个来源可填满整组,旧行为)。
+
     参数:
-        records: 待切分记录列表。
-        targets: 各组的目标数量,如 {"KB_Member": 500, ...}。
-        rng:     随机数发生器(由固定 seed 构造,保证可复现)。
+        records:        待切分记录列表。
+        targets:        各组的目标数量,如 {"KB_Member": 500, ...}。
+        rng:            随机数发生器(由固定 seed 构造,保证可复现)。
+        per_source_cap: 每个来源对单个组最多贡献的 chunk 数;None=不限制。
     返回:
-        (各组记录字典, 因来源互斥而丢弃的记录数)。
+        (各组记录字典, 因来源互斥/cap 而丢弃的记录数)。
     异常:
         ValueError: 来源互斥约束下记录不够填满目标数量时抛出。
     """
@@ -86,9 +92,12 @@ def _source_exclusive_slices(
         source_rows = groups_by_source[source][:]
         rng.shuffle(source_rows)
         remaining = target - len(slices[group])
-        slices[group].extend(source_rows[:remaining])
-        # 同源记录超出当前组名额的部分丢弃,不跨组分配,以维持来源互斥。
-        discarded += max(0, len(source_rows) - remaining)
+        # per_source_cap:限制单个来源(原始文档)对当前组的最大贡献,逼迫覆盖更多来源,
+        # 从而把「有效独立样本数」从 chunk 数拉回到文档数(避免一组样本集中在极少数文档上)。
+        take = remaining if per_source_cap is None else min(remaining, per_source_cap)
+        slices[group].extend(source_rows[:take])
+        # 该来源未被本组选用的 chunk 一律丢弃:维持来源互斥 + per_source_cap 限额。
+        discarded += max(0, len(source_rows) - take)
 
     missing = {group: target - len(slices[group]) for group, target in targets.items() if len(slices[group]) < target}
     if missing:
@@ -106,6 +115,7 @@ def split_dataset_pcv_mia(
     reserve: int = 200,
     seed: int = 42,
     source_exclusive: bool = True,
+    per_source_cap: int | None = None,
     config_snapshot: dict[str, Any] | None = None,
     resume: bool = True,
     force: bool = False,
@@ -125,6 +135,8 @@ def split_dataset_pcv_mia(
         reserve:          Reserve 组目标数量。
         seed:             随机种子,保证切分可复现。
         source_exclusive: 是否启用来源互斥切分(同源文档不跨组)。
+        per_source_cap:   每个来源(原始文档)对单个组最多贡献的 chunk 数;None=不限制(旧行为)。
+                          用于按「独立文档数」而非 chunk 数控制规模:目标数 / per_source_cap ≈ 覆盖文档数。
         config_snapshot:  配置快照,写进 manifest 便于复现。
         resume:           断点续跑:各组文件与 manifest 都已存在则跳过。
         force:            强制重跑。
@@ -164,7 +176,7 @@ def split_dataset_pcv_mia(
 
     rng = random.Random(seed)
     if source_exclusive:
-        slices, discarded_source_chunks = _source_exclusive_slices(records, targets, rng)
+        slices, discarded_source_chunks = _source_exclusive_slices(records, targets, rng, per_source_cap=per_source_cap)
     else:
         # 非互斥模式:整体打乱后按目标数量顺序切片即可。
         rng.shuffle(records)
@@ -227,6 +239,7 @@ def split_dataset_pcv_mia(
         "dataset": dataset,
         "seed": seed,
         "source_exclusive": source_exclusive,
+        "per_source_cap": per_source_cap,
         "counts": counts,
         "hashes": {group: sorted(values) for group, values in hash_sets.items()},
         # 各组哈希集合再算一个摘要,便于快速比对切分是否一致。

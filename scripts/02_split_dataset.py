@@ -67,6 +67,9 @@ def main() -> int:
         seed=int(split_cfg.get("seed", 42)),
         # source_exclusive=True 时同一来源不跨子集,避免成员/非成员之间信息泄漏。
         source_exclusive=bool(split_cfg.get("source_exclusive", True)),
+        # per_source_cap 放在 scale 段内(small/formal 各自配):每篇原始文档最多贡献的 chunk 数;
+        # 缺省 None=旧行为(单个来源可填满整组)。用于按「独立文档数」而非 chunk 数控制规模。
+        per_source_cap=(int(sizes["per_source_cap"]) if sizes.get("per_source_cap") is not None else None),
         config_snapshot=config,
         resume=not args.no_resume,
         force=args.force,

@@ -22,15 +22,22 @@ split:
   source_exclusive: true
   scale: small
   small:
+    # small 为探路规模,沿用旧切分(不设 per_source_cap),保持既有 edgar small 产物可复现。
     KB_Member: 100
     True_Non_Member: 100
     Spoof_Seed: 100
     Reserve: 100
+    per_source_cap: 3
+  # formal:按「独立原始文档数」而非 chunk 数设计。per_source_cap 限制每篇原始文档最多贡献的
+  # chunk 数,逼迫覆盖更多文档 → 有效独立样本数 ≈ 目标数 / per_source_cap。
+  # 例:KB 600 / cap 3 ≈ 200 篇独立文档;TN 同理(负类 n≈200,TPR@1%FPR 才取得到);Reserve 150 篇。
+  # Spoof_Seed 置 0(当前未使用 Spoofed 对照);若下游第 04 步不容忍空输入,设回小值即可。
   formal:
-    KB_Member: 3000
-    True_Non_Member: 3000
-    Spoof_Seed: 3000
-    Reserve: 1000
+    KB_Member: 600
+    True_Non_Member: 600
+    Spoof_Seed: 0
+    Reserve: 450
+    per_source_cap: 3
 
 datasets:
   enron:
