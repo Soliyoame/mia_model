@@ -53,6 +53,7 @@ class OpenAICompatibleSiblingClient:
     max_retries: int = 2          # 重试次数(sibling 用于离线生成，允许多重试)
     retry_backoff_base: float = 2.0   # 重试退避基数
     retry_backoff_max: float = 30.0   # 重试退避上限
+    stream: bool = False          # 是否走流式(SSE)请求,透传给底层 client
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数
 
     @cached_property
@@ -69,6 +70,7 @@ class OpenAICompatibleSiblingClient:
             retry_backoff_base=self.retry_backoff_base,
             retry_backoff_max=self.retry_backoff_max,
             extra_body=self.extra_body,
+            stream=self.stream,
         )
 
     def _chat(self, prompt: str, *, max_tokens: int | None = None) -> str:

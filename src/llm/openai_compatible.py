@@ -66,6 +66,7 @@ class OpenAICompatibleChatClient:
     retry_backoff_base: float = 2.0   # 重试退避基数
     retry_backoff_max: float = 30.0   # 重试退避上限秒数
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数(如 top_p)
+    stream: bool = False          # 是否走流式(SSE):慢模型 + Cloudflare 类网关下可绕开"N 秒无响应"的 524
 
     def chat(
         self,
@@ -120,6 +121,10 @@ class OpenAICompatibleChatClient:
             "max_tokens": max_tokens,
             **self.extra_body,
         }
+        # 流式(SSE):让服务端边生成边推送数据。慢模型 + Cloudflare 类网关下,持续的数据流
+        # 可避开"N 秒内无完整响应"触发的 524(非流式要干等整段生成完,极易踩超时红线)。
+        if self.stream:
+            payload["stream"] = True
         # ensure_ascii=False 保留中文等非 ASCII 字符原样，再编码成 utf-8 字节。
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         # User-Agent 必须显式设置：windhub 等基于 Cloudflare 的代理会拦截缺 UA 的 urllib 默认请求，
@@ -127,7 +132,7 @@ class OpenAICompatibleChatClient:
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (compatible; conflict-mia/1.0)",
-            "Accept": "application/json",
+            "Accept": "text/event-stream" if self.stream else "application/json",
         }
         # 有密钥时按 Bearer 方式放进鉴权头。
         if api_key:
@@ -142,7 +147,12 @@ class OpenAICompatibleChatClient:
         )
         # 没单独传 timeout 就用对象默认值。
         request_timeout = self.timeout if timeout is None else timeout
-        # 真正发请求(带重试)，拿到原始返回字符串。
+
+        # 流式:逐块读 SSE、累积答案文本后直接返回(已是纯文本,无需再解析整段 JSON)。
+        if self.stream:
+            return self._stream_with_retries(request, request_timeout)
+
+        # 非流式:发请求(带重试)，拿到原始返回字符串。
         raw = self._urlopen_with_retries(request, request_timeout)
 
         # 解析返回的 JSON，取出模型回答文本。OpenAI 风格返回放在 choices[0].message.content。
@@ -158,8 +168,8 @@ class OpenAICompatibleChatClient:
             # 返回结构不符合预期(可能是错误页/限流页)，截前 500 字符报错便于排查。
             raise RuntimeError(f"Unexpected OpenAI-compatible response: {raw[:500]}") from exc
 
-    # 可重试的瞬时传输错误与限流状态码。
-    _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+    # 可重试的瞬时传输错误与限流状态码。524 = Cloudflare 网关"源站超时",慢模型常踩,纳入重试。
+    _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 524})
 
     def _urlopen_with_retries(self, request: urllib.request.Request, request_timeout: float) -> str:
         """发送请求；对限流 / 5xx / 网络抖动做指数退避重试。
@@ -198,6 +208,46 @@ class OpenAICompatibleChatClient:
                 raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
         # 理论上不会走到这里(循环里要么 return 要么 raise)，兜底再抛一次。
         raise RuntimeError("OpenAI-compatible request failed after retries.")
+
+    def _stream_with_retries(self, request: urllib.request.Request, request_timeout: float) -> str:
+        """发流式(SSE)请求,逐行解析 data: 块,累积并返回答案文本。
+
+        与 _urlopen_with_retries 同样的退避重试策略;区别是按 SSE 流式读取——服务端边
+        生成边推送,连接持续有数据流,可避开网关"N 秒无完整响应"触发的 524 超时。
+        只累积 choices[0].delta.content(答案);忽略 reasoning_content(思考过程,非答案)。
+        """
+        attempts = max(0, int(self.max_retries))
+        for attempt in range(attempts + 1):
+            try:
+                chunks: list[str] = []
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                    for raw_line in response:  # 按行迭代 SSE 流
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            delta = json.loads(data)["choices"][0].get("delta", {})
+                        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                            continue  # 心跳/非标准行,跳过
+                        piece = delta.get("content")
+                        if piece:
+                            chunks.append(str(piece))
+                return "".join(chunks)
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if exc.code in self._RETRYABLE_STATUS and attempt < attempts:
+                    self._sleep_backoff(attempt)
+                    continue
+                raise RuntimeError(f"OpenAI-compatible request failed: HTTP {exc.code}: {detail}") from exc
+            except urllib.error.URLError as exc:
+                if attempt < attempts:
+                    self._sleep_backoff(attempt)
+                    continue
+                raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
+        raise RuntimeError("OpenAI-compatible streaming request failed after retries.")
 
     def _sleep_backoff(self, attempt: int) -> None:
         """重试前睡眠一段时间(指数退避 + 随机抖动)。

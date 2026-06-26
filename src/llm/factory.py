@@ -248,6 +248,7 @@ def build_sibling_client(
             system_prompt=str(profile.get("system_prompt", "")),
             timeout=float(profile.get("timeout", 60.0)),
             max_tokens=int(profile.get("max_tokens", 1024)),
+            stream=bool(profile.get("stream", False)),
             extra_body=_profile_extra_body(profile),
         ), profile
     raise ValueError(f"Unsupported sibling provider: {provider}")
@@ -282,6 +283,7 @@ def build_victim_client(
             api_key_env=str(profile.get("api_key_env", "")),
             system_prompt=str(profile.get("system_prompt", "")),
             timeout=float(profile.get("timeout", 60.0)),
+            stream=bool(profile.get("stream", False)),
             extra_body=_profile_extra_body(profile),
         ), profile
     raise ValueError(f"Unsupported victim provider: {provider}")

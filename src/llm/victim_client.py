@@ -42,6 +42,7 @@ class OpenAICompatibleVictimClient:
     api_key_env: str = ""         # 存放密钥的环境变量名
     system_prompt: str = ""       # 系统提示词
     timeout: float = 60.0         # 超时秒数
+    stream: bool = False          # 是否走流式(SSE)请求,透传给底层 client
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数
 
     @cached_property
@@ -59,6 +60,7 @@ class OpenAICompatibleVictimClient:
             system_prompt=self.system_prompt,
             timeout=self.timeout,
             extra_body=self.extra_body,
+            stream=self.stream,
         )
 
     def generate(self, prompt: str, temperature: float = 0.0, timeout: float = 60.0, max_tokens: int = 512) -> str:
