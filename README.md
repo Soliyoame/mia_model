@@ -221,18 +221,22 @@ split:
   source_exclusive: true
   scale: small
   small:
-    KB_Member: 500
-    True_Non_Member: 500
+    KB_Member: 100
+    True_Non_Member: 100
     Spoof_Seed: 100
-    Reserve: 500
+    Reserve: 100
+    per_source_cap: 3
   formal:
-    KB_Member: 3000
-    True_Non_Member: 3000
-    Spoof_Seed: 3000
-    Reserve: 1000
+    KB_Member: 600
+    True_Non_Member: 600
+    Spoof_Seed: 0
+    Reserve: 450
+    per_source_cap: 3
 ```
 
-`source_exclusive: true` 表示同一原始文档的不同 chunk 不会跨 member 和 non-member 分组，避免成员推理实验中的数据污染。
+`source_exclusive: true` 表示同一原始文档的不同 chunk 不会跨 member 和 non-member 分组，避免成员推理实验中的数据污染（近邻泄漏）。
+
+`per_source_cap` 限制每篇**原始文档**对单个组最多贡献的 chunk 数（其余丢弃），用于按「独立文档数」而非 chunk 数控制规模：`source_exclusive` 下若不限制，少数几篇长文档的 chunk 就能填满一组，使"样本数"虚高而**有效独立样本数（= 原始文档数）**仍是个位数（旧 small 每组仅 2–3 篇文档，word_count 等表层特征会因此可分）。例：`formal` 的 `KB_Member: 600 / per_source_cap: 3 ≈ 200 篇独立文档`（edgar 一篇原始文档约切 62 个 chunk）。不写该字段即旧行为（单篇文档可填满整组，向后兼容）。`Spoof_Seed: 0` 表示不生成 Spoof 种子（当前未使用 Spoofed 对照组）。
 
 ### `configs/rag_config.yaml`
 
@@ -598,26 +602,22 @@ python scripts/12_run_baselines.py --dataset enron --config configs/baseline_con
 输出：
 
 ```text
-outputs/baselines/enron_baseline_results.jsonl
-outputs/baselines/enron_baseline_results.manifest.json
+outputs/baselines/{dataset}/{dataset}_{method}_scores.jsonl      # 每个 baseline 每目标分数
+outputs/baselines/{dataset}/{dataset}_baseline_comparison.jsonl  # 含 PCV-MIA 的对照表
 ```
 
-当前已实现的 baseline：
+5 个 baseline 均已按「方案一」忠实复现（原样移植官方确定性逻辑 + 接缝注入统一 RAG + 差分测试）：
 
 ```text
-PCV-MIA new version
-Direct RAG-MIA
-IA / Interrogation Attack
+PCV-MIA（本方法）
+RAG-MIA      直接询问 yes/no（地板线，二值分→AUC 退化，主看 Accuracy）
+S2MIA(s)     切半 + BLEU(原文, 回答)，移植 IA 官方 mia_utils/s2.py（纯黑盒；s&p 困惑度作附录）
+MBA          proxy-LM 高难词遮蔽 + 填空填对率，移植 IA 官方 mia_utils/mba.py
+IA           summary + 30问 + 同源检索器区分度筛选(代替 ElectraScorer) + 一致率
+DCMI         反义词扰动差分（base=BLEU 重叠），对齐官方 perturb.py
 ```
 
-当前只是 reserved interface 的 baseline：
-
-```text
-S2MIA
-MBA
-RAG-leaks / difficulty-calibrated similarity baseline
-E-MIA / exam-style QA baseline
-```
+忠实度审计与实验条件对齐见 `src/baselines/BASELINES.md`；确定性逻辑由 `tests/test_baseline_adapters.py`（差分测试 14/14）背书。IA/DCMI 需 attacker LLM，可加 `--attacker victim` 复用受害模型。
 
 ### 13. 机制分析
 
@@ -1266,7 +1266,7 @@ configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 
 ### 8. baseline 和 defense 是否都已经完整实现
 
-没有。当前 baseline 只有部分可由现有中间结果计算；defense 目前是 policy report 骨架。正式论文结果需要区分 implemented 和 reserved interface。
+baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」忠实复现——移植官方确定性逻辑 + 接缝注入统一 RAG，差分测试 14/14 背书，见 `src/baselines/BASELINES.md`。注：S2/MBA 移植自第三方复现（原论文无官方码）、DCMI 的 base 为 BLEU 重叠近似（官方 base 未完整开源），均已诚实标注。defense 目前仍是 policy report 骨架。
 
 ## 安全与复现注意事项
 

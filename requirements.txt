@@ -4,6 +4,7 @@ tqdm>=4.66.0
 numpy>=1.23.0
 sentence-transformers>=2.7.0
 matplotlib>=3.7.0  # 评估结果可视化(ROC/分数分布/AUC 趋势图)
+nltk>=3.8  # baseline 对照用:S2MIA/DCMI 的 BLEU 词法重叠(与官方 IA/MIRABEL 同款 sentence_bleu)
 
 # Optional retrieval accelerators.
 # faiss-cpu>=1.7.4

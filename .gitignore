@@ -55,3 +55,13 @@ wandb/
 .pristine_recovered/
 outputs/
 indexes/
+backups/
+
+# 第三方 baseline 官方整仓（参考源码，体积大不入库；自包含参考模块在 MBA/ S2MIA/ RAG_MIA/）
+src/baselines/IA/
+src/baselines/DCMI/
+src/baselines/MIRABEL/
+
+# 研究记录（思路/未来计划），不入库
+/思路v*.txt
+/未来计划.txt

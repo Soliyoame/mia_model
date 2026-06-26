@@ -7,14 +7,17 @@ logging:
 paths:
   scores_dir: outputs/scores
   baselines_dir: outputs/baselines
+  # PCV 分数按 audit_id 标识、baseline 按 doc_id;并表需经 facts 文件的 audit_id→doc_id 映射桥对齐。
+  facts_dir: outputs/facts
 
 baseline:
-  threshold: 0.5
+  # 把分数转成成员/非成员判定时用的阈值(用于固定阈值指标;AUC/Acc@best 不受其影响)。
+  threshold: 0.3
+  # 真实受害查询版 baseline(见 src/baselines/victim_harness.py)。
+  # 纯黑盒:RAG-MIA / S2MIA(s) / MBA / IA / DCMI。PCV-MIA 由第 12 步从第 11 步分数自动并入对照表。
   methods:
-    - Direct RAG-MIA
-    - S2MIA
-    - MBA
-    - RAG-leaks / difficulty-calibrated similarity baseline
-    - E-MIA / exam-style QA baseline
-    - IA / Interrogation Attack
-    - PCV-MIA new version
+    - RAG-MIA   # 直接询问 yes/no(地板线),1 次 victim/目标
+    - S2MIA     # 前半段→续写→语义余弦(仅 s,纯黑盒),1 次/目标
+    - MBA       # 随机 mask→填空→填对率,1 次/目标
+    - IA        # 审问式:多 yes/no 问题一致率(需 attacker LLM,≈top_k 次/目标,贵)
+    - DCMI      # 差分校准:base−扰动(需 attacker LLM),2 次/目标
