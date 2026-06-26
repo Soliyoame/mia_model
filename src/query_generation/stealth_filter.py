@@ -33,12 +33,16 @@ LOGGER = get_logger(__name__)
 # 危险词:出现这些就说明查询在直接打探知识库/上下文,极易暴露攻击意图。
 # 注意:此处只收"高特异性"的探测短语。像单独的 database / indexed 这类词在正常业务文本
 # (合同、财报、技术文档)里很常见,放进来会大量误杀正常查询,故不再单列。
+# 反例:裸 \bmembership\b 已移除——它在 EDGAR 财报/合同里高频出现于正规语境
+# ("membership units"、"Membership Unit Subscription Agreement" 等 LLC 权益术语),
+# 实测真攻击命中 0、误杀 2,违反本表"只收高特异性短语"的原则。改用下方两条高特异性写法。
 DANGEROUS_PATTERNS = [
     r"repeat context",
     r"hidden document",
     r"system prompt",
     r"knowledge base membership",
-    r"\bmembership\b",
+    r"membership inference",
+    r"membership (?:of|in) (?:the |your )?(?:knowledge base|database|index|corpus|vector store)",
     r"training data",
     r"private context",
     r"show me the context",
