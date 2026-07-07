@@ -11,7 +11,9 @@ infra(索引/切分/profile/生成参数)读 rag_config.yaml;方法列表/阈值
 IA / DCMI 需要 attacker LLM(sibling profile);其余三个纯靠 victim。
 
 成本提示(每目标 victim 调用):RAG-MIA/S2MIA/MBA=1,DCMI=2,IA≈top_k(默认5)。
-受 20 次/5min 限速时,用 --request-interval 设请求间隔;试跑用 --max-targets 限目标数。
+提速(对齐第 10 步):rag_config 的 generation.requests_per_minute>0 时启用【全局令牌桶+并发】
+(max_workers 跨目标并行,抗端点间歇卡顿);=0 时回退旧的固定间隔(--request-interval)。
+试跑用 --max-targets 限目标数。
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from src.baselines.victim_harness import (
 from src.evaluation.metrics import summarize_membership_scores
 from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
 from src.rag.retriever import RagRetriever
+from src.rag.runner import TokenBucket
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json, write_jsonl
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
@@ -110,6 +113,23 @@ def main() -> int:
     threshold = float(config.get("baseline", {}).get("threshold", 0.3))
     out_dir = ensure_dir(resolve_path(config["paths"]["baselines_dir"]) / args.dataset)
 
+    # —— 限速:令牌桶(抗端点卡顿)+ 并发(跨目标),对齐第 10 步 runner ——
+    # requests_per_minute>0 启用全局令牌桶(全局速率恒 ≤ RPM);配合 max_workers>1,某目标卡在
+    # 慢 victim 调用时别的目标继续发,把 RPM 管道填满。=0 时回退 request_interval_seconds 固定 sleep。
+    rpm = float(gen_cfg.get("requests_per_minute", 0.0))
+    max_workers = int(gen_cfg.get("max_workers", 1))
+    victim_bucket = TokenBucket(rpm) if rpm > 0 else None
+    if args.attacker == "victim":
+        # attacker 复用 victim 端点/同一个 key → 共用【同一只】桶,两路调用合并计入该 key 的 RPM。
+        attacker_bucket = victim_bucket
+    else:
+        # attacker 走 sibling(不同 key)→ 自己一只桶,同 RPM 上限独立放行。
+        attacker_bucket = TokenBucket(rpm) if rpm > 0 else None
+    rate_mode = "token_bucket" if victim_bucket is not None else "fixed_interval"
+    bucket_share = "none" if victim_bucket is None else ("shared" if attacker_bucket is victim_bucket else "separate")
+    logger.info("限速模式=%s rpm=%s max_workers=%s attacker=%s(bucket=%s)",
+                rate_mode, rpm, max_workers, args.attacker, bucket_share)
+
     # —— 逐个 baseline 跑 ——
     comparison: list[dict] = []
     for name in methods:
@@ -124,11 +144,15 @@ def main() -> int:
             retries=int(gen_cfg.get("retries", 3)),
             retry_backoff_base=float(gen_cfg.get("retry_backoff_base", 2.0)),
             retry_backoff_max=float(gen_cfg.get("retry_backoff_max", 30.0)),
+            # 令牌桶(抗卡顿):rpm=0 时为 None,自动回退到 request_interval_seconds 固定 sleep。
+            victim_bucket=victim_bucket,
+            attacker_bucket=attacker_bucket,
         )
         res = run_one_baseline(
             name, targets, svc,
             output_path=out_dir / f"{args.dataset}_{name.replace('/', '_')}_scores.jsonl",
             threshold=threshold, resume=not args.no_resume, force=args.force,
+            max_workers=max_workers,
         )
         comparison.append(_table_row(name, res))
         logger.info("[%s] scored=%s failed=%s victim=%s attacker=%s AUC=%s",
@@ -183,6 +207,11 @@ def main() -> int:
         "methods": methods,
         "targets": {"total": len(targets), "KB_Member": n_kb, "True_Non_Member": n_tn},
         "request_interval_seconds": interval,
+        # 限速快照(抗卡顿):令牌桶 RPM / 并发数 / 模式,便于复现与排查。
+        "requests_per_minute": rpm,
+        "max_workers": max_workers,
+        "rate_limit_mode": rate_mode,
+        "attacker_bucket": bucket_share,
         "comparison_path": str(table_path),
         "victim_profile_used": victim_profile,
         "created_at": datetime.now(timezone.utc).isoformat(),

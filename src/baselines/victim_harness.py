@@ -21,7 +21,9 @@ IA / DCMI 需要一个独立于 victim 的 attacker LLM(用 sibling profile),其
 
 from __future__ import annotations
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -85,6 +87,14 @@ class Services:
     victim_calls: int = 0
     attacker_calls: int = 0
     _embedder: Any = field(default=None, repr=False)
+    # 令牌桶(抗端点卡顿,复用 src/rag/runner.py 的 TokenBucket):发 victim/attacker 请求前
+    # acquire() 取一枚令牌,全局速率恒 ≤ RPM。None=不启用,回退到 request_interval_seconds
+    # 固定 sleep。victim/attacker 各一只桶;若 attacker 复用 victim 端点(同一个 key),二者
+    # 传入【同一只】桶,把两路调用合并计入该 key 的 RPM 限额。
+    victim_bucket: Any = None
+    attacker_bucket: Any = None
+    # 并发下保护调用计数自增(victim_calls/attacker_calls)的锁。
+    _count_lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def _with_retries(self, fn: Callable[[], str], what: str) -> str:
         """带指数退避地调用 fn;吸收瞬时错误(如 victim 网关 524)。"""
@@ -104,28 +114,43 @@ class Services:
         raise last_error
 
     def rag_answer(self, query: str) -> str:
-        """检索 top_k → 通用 RAG prompt → victim 作答(带重试)。计 1 次 victim 调用。"""
+        """检索 top_k → 通用 RAG prompt → victim 作答(带重试)。计 1 次 victim 调用。
+
+        限速:启用令牌桶时【发请求前】acquire() 取令牌(全局 ≤ RPM,抗端点卡顿),对齐第 10 步
+        runner 的做法(每【逻辑】调用取一枚;_with_retries 内部重试不再额外取,重试自带长退避、
+        天然拉开间隔)。未启用令牌桶时回退到调用后固定 sleep(旧行为)。
+        """
         retrieved = self.retriever.retrieve(query, top_k=self.top_k)
         contexts = [r.text for r in retrieved]
         prompt = build_generic_rag_prompt(query, contexts)
+        if self.victim_bucket is not None:
+            self.victim_bucket.acquire()  # 令牌桶限速点
         out = self._with_retries(
             lambda: self.victim.generate(
                 prompt, temperature=self.temperature, timeout=self.timeout, max_tokens=self.max_tokens
             ),
             what="victim.generate",
         )
-        self.victim_calls += 1
-        if self.request_interval_seconds > 0:
+        with self._count_lock:
+            self.victim_calls += 1
+        # 令牌桶模式下桶已限速,不再固定 sleep;否则沿用旧的 per-call 间隔。
+        if self.victim_bucket is None and self.request_interval_seconds > 0:
             time.sleep(self.request_interval_seconds)
         return out
 
     def attacker(self, prompt: str) -> str:
-        """调用 attacker LLM(sibling)(带重试)。IA 生成问题/答案、DCMI 扰动文本用。"""
+        """调用 attacker LLM(sibling)(带重试)。IA 生成问题/答案、DCMI 扰动文本用。
+
+        限速同 rag_answer:优先 attacker 专用令牌桶(若与 victim 同 key 则为同一只桶,共享限额)。
+        """
         if self.attacker_chat is None:
             raise RuntimeError("该 baseline 需要 attacker LLM,请配置 sibling profile。")
+        if self.attacker_bucket is not None:
+            self.attacker_bucket.acquire()  # 令牌桶限速点
         out = self._with_retries(lambda: self.attacker_chat(prompt), what="attacker.chat")
-        self.attacker_calls += 1
-        if self.request_interval_seconds > 0:
+        with self._count_lock:
+            self.attacker_calls += 1
+        if self.attacker_bucket is None and self.request_interval_seconds > 0:
             time.sleep(self.request_interval_seconds)
         return out
 
@@ -191,21 +216,31 @@ def score_s2mia(text: str, svc: Services) -> float:
 
 
 _MBA_SINGLETON: "MBAHighDiff | None" = None
+_MBA_LOCK = threading.Lock()
+
+
+def _get_mba_singleton() -> "MBAHighDiff":
+    """线程安全地惰性加载 MBA proxy LM 单例(只加载一次;并发下用双检锁防重复加载 gpt2)。"""
+    global _MBA_SINGLETON
+    if _MBA_SINGLETON is None:
+        with _MBA_LOCK:
+            if _MBA_SINGLETON is None:
+                _MBA_SINGLETON = MBAHighDiff()  # 加载 proxy LM(gpt2),只加载一次
+    return _MBA_SINGLETON
 
 
 def score_mba(text: str, svc: Services) -> float:
     """MBA(高难词遮蔽):proxy LM 按预测难度选词→victim RAG 填空→填对率(0~1)。
 
-    单例加载 proxy LM(默认 gpt2,离线只选词,只加载一次);victim 仍纯黑盒,只看填空 prompt。
-    选词与打分逻辑见 MBA/mba_highdiff.py(移植 IA 官方 mba.py 的 compute_rank+mba_pipeline)。
+    单例加载 proxy LM(默认 gpt2,离线只选词);victim 仍纯黑盒,只看填空 prompt。选词与打分
+    逻辑见 MBA/mba_highdiff.py。【并发安全】:用 build_query/score_response 走【局部】
+    mask_answers(线程独立),不碰单例实例状态——旧的 get_attack_query→get_mia_score 隔着
+    victim 慢调用共享 self.mask_answers,并发下会被别的目标覆盖而串味算错分。
     """
-    global _MBA_SINGLETON
-    if _MBA_SINGLETON is None:
-        _MBA_SINGLETON = MBAHighDiff()  # 加载 proxy LM(gpt2),只加载一次
-    atk = _MBA_SINGLETON
-    query = atk.get_attack_query(text)  # 选词遮蔽,同时把 atk.mask_answers 设好
+    atk = _get_mba_singleton()
+    query, mask_answers = atk.build_query(text)  # 局部 mask_answers,线程独立
     resp = svc.rag_answer(query)
-    return float(atk.get_mia_score(resp))
+    return float(MBAHighDiff.score_response(resp, mask_answers))
 
 
 # ---- IA:prompts 内联自 MIRABEL(prompt/mia_prompt.py),逻辑同 MIRABEL IA 类 ----
@@ -410,8 +445,15 @@ def run_one_baseline(
     threshold: float = 0.3,
     resume: bool = True,
     force: bool = False,
+    max_workers: int = 1,
 ) -> dict[str, Any]:
-    """跑单个 baseline:对每个目标打分,写 per-target 分数,算指标。"""
+    """跑单个 baseline:对每个目标打分,写 per-target 分数,算指标。
+
+    并发:max_workers>1 时用线程池【跨目标】并行——单个目标内部(尤其 IA/DCMI 的
+    summary→问题→答案→victim 链)仍是串行数据依赖,不拆。所有 victim/attacker 调用经
+    services 的令牌桶统一限速:某目标卡在慢调用时别的目标继续发,把 RPM 管道填满、抗端点
+    间歇卡顿(与第 10 步 runner 同一机制)。scores 与 doc_id 一一对应,输出行序不影响指标。
+    """
     if name not in BASELINES:
         raise ValueError(f"Unknown baseline: {name}. 可选:{list(BASELINES)}")
     spec = BASELINES[name]
@@ -428,7 +470,9 @@ def run_one_baseline(
 
     rows: list[dict[str, Any]] = list(done.values())
     pending = [t for t in targets if t["doc_id"] not in done]
-    for t in tqdm(pending, desc=f"baseline {name}", unit="target"):
+
+    def _score_one(t: dict[str, Any]) -> dict[str, Any]:
+        """给单个目标打分(工作线程执行:只读共享 services,不碰 rows/磁盘)。返回一行结果。"""
         score: float | None = None
         error: str | None = None
         try:
@@ -436,18 +480,30 @@ def run_one_baseline(
         except Exception as exc:  # 单个目标失败不应中断整批
             error = str(exc)
             LOGGER.warning("%s failed on doc_id=%s: %s", name, t["doc_id"], error)
-        rows.append(
-            {
-                "baseline": name,
-                "doc_id": t["doc_id"],
-                "group": t["group"],
-                "source_id": t.get("source_id"),
-                "score": score,
-                "error": error,
-            }
-        )
-        # 增量落盘,防中途崩溃丢进度。
+        return {
+            "baseline": name,
+            "doc_id": t["doc_id"],
+            "group": t["group"],
+            "source_id": t.get("source_id"),
+            "score": score,
+            "error": error,
+        }
+
+    def _consume(row: dict[str, Any]) -> None:
+        """收一条结果并增量落盘(仅主线程调用,串行消费,防中途崩溃丢进度)。"""
+        rows.append(row)
         write_jsonl(rows, output)
+
+    workers = max(1, int(max_workers))
+    if workers > 1 and pending:
+        # 跨目标并发:提交所有目标,按完成顺序消费(令牌桶保证全局速率 ≤ RPM)。
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_score_one, t) for t in pending]
+            for fut in tqdm(as_completed(futures), total=len(pending), desc=f"baseline {name}", unit="target"):
+                _consume(fut.result())
+    else:
+        for t in tqdm(pending, desc=f"baseline {name}", unit="target"):
+            _consume(_score_one(t))
 
     # 只用成功打分的行算指标。
     scored = [r for r in rows if r.get("score") is not None]

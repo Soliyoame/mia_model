@@ -186,23 +186,40 @@ class MBAHighDiff:
                 out.append(word)
         return " ".join(out), answers
 
-    def get_attack_query(self, text: str) -> str:
-        """选词遮蔽 + 拼填空 prompt;同时把 self.mask_answers 设好供打分用。"""
-        masked_document, self.mask_answers = self.mba_pipeline(
+    def build_query(self, text: str) -> tuple[str, dict[int, list[str]]]:
+        """【线程安全】选词遮蔽 + 拼填空 prompt,返回 (prompt, mask_answers)——不写实例状态。
+
+        与 get_attack_query 逻辑完全一致,唯一区别是把 mask_answers 作为【返回值】交出,
+        而非存进 self.mask_answers。并发跑多个目标时,各目标持有自己的 mask_answers 局部量,
+        避免共享单例的实例状态被别的线程覆盖:串行接口 get_attack_query→get_mia_score
+        之间隔着一次慢 victim 调用,并发下会被其它目标的 get_attack_query 覆盖而串味算错分。
+        proxy LM 前向本身只读、可安全并发,故单例仍可共享,只需把这一处可变状态外提为局部。
+        """
+        masked_document, mask_answers = self.mba_pipeline(
             text[: self.document_slice_size], self.num_masks
         )
-        return _MBA_TEMPLATE.format(masked_document=masked_document)
+        return _MBA_TEMPLATE.format(masked_document=masked_document), mask_answers
 
-    def get_mia_score(self, response: str) -> float:
-        """填对率(0~1):解析回答里各 [Mask_i] 的填词,normalize 后与标准答案比对。"""
-        total = len(self.mask_answers)
+    @staticmethod
+    def score_response(response: str, mask_answers: dict[int, list[str]]) -> float:
+        """【线程安全】填对率(0~1):mask_answers 由参数传入,不读任何实例状态。"""
+        total = len(mask_answers)
         if total == 0:
             return 0.0
         predicted = extract_mask_answers(response)
         correct = 0
-        for mask_id, answers in self.mask_answers.items():
+        for mask_id, answers in mask_answers.items():
             got = normalize(predicted.get(str(mask_id), ""))
             gold = [normalize(a) for a in answers if a]
             if got and got in gold:
                 correct += 1
         return correct / total
+
+    def get_attack_query(self, text: str) -> str:
+        """选词遮蔽 + 拼填空 prompt;同时把 self.mask_answers 设好供打分用(串行接口,向后兼容)。"""
+        query, self.mask_answers = self.build_query(text)
+        return query
+
+    def get_mia_score(self, response: str) -> float:
+        """填对率(0~1):解析回答里各 [Mask_i] 的填词,normalize 后与标准答案比对(串行接口)。"""
+        return self.score_response(response, self.mask_answers)
