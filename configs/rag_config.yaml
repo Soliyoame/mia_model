@@ -1,42 +1,58 @@
-# RAG index and generation configuration.
+# RAG 索引与生成配置文件（对应流水线第 03 步建索引、第 10 步跑 RAG/LLM-only 推理）。
+# 作用：告诉程序「用什么向量模型建库、怎么检索、调哪个大模型、超时重试怎么设」。
 
+# ---------------- 日志 ----------------
 logging:
-  level: INFO
-  file: datasets/logs/rag.log
+  level: INFO                      # 日志详细程度：INFO=常规；排错可改 DEBUG
+  file: datasets/logs/rag.log      # RAG 阶段日志写到这个文件
 
+# 大模型 profile 定义文件（接口风格、system prompt、默认模型名都在这里）。
+# 真实 key/base_url/model 仍由 .env 的 PCV_VICTIM_* / PCV_SIBLING_* 覆盖。
 llm_profiles_path: configs/llm_profiles.yaml
 
+# ---------------- 输入/输出目录 ----------------
 paths:
-  splits_dir: datasets/splits
-  indexes_dir: indexes
-  benchmark_dir: datasets/benchmarks
-  queries_dir: outputs/stealth_filtered_queries
-  rag_responses_dir: outputs/rag_responses
-  llm_only_responses_dir: outputs/llm_only_responses
+  splits_dir: datasets/splits                          # 读：第 02 步切好的各组数据
+  indexes_dir: indexes                                 # 写：第 03 步建好的 RAG 向量索引（只含 KB_Member）
+  benchmark_dir: datasets/benchmarks                   # 读/写：固化的 attack benchmark（带 hash）
+  queries_dir: outputs/stealth_filtered_queries        # 读：第 09 步过滤后的 Q+/Q- 查询
+  rag_responses_dir: outputs/rag_responses             # 写：第 10 步 RAG 模式（带检索）的回答
+  llm_only_responses_dir: outputs/llm_only_responses   # 写：第 10 步 LLM-only 模式（纯模型）的回答
+  facts_dir: outputs/facts                             # 读：第 06 步抽取的 facts（--primary-only 取 tier 用）
 
+# ---------------- 向量嵌入（把文本转成向量，用于检索）----------------
 embedding:
   # 正式实验可改为 bge-small-en、all-MiniLM-L6-v2、bge-base-en、e5-base-v2、gte 等。
-  model: sentence-transformers/all-MiniLM-L6-v2
-  backend: auto
-  dim: 384
+  model: sentence-transformers/all-MiniLM-L6-v2   # 当前用的嵌入模型（384 维小模型，CPU 可跑）
+  backend: auto                                   # auto/sentence_transformers=用真实模型；
+                                                  # 写 hashing 会直接报错（已禁用假 fallback）
+  dim: 384                                        # 向量维度，必须与上面模型的输出维度一致
 
+# ---------------- 分块（建索引时把文档再切成检索单元）----------------
 chunking:
-  chunk_size: 500
-  chunk_overlap: 50
+  chunk_size: 500        # 每个检索块的大小（字符数）
+  chunk_overlap: 50      # 相邻块重叠 50 字符，避免把一句话从中间切断丢信息
 
+# ---------------- 检索（回答问题前先从库里找相关块）----------------
 retrieval:
-  top_k: 5
-  query_rewriting: false
+  top_k: 5               # 每个问题检索最相关的 5 个块喂给模型
+  query_rewriting: false # 是否先把问题改写再检索：false=直接用原问题检索（保持攻击查询原样）
 
+# ---------------- 生成（第 10 步调 victim 大模型回答问题）----------------
 generation:
-  victim_profile: null
-  temperature: 0.0
-  max_tokens: 512
-  timeout: 120
-  retries: 4
-  retry_backoff_base: 30
-  retry_backoff_max: 300
-  request_interval_seconds: 15
-  # 并发 LLM 请求数：1 = 串行（默认，行为与原来完全一致）。
-  # 确认 victim API 的限流额度后可调高（如 4~8）以显著缩短墙钟时间。
-  max_workers: 1
+  victim_profile: null            # 用哪个 profile：null=按 .env/llm_profiles.yaml 的默认（openai_api）
+  temperature: 0.0                # 采样温度：0=确定性输出（注：实测 qwen3.5-flash temp=0 仍有~15%不复现）
+  max_tokens: 512                 # 单次回答最多生成 512 token
+  timeout: 60                     # 单次请求超时 60 秒（从 120 下调：撞卡顿时快速失败，别干耗）
+  retries: 2                      # 失败后最多重试 2 次（从 4 下调：并发下卡顿由别的线程补，不必久等）
+  retry_backoff_base: 30          # 重试等待基数（秒）：第 1 次等 ~30s，逐次指数退避
+  retry_backoff_max: 300          # 重试等待上限：单次最多等 300 秒
+  request_interval_seconds: 15    # 【仅在 requests_per_minute=0 时生效】每两次请求固定间隔（旧限速方式）
+  # === 抗卡顿限速（令牌桶 + 并发）===
+  # requests_per_minute > 0 时启用【全局令牌桶】：全局速率恒 ≤ 此 RPM（绝不超端点限流），
+  # 但配合 max_workers>1，某条 call 卡住时别的线程仍能发满 RPM —— 把管道填满、抗端点间歇卡顿。
+  # 并发【不是】为了超过 RPM，是为了在抖动下【仍能达到】RPM。实测卡顿会把每条均摊到 ~72–96s，
+  # 而 4 RPM 理论只该 15s/条，本机制目标是把实际耗时拉回接近理论地板（潜在 ~4–5×）。
+  # ⚠️ 必须设成你 key 的真实 RPM 上限（这里=4）。设 0 则回退到 request_interval_seconds 旧方式。
+  requests_per_minute: 4          # key 的每分钟请求上限（令牌桶按此匀速放行）
+  max_workers: 4                  # 并发线程数：令牌桶模式下需 >1 才能在卡顿时填满管道（建议 3~4）

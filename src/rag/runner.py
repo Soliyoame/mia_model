@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -34,6 +35,55 @@ from ..utils.logger import get_logger
 
 
 LOGGER = get_logger(__name__)
+
+
+class TokenBucket:
+    """线程安全的全局令牌桶限速器（抗端点卡顿的核心）。
+
+    背景
+    ----
+    victim 端点会间歇性卡顿：单条 call 偶尔撞 120s 超时+重试，拖几分钟。串行(workers=1)时
+    这条卡住会让全体干等，实际吞吐远低于 RPM 上限——白白亏掉本就稀缺的限额（实测每条均
+    ~72–96s，而 4 RPM 理论只该 15s/条）。
+
+    解法
+    ----
+    把「限速」与「并发」解耦：所有线程共享【一个】令牌桶，发请求前先 acquire() 取一枚令牌，
+    令牌按 RPM 匀速补充。于是——
+      · 全局速率【永不超过】RPM（令牌匀速产出，这是硬保证，绝不违反端点限流）；
+      · 但某线程的 call 卡住时，别的线程只要还能取到令牌就继续发——把管道填满，
+        实际吞吐顶到 RPM。并发【不是】为了超过 RPM，是为了在抖动下【仍能达到】RPM。
+
+    精度
+    ----
+    补充时按整枚累加并把 last_refill 前移【整数枚 × 间隔】(不重置到 now)，因此不丢弃零头、
+    长期速率精确等于 RPM，且【绝不】提前多发（宁可略慢，不超限）。
+    """
+
+    def __init__(self, rpm: float) -> None:
+        # 每分钟令牌数即容量；容量至少 1。
+        self.capacity = max(1, int(rpm))
+        self.refill_interval = 60.0 / float(rpm)  # 每枚令牌的补充间隔(秒)
+        self.tokens = 1.0                          # 满桶不必要，1 枚起步即可立刻发第一条
+        self.last_refill = time.monotonic()
+        self.lock = threading.Lock()
+
+    def acquire(self) -> None:
+        """阻塞直到取得一枚令牌（全局限速点）。"""
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                elapsed = now - self.last_refill
+                if elapsed >= self.refill_interval:
+                    minted = int(elapsed / self.refill_interval)
+                    self.tokens = min(self.capacity, self.tokens + minted)
+                    # 只前移已铸造整数枚对应的时间，保留零头 → 长期速率精确、绝不超发。
+                    self.last_refill += minted * self.refill_interval
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return
+            # 桶空：睡到下一枚令牌大概率就绪，避免忙等。
+            time.sleep(min(self.refill_interval, 0.5))
 
 
 def build_rag_prompt(query: str, contexts: list[str]) -> str:
@@ -94,6 +144,43 @@ def build_llm_only_prompt(query: str) -> str:
     )
 
 
+def _make_llm_row(
+    query_row: dict[str, Any],
+    response: str,
+    error: str | None,
+    *,
+    dataset: str,
+    temperature: float,
+    max_tokens: int,
+    created_at: str,
+) -> dict[str, Any]:
+    """构造一条 LLM-only 结果行。
+
+    单发路与批处理路共用本工厂,确保两条路写出的字段结构【逐字段一致】——批处理只是
+    换了"如何拿到 response 文本",落盘格式与下游 stance 解析看到的内容与单发无任何差异。
+    """
+    query_id = str(query_row["query_id"])
+    return {
+        "request_id": f"llm_req_{query_id}",
+        "mode": "llm_only",
+        "query_id": query_id,
+        "pair_id": query_row.get("pair_id"),
+        "fact_id": query_row.get("fact_id"),
+        "audit_id": query_row["audit_id"],
+        "claim_type": query_row.get("claim_type"),
+        "dataset": dataset,
+        "group": query_row["group"],
+        "query": str(query_row["query"]),
+        "expected_entity": query_row.get("expected_entity") or query_row.get("original_entity"),
+        "counterfactual_entity": query_row.get("counterfactual_entity") or query_row.get("conflict_entity"),
+        "entity_type": query_row.get("entity_type"),
+        "response": response,
+        "generation_config": {"temperature": temperature, "max_tokens": max_tokens},
+        "error": error,
+        "created_at": created_at,
+    }
+
+
 def run_rag_and_llm_only(
     dataset: str,
     queries_path: str | Path,
@@ -115,6 +202,8 @@ def run_rag_and_llm_only(
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
     run_llm_only: bool = True,
+    allowed_fact_ids: set[str] | None = None,
+    requests_per_minute: float = 0.0,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -145,6 +234,12 @@ def run_rag_and_llm_only(
         run_llm_only:            是否跑 LLM-only 路。L2 shadow 推理只需要 RAG 路
                                  (LLM-only 与索引无关、跨 shadow 不变，复用主 run 即可)，
                                  此时传 False 可省掉 K 倍 LLM-only 调用。
+        allowed_fact_ids:        若非 None,只处理 fact_id 在该集合内的 query(primary-only 砍量),
+                                 同时减少 RAG 与 LLM-only 两路调用数,不引入任何伪影。
+        requests_per_minute:     >0 时启用【全局令牌桶】限速(替代 per-call 固定 sleep)：全局速率恒
+                                 ≤ 此 RPM,但配合 max_workers>1,某条 call 卡住时别的线程仍能发满 RPM,
+                                 抗端点间歇卡顿(实测卡顿会把每条均摊到 ~72–96s,远超 4RPM 的 15s 地板)。
+                                 =0(默认)沿用旧行为(每条 call 后固定 sleep request_interval_seconds)。
     返回:
         manifest(字典)：本次运行的统计与路径信息。
     异常:
@@ -174,11 +269,28 @@ def run_rag_and_llm_only(
     retriever = RagRetriever(index_dir)
     created_at = datetime.now(timezone.utc).isoformat()
 
+    # 限速方式二选一：
+    #   · requests_per_minute > 0 → 用【全局令牌桶】限速(抗卡顿)：发请求前 acquire() 取令牌，
+    #     全局速率恒 ≤ RPM；配合 max_workers>1，某条 call 卡住时别的线程仍能发满 RPM。
+    #     此时不再用 per-call 固定 sleep(令牌桶已负责匀速)。
+    #   · requests_per_minute <= 0 (默认) → 沿用旧行为：每条 call 后固定 sleep request_interval_seconds。
+    token_bucket = TokenBucket(requests_per_minute) if requests_per_minute and requests_per_minute > 0 else None
+    # 用令牌桶时关掉 post-call 固定 sleep(避免双重限速把速率压到 RPM 以下)。
+    post_sleep = 0.0 if token_bucket is not None else request_interval_seconds
+
+    def rate_gate() -> None:
+        """发请求前的限速闸门：启用令牌桶时阻塞取令牌，否则空操作(由 post_sleep 限速)。"""
+        if token_bucket is not None:
+            token_bucket.acquire()
+
     # 收集本次需要处理的 query（任一模式尚未成功完成）。
     pending: list[dict[str, Any]] = []
     for query_row in read_jsonl(queries_path):
         # 只处理通过筛选的查询(accepted)；默认 True 是为兼容没有该字段的老数据。
         if not query_row.get("accepted", True):
+            continue
+        # primary-only 砍量：只保留 fact_id 在白名单内的 query（None=不过滤）。
+        if allowed_fact_ids is not None and str(query_row.get("fact_id")) not in allowed_fact_ids:
             continue
         qid = str(query_row["query_id"])
         # 只要 RAG 或(启用了 LLM-only 时)LLM-only 任一边还没成功，就需要处理这条查询。
@@ -213,6 +325,7 @@ def run_rag_and_llm_only(
 
         # —— RAG 模式：只有这条查询的 RAG 还没成功时才跑 ——
         if query_id not in done_rag:
+            rate_gate()  # 令牌桶限速点(启用时);否则空操作,由下方 post_sleep 限速。
             response, error = _call_generator(
                 client,
                 build_rag_prompt(query, contexts),
@@ -223,8 +336,8 @@ def run_rag_and_llm_only(
                 retry_backoff_base=retry_backoff_base,
                 retry_backoff_max=retry_backoff_max,
             )
-            # 每次请求后按配置歇一会儿(限速)。
-            _sleep_between_requests(request_interval_seconds)
+            # 每次请求后按配置歇一会儿(限速)；用令牌桶时 post_sleep=0(桶已限速)。
+            _sleep_between_requests(post_sleep)
             if error:
                 fails += 1
             rag_row = {
@@ -251,8 +364,9 @@ def run_rag_and_llm_only(
                 "created_at": created_at,
             }
 
-        # —— LLM-only 模式：同理，只有这条查询的 LLM-only 还没成功时才跑(且未关闭该路) ——
+        # —— LLM-only 模式：该查询 LLM-only 还没成功、且未关闭该路时才跑 ——
         if run_llm_only and query_id not in done_llm:
+            rate_gate()
             response, error = _call_generator(
                 client,
                 build_llm_only_prompt(query),
@@ -263,28 +377,13 @@ def run_rag_and_llm_only(
                 retry_backoff_base=retry_backoff_base,
                 retry_backoff_max=retry_backoff_max,
             )
-            _sleep_between_requests(request_interval_seconds)
+            _sleep_between_requests(post_sleep)
             if error:
                 fails += 1
-            llm_row = {
-                "request_id": f"llm_req_{query_id}",
-                "mode": "llm_only",
-                "query_id": query_id,
-                "pair_id": query_row.get("pair_id"),
-                "fact_id": query_row.get("fact_id"),
-                "audit_id": query_row["audit_id"],
-                "claim_type": query_row.get("claim_type"),
-                "dataset": dataset,
-                "group": query_row["group"],
-                "query": query,
-                "expected_entity": query_row.get("expected_entity") or query_row.get("original_entity"),
-                "counterfactual_entity": query_row.get("counterfactual_entity") or query_row.get("conflict_entity"),
-                "entity_type": query_row.get("entity_type"),
-                "response": response,
-                "generation_config": {"temperature": temperature, "max_tokens": max_tokens},
-                "error": error,
-                "created_at": created_at,
-            }
+            llm_row = _make_llm_row(
+                query_row, response, error,
+                dataset=dataset, temperature=temperature, max_tokens=max_tokens, created_at=created_at,
+            )
         return rag_row, llm_row, fails
 
     rag_rows: list[dict[str, Any]] = []
@@ -337,6 +436,9 @@ def run_rag_and_llm_only(
         "failures": failures,
         "max_workers": workers,
         "run_llm_only": run_llm_only,
+        "allowed_fact_ids_count": (len(allowed_fact_ids) if allowed_fact_ids is not None else None),
+        "requests_per_minute": requests_per_minute,
+        "rate_limit_mode": "token_bucket" if token_bucket is not None else "fixed_interval",
         "created_at": created_at,
         "config_snapshot": config_snapshot or {},
     }

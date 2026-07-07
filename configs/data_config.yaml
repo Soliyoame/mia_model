@@ -1,54 +1,69 @@
-# PCV-MIA data configuration.
+# PCV-MIA 数据配置文件（对应流水线第 01 步预处理、第 02 步切分）。
+# 作用：告诉程序「原始数据在哪、怎么清洗切片、切成几组各多少份」。
+# 注意：本文件只配「数据准备」阶段；RAG 检索/大模型调用在 rag_config.yaml。
 
+# ---------------- 日志 ----------------
 logging:
-  level: INFO
-  file: datasets/logs/preprocess.log
+  level: INFO                              # 日志详细程度：INFO=常规信息；调错可改 DEBUG
+  file: datasets/logs/preprocess.log       # 预处理日志写到这个文件
 
+# ---------------- 输入/输出目录 ----------------
 paths:
-  processed_dir: datasets/processed
-  splits_dir: datasets/splits
+  processed_dir: datasets/processed        # 第 01 步：清洗+切片后的 JSONL 输出到这里
+  splits_dir: datasets/splits              # 第 02 步：切分成各组（KB/TN/...）后输出到这里
 
+# ---------------- 预处理约束（第 01 步：清洗与切片规则）----------------
 preprocess:
-  min_chars: 300
-  max_chars: 2000
-  target_chars: 1000
-  require_entity: true
-  require_numeric: false
-  # PCV-MIA paired claims need replaceable entities.
-  min_entities: 2
+  min_chars: 300          # 片段最少字符数：太短的片段（<300）丢弃，信息量不够
+  max_chars: 2000         # 片段最多字符数：超过就要再切，避免片段过长
+  target_chars: 1000      # 目标片段长度：切片时尽量往 1000 字符靠
+  require_entity: true    # 必须含实体：没有可识别实体（人名/机构/日期等）的片段丢弃
+  require_numeric: false  # 是否必须含数字：false=不强制（数字只是实体的一种）
+  # PCV-MIA 造「成对反事实」时要把真实体换成假实体，所以片段里至少得有可替换的实体。
+  min_entities: 2         # 片段最少实体数：少于 2 个实体的片段丢弃（换不出反事实对）
 
+# ---------------- 数据切分（第 02 步：分成攻击实验用的几个组）----------------
+# 关键概念：
+#   KB_Member      成员组   —— 唯一能进 RAG 知识库(index)的组，是「真的在库里」的正样本
+#   True_Non_Member 非成员组 —— 不进库，是「真的不在库里」的负样本
+#   Spoof_Seed     伪造种子  —— 生成 Spoofed_Non_Member 硬负样本对照组的原料（当前多未启用）
+#   Reserve        储备组   —— 不进库，只用来当 z-score 校准的「非成员零分布」，评估时必须排除
 split:
-  seed: 42
-  source_exclusive: true
-  scale: small
-  small:
-    # small 为探路规模,沿用旧切分(不设 per_source_cap),保持既有 edgar small 产物可复现。
-    KB_Member: 100
-    True_Non_Member: 100
-    Spoof_Seed: 100
-    Reserve: 100
-    per_source_cap: 3
-  # formal:按「独立原始文档数」而非 chunk 数设计。per_source_cap 限制每篇原始文档最多贡献的
-  # chunk 数,逼迫覆盖更多文档 → 有效独立样本数 ≈ 目标数 / per_source_cap。
-  # 例:KB 600 / cap 3 ≈ 200 篇独立文档;TN 同理(负类 n≈200,TPR@1%FPR 才取得到);Reserve 150 篇。
-  # Spoof_Seed 置 0(当前未使用 Spoofed 对照);若下游第 04 步不容忍空输入,设回小值即可。
-  formal:
-    KB_Member: 600
-    True_Non_Member: 600
-    Spoof_Seed: 0
-    Reserve: 450
-    per_source_cap: 3
+  seed: 42                  # 随机种子：固定=每次切分结果可复现
+  source_exclusive: true    # 源互斥：同一篇原始文档的 chunk 不会同时落到不同组，防同源泄漏
+  scale: small              # 当前生效的规模档位：small=探路小样本；改成 formal=正式大样本
 
+  small:
+    # small 为探路规模，沿用旧切分（不设 per_source_cap），保持既有 edgar small 产物可复现。
+    KB_Member: 100          # 成员组取 100 个 chunk
+    True_Non_Member: 100    # 非成员组取 100 个 chunk
+    Spoof_Seed: 100         # 伪造种子取 100 个 chunk
+    Reserve: 100            # 储备/校准组取 100 个 chunk
+    per_source_cap: 3       # 每篇原始文档最多贡献 3 个 chunk（限制单篇独占）
+
+  # formal：按「独立原始文档数」而非 chunk 数设计。per_source_cap 限制每篇原始文档最多贡献的
+  # chunk 数，逼迫覆盖更多文档 → 有效独立样本数 ≈ 目标数 / per_source_cap。
+  # 例：KB 600 / cap 3 ≈ 200 篇独立文档；TN 同理（负类 n≈200，TPR@1%FPR 才取得到）；Reserve 150 篇。
+  # Spoof_Seed 置 0（当前未使用 Spoofed 对照）；若下游第 04 步不容忍空输入，设回小值即可。
+  formal:
+    KB_Member: 600          # 目标 600 个 chunk，除以 cap 3 ≈ 200 篇独立成员文档
+    True_Non_Member: 600    # 同上，≈ 200 篇独立非成员文档（负类样本够多，低 FPR 指标才算得出）
+    Spoof_Seed: 0           # 不生成伪造对照组
+    Reserve: 450            # ≈ 150 篇独立文档，作校准零分布
+    per_source_cap: 3       # 每篇原始文档最多贡献 3 个 chunk（关键：把样本摊到更多篇文档上）
+
+# ---------------- 各数据集的原始输入路径 ----------------
+# limit = 最多读取多少条原始记录（控规模/防爆内存）。四个域：金融/通信/法律/医学。
 datasets:
-  enron:
+  enron:                    # 安然邮件（membership inference 经典数据集）
     input_path: datasets/raw/extracted/enron
     limit: 30000
-  cuad:
+  cuad:                     # CUAD 法律合同（原始仅 141 份，样本偏少，当特色补充）
     input_path: datasets/raw/extracted/cuad/CUAD_v1/CUAD_v1.json
     limit: 3000
-  edgar:
+  edgar:                    # SEC 财报（当前主力，已通全流水线并盖 GO 章）
     input_path: datasets/raw/extracted/edgar/raw.jsonl
     limit: 50000
-  pubmed:
+  pubmed:                   # PubMed 生物医学（与 IA 论文医学域同源）
     input_path: datasets/raw/extracted/pmc/raw.jsonl
     limit: 50000

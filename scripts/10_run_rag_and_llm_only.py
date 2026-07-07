@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
 from src.rag.runner import run_rag_and_llm_only
-from src.utils.io import ensure_dir, load_yaml, resolve_path
+from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -42,6 +42,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--victim-profile", default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    # 提速开关(RPM 受限时用)：
+    #   --primary-only  只跑 selection_tier=primary 的高质量 fact,同时砍 RAG 与 LLM-only 两路调用数。
+    parser.add_argument("--primary-only", action="store_true",
+                        help="只处理 selection_tier=primary 的 fact 对应的 query")
     return parser.parse_args()
 
 
@@ -67,6 +71,22 @@ def main() -> int:
     # RAG 回答与纯 LLM 回答分目录存放,便于后续对比。
     rag_dir = ensure_dir(resolve_path(config["paths"]["rag_responses_dir"]))
     llm_dir = ensure_dir(resolve_path(config["paths"]["llm_only_responses_dir"]))
+
+    # --primary-only:读 facts,取 selection_tier=primary 的 fact_id 白名单,砍掉低质量 fact 的 query。
+    allowed_fact_ids: set[str] | None = None
+    if args.primary_only:
+        facts_dir = resolve_path(config.get("paths", {}).get("facts_dir", "outputs/facts"))
+        facts_path = facts_dir / f"{args.dataset}_facts.jsonl"
+        if not facts_path.exists():
+            logger.error("--primary-only 需要 facts 文件,但不存在: %s", facts_path)
+            return 1
+        allowed_fact_ids = {
+            str(f.get("fact_id"))
+            for f in read_jsonl(facts_path)
+            if str(f.get("selection_tier") or "primary") == "primary"
+        }
+        logger.info("primary-only 生效: %s 个 primary fact 进入本次运行", len(allowed_fact_ids))
+
     manifest = run_rag_and_llm_only(
         dataset=args.dataset,
         queries_path=resolve_path(config["paths"]["queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
@@ -86,6 +106,8 @@ def main() -> int:
         retry_backoff_max=float(gen_cfg.get("retry_backoff_max", 60.0)),
         request_interval_seconds=float(gen_cfg.get("request_interval_seconds", 0.0)),
         max_workers=int(gen_cfg.get("max_workers", 1)),
+        requests_per_minute=float(gen_cfg.get("requests_per_minute", 0.0)),
+        allowed_fact_ids=allowed_fact_ids,
         resume=not args.no_resume,
         force=args.force,
         # 把实际用到的 victim profile 一并写进配置快照,方便结果追溯。

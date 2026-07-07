@@ -267,7 +267,11 @@ generation:
   retry_backoff_base: 5
   retry_backoff_max: 120
   request_interval_seconds: 1
-  max_workers: 1
+  # 抗卡顿限速（令牌桶 + 并发）：requests_per_minute > 0 时启用全局令牌桶，
+  # 全局速率恒 ≤ 此 RPM，但 max_workers>1 时某条 call 卡住不阻塞其他线程。
+  # =0 则回退到 request_interval_seconds 固定间隔（旧行为）。详见「10. 双路推理」提速小节。
+  requests_per_minute: 4
+  max_workers: 4
 ```
 
 `embedding.dim` 保留是为了兼容旧调用；真实维度来自加载到的 sentence-transformers 模型。
@@ -563,6 +567,31 @@ outputs/llm_only_responses/enron_llm_only_responses.manifest.json
 ```
 
 这一步需要配置 `PCV_VICTIM_*`。
+
+#### 提速（RPM 受限端点）
+
+第 10 步是全流水线唯一密集调用 victim API 的步骤，慢。若你的 key 有每分钟请求上限（如 4 RPM），有两条**不改变任何测量结果**的安全提速：
+
+- **令牌桶 + 并发抗卡顿**（`configs/rag_config.yaml` 的 `requests_per_minute` + `max_workers`）：
+  设 `requests_per_minute` = key 的真实 RPM 上限，`max_workers` = 3~4。全局令牌桶保证发送速率恒
+  `≤ RPM`（绝不超端点限流），但并发让某条 call 卡住时其他线程仍能发满 RPM——把管道填满。
+  并发**不是**为了超过 RPM，而是为了在端点间歇卡顿时**仍能达到** RPM。`requests_per_minute: 0`
+  则回退到 `request_interval_seconds` 固定间隔的旧行为。每条查询仍逐条单发，输出与串行**逐字节一致**。
+  可用 `scripts/_smoke_token_bucket.py` 在换 key/端点后验证实际吞吐。
+
+- **`--primary-only`**（命令行开关）：只跑 `selection_tier=primary` 的高质量 fact 对应的 query，
+  跳过仅作保底的 `fallback` fact，同时砍掉 RAG 与 LLM-only 两路调用数。每条 primary 仍单发、
+  答案零改变，`pcv_score_primary` 口径与全量跑**是同一个数**；代价仅是「一条 primary 都抽不出」
+  的少数文档退出评估集（对可行性结论无实质影响）。
+
+```powershell
+python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_config.yaml --primary-only --force
+```
+
+> **不做 LLM-only 批处理**：曾实现「多条 statement 打包一次请求」以省调用，但真跑诊断证明它会
+> 实质改变每条 LLM-only 答案（edgar/qwen3.5-flash 上 stance 一致率仅 55%），污染 `cvg_llm` 负对照，
+> 已移除。RAG 路同理永不批（每条检索上下文不同，混批污染 `cvg_rag`）。原则：可行性阶段任何提速都
+> 不能改变测量仪器，只能「少测低价值样本」和「在限额内不浪费」。
 
 ### 11. 解析 stance 并计算 PCV score
 
