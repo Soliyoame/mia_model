@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.defenses.runner import run_defense_experiments
 from src.utils.io import ensure_dir, load_yaml, resolve_path
+from src.utils.run_context import model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -49,10 +50,10 @@ def main() -> int:
     config = load_yaml(args.config)
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
-    out_dir = ensure_dir(resolve_path(config["paths"]["defenses_dir"]))
+    out_dir = ensure_dir(model_scoped_dir(config["paths"]["defenses_dir"], args.dataset))
     report = run_defense_experiments(
         dataset=args.dataset,
-        scores_path=resolve_path(config["paths"]["scores_dir"]) / f"{args.dataset}_pcv_scores.jsonl",
+        scores_path=model_scoped_dir(config["paths"]["scores_dir"], args.dataset) / f"{args.dataset}_pcv_scores.jsonl",
         output_path=out_dir / f"{args.dataset}_defense_results.json",
         # 判定成员/非成员的阈值,默认 0.5。
         threshold=float(config.get("defense", {}).get("threshold", 0.5)),

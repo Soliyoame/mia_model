@@ -24,10 +24,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.plots import plot_final_report, plot_run_trend
+from src.evaluation.paper_figures import render_paper_figures
 from src.evaluation.report_builder import generate_final_report
 from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json
 from src.utils.logger import setup_logging
-from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, run_dir
+from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, model_scoped_dir, run_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,8 +66,8 @@ def main() -> int:
         pass
     args = parse_args()
     logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/report.log"), level="INFO")
-    out_dir = ensure_dir(resolve_path("outputs/reports"))
-    scores_path = resolve_path("outputs/scores") / f"{args.dataset}_pcv_scores.jsonl"
+    out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
+    scores_path = model_scoped_dir("outputs/scores", args.dataset) / f"{args.dataset}_pcv_scores.jsonl"
     report_json_path = out_dir / f"{args.dataset}_final_report.json"
     summary_md_path = out_dir / f"{args.dataset}_summary.md"
     report = generate_final_report(
@@ -75,9 +76,9 @@ def main() -> int:
         scores_path=scores_path,
         stealth_manifest_path=resolve_path("outputs/stealth_filtered_queries") / f"{args.dataset}_paired_queries.manifest.json",
         index_manifest_path=resolve_path("indexes") / args.dataset / "index_manifest.json",
-        baseline_path=resolve_path("outputs/baselines") / f"{args.dataset}_baseline_results.jsonl",
-        mechanism_path=resolve_path("outputs/mechanisms") / f"{args.dataset}_mechanism_report.json",
-        defense_path=resolve_path("outputs/defenses") / f"{args.dataset}_defense_results.json",
+        baseline_path=model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_results.jsonl",
+        mechanism_path=model_scoped_dir("outputs/mechanisms", args.dataset) / f"{args.dataset}_mechanism_report.json",
+        defense_path=model_scoped_dir("outputs/defenses", args.dataset) / f"{args.dataset}_defense_results.json",
         report_json_path=report_json_path,
         summary_md_path=summary_md_path,
         threshold=args.threshold,
@@ -106,6 +107,16 @@ def main() -> int:
         run_id=run_id,
         generated_at=generated_at,
     )
+
+    # ---- 论文级图表(独立于上面的自查仪表盘;整体兜底,画图失败不连累报告归档)----
+    baseline_path = model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_comparison.jsonl"
+    baseline_rows = list(read_jsonl(baseline_path)) if baseline_path.exists() else []
+    try:
+        paper_files = render_paper_figures(full_report, score_rows, baseline_rows, rdir, dataset=args.dataset)
+    except Exception as exc:  # noqa: BLE001 - 论文图失败不应阻断报告主流程
+        logger.warning("paper figures failed: %s", exc)
+        paper_files = []
+
     metrics = full_report.get("main_attack_results", {})
     append_index(
         args.dataset,
@@ -123,7 +134,7 @@ def main() -> int:
     )
     hist = [r for r in read_jsonl(index_path(args.dataset)) if r.get("kind") == "final_report"]
     trend = plot_run_trend(
-        hist, resolve_path("outputs/runs") / args.dataset / "trend_report.png", dataset=args.dataset
+        hist, index_path(args.dataset).parent / "trend_report.png", dataset=args.dataset
     )
 
     print(f"[归档] run_id={run_id}  生成时间={generated_at}")
@@ -133,6 +144,8 @@ def main() -> int:
         print(f"    可视化图:     {png}")
     else:
         print("    可视化图:     (未生成 — 未安装 matplotlib)")
+    if paper_files:
+        print(f"    论文图:       {rdir / 'figures'}  ({len(paper_files)} 文件)")
     print(f"    历次总表:     {index_path(args.dataset)}")
     if trend:
         print(f"    趋势图:       {trend}")

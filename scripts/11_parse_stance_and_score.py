@@ -25,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.parsing.stance_parser import parse_stance_files
 from src.scoring.pcv_scorer import compute_pcv_scores
 from src.utils.io import ensure_dir, load_yaml, resolve_path
+from src.utils.run_context import model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -53,15 +54,15 @@ def main() -> int:
     config = load_yaml(args.config)
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
-    parsed_dir = ensure_dir(resolve_path(config["paths"]["parsed_stance_dir"]))
-    scores_dir = ensure_dir(resolve_path(config["paths"]["scores_dir"]))
+    parsed_dir = ensure_dir(model_scoped_dir(config["paths"]["parsed_stance_dir"], args.dataset))
+    scores_dir = ensure_dir(model_scoped_dir(config["paths"]["scores_dir"], args.dataset))
     parsed_path = parsed_dir / f"{args.dataset}_parsed_stance.jsonl"
     # 第一步:解析两套回答的立场,产出 parsed_stance.jsonl。
     parse_manifest = parse_stance_files(
         dataset=args.dataset,
         queries_path=resolve_path(config["paths"]["stealth_filtered_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
-        rag_responses_path=resolve_path("outputs/rag_responses") / f"{args.dataset}_rag_responses.jsonl",
-        llm_responses_path=resolve_path("outputs/llm_only_responses") / f"{args.dataset}_llm_only_responses.jsonl",
+        rag_responses_path=model_scoped_dir("outputs/rag_responses", args.dataset) / f"{args.dataset}_rag_responses.jsonl",
+        llm_responses_path=model_scoped_dir("outputs/llm_only_responses", args.dataset) / f"{args.dataset}_llm_only_responses.jsonl",
         output_path=parsed_path,
         resume=not args.no_resume,
         force=args.force,

@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.evaluation.mechanism_analysis import run_mechanism_analysis
 from src.utils.io import ensure_dir, resolve_path
 from src.utils.logger import setup_logging
+from src.utils.run_context import model_scoped_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,13 +47,13 @@ def main() -> int:
     """
     args = parse_args()
     logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/mechanism.log"), level="INFO")
-    out_dir = ensure_dir(resolve_path("outputs/mechanisms"))
+    out_dir = ensure_dir(model_scoped_dir("outputs/mechanisms", args.dataset))
     report = run_mechanism_analysis(
         dataset=args.dataset,
         queries_path=resolve_path("outputs/stealth_filtered_queries") / f"{args.dataset}_paired_queries.jsonl",
-        rag_responses_path=resolve_path("outputs/rag_responses") / f"{args.dataset}_rag_responses.jsonl",
-        parsed_path=resolve_path("outputs/parsed_stance") / f"{args.dataset}_parsed_stance.jsonl",
-        scores_path=resolve_path("outputs/scores") / f"{args.dataset}_pcv_scores.jsonl",
+        rag_responses_path=model_scoped_dir("outputs/rag_responses", args.dataset) / f"{args.dataset}_rag_responses.jsonl",
+        parsed_path=model_scoped_dir("outputs/parsed_stance", args.dataset) / f"{args.dataset}_parsed_stance.jsonl",
+        scores_path=model_scoped_dir("outputs/scores", args.dataset) / f"{args.dataset}_pcv_scores.jsonl",
         docstore_path=resolve_path("indexes") / args.dataset / "docstore.jsonl",
         output_path=out_dir / f"{args.dataset}_mechanism_report.json",
         resume=not args.no_resume,

@@ -121,7 +121,7 @@ faiss-cpu
 说明：
 
 - `sentence-transformers` 是当前正式流程的核心依赖。
-- `matplotlib` 用于评估结果可视化（ROC / 分数分布 / 信号 AUC / 历次趋势图）；缺失时只警告不出图，不让分析失败。
+- `matplotlib` 用于评估结果可视化：`plots.py` 自查仪表盘（ROC / 分数分布 / 信号 AUC / 历次趋势图）与 `paper_figures.py` 论文级单图（导出 PDF 矢量 + 300dpi PNG）；缺失时只警告不出图，不让分析失败。
 - `faiss-cpu` 只是检索索引加速依赖；没有 FAISS 时会使用 JSON 向量索引存储。
 - 不再支持 hashing embedding 作为实验 fallback。
 
@@ -404,6 +404,49 @@ python scripts/run_pipeline.py --dataset enron --from-step 1 --to-step 5 --scale
 ```powershell
 python scripts/run_pipeline.py --dataset enron --only-steps 6-13,15 --force
 ```
+
+## 输出组织：run 归档 / 模型分层 / 论文图
+
+从 `思路v15` 起，产物做了三项工程化改造。
+
+### 每次运行按「开始时间」归档
+
+`run_pipeline.py` 启动时盖一个 run_id（实验开始时间，形如 `20260708-153012`，可加 `--run-name` 标签），广播给所有子步骤共享；跑完把本次全部产物快照进一个自包含文件夹，附 `run_manifest.json`（数据集 / 规模 / 起止时间 / 耗时 / 步骤 / victim / git / 配置 / 命令 / 归档清单）：
+
+```text
+outputs/runs/{数据集}/{模型}/{run_id}/
+  run_manifest.json
+  scores/  rag_responses/  reports/ ...        # 本次各阶段产物拷贝
+  figures/                                     # 论文图（见下）
+  {数据集}_final_report_{run_id}.png            # 自查仪表盘快照
+outputs/runs/{数据集}/{模型}/index.jsonl        # 历次运行速查表 + trend 趋势图
+```
+
+阶段目录（如 `outputs/scores/`）仍是「最新工作区」，`--resume` 与「只重跑第 N 步」照旧；run 文件夹是拷贝快照，不影响迭代。`--no-archive` 跳过归档。也可 `python scripts/16_archive_run.py --dataset edgar` 手动补一次快照。
+
+### 模型相关产物按 {数据集}/{模型}/ 分层
+
+**换受害者模型重跑不再互相覆盖。** 第 10–15 步（模型相关）的输出目录，在下文各自列出的 `outputs/<阶段>/` 后**自动插入 `<数据集>/<模型>/` 两级**，例：
+
+```text
+outputs/scores/edgar/qwen3.5-397b-a17b/edgar_pcv_scores.jsonl
+outputs/reports/edgar/qwen3.5-397b-a17b/edgar_final_report.json
+```
+
+涉及 rag_responses / llm_only_responses / parsed_stance / scores / baselines / mechanisms / defenses / reports / runs。第 **01–09** 步（facts / claims / queries，与受害者模型无关）**保持扁平**，`datasets/`、`indexes/` 也不变。
+
+> **模型名来自 `PCV_VICTIM_MODEL`**（如 `qwen/qwen3.5-397b-a17b` → 清洗为 `qwen3.5-397b-a17b`），**没设则全落到 `unspecified/`**。跑前务必设好（PowerShell：`$env:PCV_VICTIM_MODEL="qwen/qwen3.5-397b-a17b"`），否则会发现「scores 空了」其实是跑去 `unspecified/` 了。
+
+### 论文级图表
+
+第 15 步跑完会自动产 6 张**论文级单图**（各 `.pdf` 矢量 + `.png` 300dpi）到 run 文件夹的 `figures/`，附 `captions.md`（中英图注，可直接粘 LaTeX `\caption{}`）；也可随时手动刷：
+
+```powershell
+python scripts/17_paper_figures.py --dataset edgar                        # 全套 6 张
+python scripts/17_paper_figures.py --dataset edgar --figures roc,signals  # 只出某几张
+```
+
+6 张图：`roc`（PCV / cvg_rag / cvg_llm 阴性对照 多曲线 + 工作点）、`separation`（成员 vs 非成员分数小提琴）、`signals`（信号 AUC 柱 + 阴性对照标注）、`baselines`（PCV vs 基线）、`threshold`（TPR/FPR/Acc 随阈值）、`calibration`（分数可靠性曲线）。色盲安全配色、每图右上角记录数据集 + 受害者模型。逻辑在 `src/evaluation/paper_figures.py`；旧的 `plots.py` 2×2 自查仪表盘保留（`analyze_feasibility` / 第 15 步同时产出），只做研究者自查。
 
 ## 分步命令
 
@@ -1276,12 +1319,12 @@ PCV_VICTIM_MODEL=...
 
 ### 5. 换了模型但结果没有变化
 
-检查：
+自 `思路v15` 起模型相关产物按 `{数据集}/{模型}/` 分层，换模型**不会覆盖**旧模型结果——新模型写到新目录。检查：
 
 ```text
-是否真的修改了 .env 中的 PCV_VICTIM_MODEL
+是否 export 了 PCV_VICTIM_MODEL（没设的话不同模型都落到 unspecified/，才会"看起来没变"）
+是否在看新模型的目录：outputs/scores/{数据集}/{模型}/、outputs/reports/{数据集}/{模型}/
 是否运行时用了 --force
-outputs/rag_responses/ 和 outputs/llm_only_responses/ 是否仍是旧文件
 configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 ```
 
@@ -1309,9 +1352,10 @@ baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」�
 
 ## 研究记录
 
-仓库根目录下的 `思路v2.txt`~`思路v11.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口。当前思路文档以增量方式叠加，权威性以最新为准：
+仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v15.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
 
-- [思路v11.txt](思路v11.txt) 是**最新**增量文档（终分层精炼：L1 主分→z-score、去误受项、per-term 去偏对照、门控否决、阈值-指标关系表 + Accuracy 输出；全程离线消融裁决，含两个被数据否决的方向）。
+- [思路v15.txt](研究记录/思路v15.txt) 是**最新**增量文档（产物工程化三连：一次实验按开始时间归档 + 第 15 步可视化升级为 6 张论文级单图 + 模型相关产物按 `{数据集}/{模型}/` 分层）。
+- [思路v11.txt](研究记录/思路v11.txt) 是终分层精炼（L1 主分→z-score、去误受项、per-term 去偏对照、门控否决、阈值-指标关系表 + Accuracy 输出；全程离线消融裁决，含两个被数据否决的方向）。
 - [思路v10.txt](思路v10.txt) 是 v9 的增量（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
 - [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
 - [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。

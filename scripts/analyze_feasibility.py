@@ -34,7 +34,7 @@ from src.scoring.calibration import (
 )
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json
 from src.utils.logger import setup_logging
-from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, run_dir
+from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, model_scoped_dir, run_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,8 +70,8 @@ def main() -> int:
 
     args = parse_args()
     setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/feasibility.log"), level="INFO")
-    out_dir = ensure_dir(resolve_path("outputs/reports"))
-    scores_path = resolve_path("outputs/scores") / f"{args.dataset}_pcv_scores.jsonl"
+    out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
+    scores_path = model_scoped_dir("outputs/scores", args.dataset) / f"{args.dataset}_pcv_scores.jsonl"
     report = analyze_feasibility(
         dataset=args.dataset,
         scores_path=scores_path,
@@ -186,7 +186,7 @@ def main() -> int:
     # 历次趋势图(只取 feasibility 行)
     hist = [r for r in read_jsonl(index_path(args.dataset)) if r.get("kind") == "feasibility"]
     trend = plot_run_trend(
-        hist, resolve_path("outputs/runs") / args.dataset / "trend_feasibility.png", dataset=args.dataset
+        hist, index_path(args.dataset).parent / "trend_feasibility.png", dataset=args.dataset
     )
 
     print(f"\n[归档] run_id={run_id}  生成时间={generated_at}")

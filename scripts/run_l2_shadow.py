@@ -37,7 +37,7 @@ from src.scoring.calibration import (
 )
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json
 from src.utils.logger import setup_logging
-from src.utils.run_context import append_index, current_run_id, local_timestamp, run_dir
+from src.utils.run_context import append_index, current_run_id, local_timestamp, model_scoped_dir, run_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,7 +85,7 @@ def main() -> int:
     profile_name = resolve_llm_profile_name("victim", cli_profile=args.victim_profile, config_profile=gen.get("victim_profile"))
     client, profile = build_victim_client(profiles, profile_name=profile_name)
 
-    main_scores_path = resolve_path("outputs/scores") / f"{ds}_pcv_scores.jsonl"
+    main_scores_path = model_scoped_dir("outputs/scores", ds) / f"{ds}_pcv_scores.jsonl"
 
     # ---- 建 shadow + 跑 RAG + 算每个 shadow 的 cvg ----
     shadow_manifest = run_l2_shadows(

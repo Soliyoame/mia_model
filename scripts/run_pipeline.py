@@ -26,9 +26,11 @@ scripts/ 目录下 15 个编号脚本(01~15)按顺序拼成子进程命令逐个
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -36,6 +38,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.io import load_yaml
+from src.utils.run_context import (
+    archive_run,
+    git_snapshot,
+    new_run_id,
+    read_scale,
+    write_run_manifest,
+)
 
 
 StepArgsBuilder = Callable[[argparse.Namespace], list[str]]
@@ -294,6 +303,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Forward --force to every selected stage.")
     parser.add_argument("--no-resume", action="store_true", help="Forward --no-resume to every selected stage.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Optional human label appended to the start-time run id, e.g. 20260707-153012_baseline-fix.",
+    )
+    parser.add_argument(
+        "--no-archive",
+        action="store_true",
+        help="Skip collecting this run's products into outputs/runs/{dataset}/{run_id}/ at the end.",
+    )
     return parser.parse_args()
 
 
@@ -348,6 +367,68 @@ def command_for_step(step: PipelineStep, args: argparse.Namespace) -> list[str]:
     return [sys.executable, str(PROJECT_ROOT / "scripts" / step.script), *step.build_args(args)]
 
 
+def _archive_run_products(
+    args: argparse.Namespace,
+    steps: list[PipelineStep],
+    executed: list[int],
+    failed_step: int | None,
+    run_id: str,
+    started: datetime,
+) -> None:
+    """流水线收尾:把本次全部阶段产物拷进 run 文件夹,并写一份 run_manifest.json。
+
+    --dry-run 或 --no-archive 时直接跳过。无论成功或失败都归档(失败在 manifest 里标注
+    steps_failed),便于回看"这次到底跑出了什么"。归档中任何异常都不应连累流水线退出码,
+    故整体兜底吞掉并仅告警。
+
+    参数:
+        args:        解析后的命令行参数。
+        steps:       本次选中的步骤列表(用于记录 steps_selected)。
+        executed:    已成功执行的步骤编号。
+        failed_step: 首个失败的步骤编号;无失败为 None。
+        run_id:      本次运行标识(即 run 文件夹名)。
+        started:     流水线启动时刻(用于算耗时)。
+    """
+    if args.dry_run or args.no_archive:
+        return
+    finished = datetime.now()
+    try:
+        manifest: dict = {
+            "run_id": run_id,
+            "run_name": args.run_name or "",
+            "dataset": args.dataset,
+            "scale": read_scale(),
+            "started_at": started.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": finished.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_seconds": round((finished - started).total_seconds(), 1),
+            "steps_selected": [s.number for s in steps],
+            "steps_run": executed,
+            "steps_failed": failed_step,
+            "victim_model": os.environ.get("PCV_VICTIM_MODEL", ""),
+            "git": git_snapshot(),
+            "configs": {
+                "experiment": args.experiment_config,
+                "data": args.data_config,
+                "rag": args.rag_config,
+                "pcv": args.pcv_config,
+                "spoof": args.spoof_config,
+                "baseline": args.baseline_config,
+                "defense": args.defense_config,
+            },
+            "command": "python " + " ".join(sys.argv),
+        }
+        archive = archive_run(args.dataset, run_id)
+        manifest["archive"] = archive
+        write_run_manifest(args.dataset, run_id, manifest)
+        megabytes = archive["bytes"] / (1024 * 1024)
+        print(
+            f"[归档] outputs/runs/{args.dataset}/{run_id}/"
+            f"  ({archive['files']} 文件, {megabytes:.1f} MB)"
+        )
+    except Exception as exc:  # noqa: BLE001 - 归档失败不应连累流水线主流程
+        print(f"[归档] 跳过(归档时出错,不影响流水线): {exc}", file=sys.stderr)
+
+
 def main() -> int:
     """编排主流程:解析参数 → 选步骤 → 逐个调起子进程 → 任一步失败即中止。
 
@@ -372,6 +453,17 @@ def main() -> int:
     print(f"Dataset: {args.dataset}")
     print("Selected steps: " + ", ".join(f"{step.number:02d}" for step in steps))
 
+    # 启动即盖一个"开始时间"戳作为 run_id,并 export 给所有子步骤(subprocess 默认继承本进程
+    # 环境)。末端脚本(15/可行性/L2)的 current_run_id() 届时读回同一个 id,整套产物归到同一
+    # run 文件夹——这也一并修好了过去"各末端脚本各生成各自时间戳"的老问题。
+    run_id = new_run_id(args.run_name)
+    started = datetime.now()
+    if not args.dry_run:
+        os.environ["PCV_RUN_ID"] = run_id
+    print(f"Run: {run_id}")
+
+    executed: list[int] = []
+    failed_step: int | None = None
     for step in steps:
         command = command_for_step(step, args)
         printable = " ".join(command)
@@ -384,9 +476,14 @@ def main() -> int:
         # 在项目根目录下同步执行该步骤脚本。
         result = subprocess.run(command, cwd=PROJECT_ROOT)
         if result.returncode != 0:
-            # 任一步失败立即中止后续步骤，并把它的退出码原样返回给调用方。
+            # 记录首个失败步骤并中止后续;失败也照常归档(便于回看半成品),退出码原样透传。
             print(f"Step {step.number:02d} failed with exit code {result.returncode}.")
+            failed_step = step.number
+            _archive_run_products(args, steps, executed, failed_step, run_id, started)
             return result.returncode
+        executed.append(step.number)
+
+    _archive_run_products(args, steps, executed, failed_step, run_id, started)
     return 0
 
 

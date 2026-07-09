@@ -25,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
 from src.rag.runner import run_rag_and_llm_only
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path
+from src.utils.run_context import model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -68,9 +69,9 @@ def main() -> int:
         config_profile=gen_cfg.get("victim_profile"),
     )
     client, profile = build_victim_client(profiles, profile_name=profile_name)
-    # RAG 回答与纯 LLM 回答分目录存放,便于后续对比。
-    rag_dir = ensure_dir(resolve_path(config["paths"]["rag_responses_dir"]))
-    llm_dir = ensure_dir(resolve_path(config["paths"]["llm_only_responses_dir"]))
+    # RAG 回答与纯 LLM 回答分目录存放,便于后续对比。按 {数据集}/{模型}/ 分,换模型不覆盖。
+    rag_dir = ensure_dir(model_scoped_dir(config["paths"]["rag_responses_dir"], args.dataset))
+    llm_dir = ensure_dir(model_scoped_dir(config["paths"]["llm_only_responses_dir"], args.dataset))
 
     # --primary-only:读 facts,取 selection_tier=primary 的 fact_id 白名单,砍掉低质量 fact 的 query。
     allowed_fact_ids: set[str] | None = None

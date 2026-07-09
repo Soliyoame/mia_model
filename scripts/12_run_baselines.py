@@ -39,6 +39,7 @@ from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_
 from src.rag.retriever import RagRetriever
 from src.rag.runner import TokenBucket
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json, write_jsonl
+from src.utils.run_context import model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -111,7 +112,7 @@ def main() -> int:
 
     interval = args.request_interval if args.request_interval is not None else float(gen_cfg.get("request_interval_seconds", 0.0))
     threshold = float(config.get("baseline", {}).get("threshold", 0.3))
-    out_dir = ensure_dir(resolve_path(config["paths"]["baselines_dir"]) / args.dataset)
+    out_dir = ensure_dir(model_scoped_dir(config["paths"]["baselines_dir"], args.dataset))
 
     # —— 限速:令牌桶(抗端点卡顿)+ 并发(跨目标),对齐第 10 步 runner ——
     # requests_per_minute>0 启用全局令牌桶(全局速率恒 ≤ RPM);配合 max_workers>1,某目标卡在
@@ -164,7 +165,7 @@ def main() -> int:
     # 保证逐行同源可比(尤其 --max-targets 子集时,避免 PCV 用全量、baseline 用子集的偏差)。
     # 注:PCV 分数按 audit_id(每 chunk 一个审计单元)标识,baseline 按 doc_id(chunk 切分号);
     # 两套编号不同,需经 facts 文件的 audit_id→doc_id 映射桥翻译后才能对齐。
-    scores_dir = resolve_path(config["paths"]["scores_dir"])
+    scores_dir = model_scoped_dir(config["paths"]["scores_dir"], args.dataset)
     pcv_path = scores_dir / f"{args.dataset}_pcv_scores.jsonl"
     if pcv_path.exists():
         target_ids = {t["doc_id"] for t in targets}
