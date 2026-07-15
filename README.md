@@ -433,7 +433,7 @@ python scripts/run_pipeline.py --dataset enron --from-step 10 --to-step 15 --for
 python scripts/run_pipeline.py --dataset edgar --scale formal --run-id edgar-qwen-formal-seed42 --force-from-step 11 --canonical-analyses
 ```
 
-`--canonical-analyses` 会追加离线消融、预算/捷径诊断和三个在线 query control，并与主 run 一起归档。matched-control 使用独立 run id、`--run-role matched_control --llm-only`，不重复该开关。只有干净 commit 上生成且通过门禁的 candidate 才能由 `scripts/16_archive_run.py --status canonical --suite-id pcv-mia-paper-v1` 晋升。
+`--canonical-analyses` 会追加离线消融、预算/捷径诊断和三个在线 query control，并与主 run 一起归档。matched-control 使用独立 run id、`--run-role matched_control --llm-only`；编排器会只执行第 10 步的 LLM-only 采集，不加载检索器，也不会复制主运行的 RAG 分数、baseline 或报告。只有干净 commit 上生成且通过门禁的 candidate 才能由 `scripts/16_archive_run.py --status canonical --suite-id pcv-mia-paper-v1` 晋升。
 
 只跑核心攻击，不跑 spoof、baseline、defense：
 
@@ -656,6 +656,9 @@ python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_c
 ```bash
 python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_config.yaml --llm-only --force
 ```
+
+直接调用第 10 步时，`--llm-only` 表示在 RAG 路之外增加 matched 响应。内部 `--skip-rag` 只供
+`run_pipeline.py --run-role matched_control --llm-only` 使用，用于确保独立对照不触碰 RAG 产物。
 
 输出：
 

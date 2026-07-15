@@ -79,6 +79,7 @@ def _make_inputs(work: Path, n: int):
         queries.append({
             "query_id": f"q{i}", "pair_id": f"p{i}", "fact_id": f"f{i}",
             "audit_id": f"a{i}", "group": "KB_Member", "claim_type": "true",
+            "source_key": f"s{i}",
             "query": f"statement number {i} to verify uniquely {i}",
             "expected_entity": "x", "original_entity": "x", "counterfactual_entity": None,
             "entity_type": "TERM", "accepted": True,
@@ -138,6 +139,34 @@ class TokenBucketTest(unittest.TestCase):
 
 
 class ConcurrentRunnerTest(unittest.TestCase):
+    def test_llm_only_collection_does_not_load_retriever_or_touch_rag_output(self) -> None:
+        with temporary_dir() as work:
+            qp, bp = _make_inputs(work, 2)
+            rag_out = work / "rag_should_not_exist.jsonl"
+            llm_out = work / "llm_only.jsonl"
+            with patch(
+                "src.rag.runner.RagRetriever",
+                side_effect=AssertionError("matched-control must not load the retriever"),
+            ):
+                manifest = run_rag_and_llm_only(
+                    dataset="edgar",
+                    queries_path=qp,
+                    benchmark_path=bp,
+                    index_dir=work / "idx",
+                    rag_output_path=rag_out,
+                    llm_output_path=llm_out,
+                    client=_DetClient(),
+                    resume=False,
+                    force=True,
+                    run_rag=False,
+                    run_llm_only=True,
+                )
+            self.assertFalse(rag_out.exists())
+            self.assertFalse(rag_out.with_suffix(".manifest.json").exists())
+            self.assertEqual(len(list(read_jsonl(llm_out))), 2)
+            self.assertFalse(manifest["run_rag"])
+            self.assertEqual(manifest["llm_only_integrity"]["missing"], 0)
+
     def test_variant_provenance_is_written_to_rows_and_manifest(self) -> None:
         with temporary_dir() as work:
             qp, bp = _make_inputs(work, 1)

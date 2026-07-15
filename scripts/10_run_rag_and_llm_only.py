@@ -59,6 +59,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="显式启用可选的 LLM-only 归因对照；默认仅运行 RAG",
     )
+    parser.add_argument(
+        "--skip-rag",
+        action="store_true",
+        help="不运行 RAG 路；仅供独立 matched-control 与 --llm-only 联用",
+    )
     # 提速开关(RPM 受限时用)：
     #   --primary-only  只跑 selection_tier=primary 的高质量 fact,同时砍 RAG 与 LLM-only 两路调用数。
     parser.add_argument("--primary-only", action="store_true",
@@ -73,6 +78,8 @@ def main() -> int:
         进程退出码,正常结束返回 0。
     """
     args = parse_args()
+    if args.skip_rag and not args.llm_only:
+        raise ValueError("--skip-rag requires --llm-only")
     config = load_yaml(args.config)
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
@@ -157,6 +164,7 @@ def main() -> int:
         request_interval_seconds=float(gen_cfg.get("request_interval_seconds", 0.0)),
         max_workers=int(gen_cfg.get("max_workers", 1)),
         requests_per_minute=float(gen_cfg.get("requests_per_minute", 0.0)),
+        run_rag=not args.skip_rag,
         run_llm_only=bool(args.llm_only or gen_cfg.get("run_llm_only", False)),
         allowed_fact_ids=allowed_fact_ids,
         resume=not args.no_resume,

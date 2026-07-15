@@ -60,6 +60,25 @@ def collect_dataset_release(
     if _paired_identity(main_manifest) != _paired_identity(control_manifest):
         raise RuntimeError(f"Main/matched-control identity mismatch for {dataset}")
 
+    main_query_path = _unique(
+        main_root / "stealth_filtered_queries",
+        f"{dataset}_paired_queries.jsonl",
+    )
+    control_query_path = _unique(
+        control_root / "stealth_filtered_queries",
+        f"{dataset}_paired_queries.jsonl",
+    )
+    if sha256_file(main_query_path) != sha256_file(control_query_path):
+        raise RuntimeError(f"Main/matched-control query plan mismatch for {dataset}")
+    control_llm_path = _unique(
+        control_root / "llm_only_responses",
+        f"{dataset}_llm_only_responses.jsonl",
+    )
+    control_llm_manifest_path = _unique(
+        control_root / "llm_only_responses",
+        f"{dataset}_llm_only_responses.manifest.json",
+    )
+
     report_path = _unique(main_root / "reports", f"{dataset}_final_report.json")
     source_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_scores.jsonl")
     coverage_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_coverage.jsonl")
@@ -70,6 +89,13 @@ def collect_dataset_release(
     shortcut_path = _unique(main_root / "diagnostics", f"{dataset}_shortcut_controls.json")
     report = read_json(report_path)
     expected_whitelist = str((main_manifest.get("experiment_identity") or {}).get("source_whitelist_hash") or "")
+    control_response_manifest = read_json(control_llm_manifest_path)
+    if control_response_manifest.get("queries_hash") != sha256_file(control_query_path):
+        raise RuntimeError(f"Matched-control response/query provenance mismatch for {dataset}")
+    if control_response_manifest.get("source_whitelist_hash") != expected_whitelist:
+        raise RuntimeError(f"Matched-control source whitelist mismatch for {dataset}")
+    if control_response_manifest.get("run_rag") is not False:
+        raise RuntimeError(f"Matched-control unexpectedly ran RAG for {dataset}")
     if report.get("source_whitelist_hash") != expected_whitelist:
         raise RuntimeError(f"Report/run source whitelist mismatch for {dataset}")
     ablation = read_json(ablation_path)
@@ -127,6 +153,9 @@ def collect_dataset_release(
             "run_id": control_manifest.get("run_id"),
             "root": str(control_root.resolve()),
             "manifest": _artifact(control_root / "run_manifest.json", control_root),
+            "query_plan": _artifact(control_query_path, control_root),
+            "llm_only_responses": _artifact(control_llm_path, control_root),
+            "llm_only_manifest": _artifact(control_llm_manifest_path, control_root),
         },
         "artifacts": {
             "final_report": _artifact(report_path, main_root),

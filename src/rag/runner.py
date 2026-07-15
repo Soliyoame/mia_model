@@ -278,6 +278,7 @@ def run_rag_and_llm_only(
     resume: bool = True,
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
+    run_rag: bool = True,
     run_llm_only: bool = False,
     allowed_fact_ids: set[str] | None = None,
     requests_per_minute: float = 0.0,
@@ -311,6 +312,7 @@ def run_rag_and_llm_only(
         resume:                  断点续跑：跳过已成功的查询。
         force:                   强制重跑：忽略已有结果。
         config_snapshot:         配置快照，写进 manifest 便于复现。
+        run_rag:                 是否跑 RAG 路。matched-control 只采集 LLM-only 时传 False。
         run_llm_only:            是否跑 LLM-only 路。L2 shadow 推理只需要 RAG 路
                                  (LLM-only 与索引无关、跨 shadow 不变，复用主 run 即可)，
                                  此时传 False 可省掉 K 倍 LLM-only 调用。
@@ -328,6 +330,8 @@ def run_rag_and_llm_only(
     # 没有大模型客户端就没法生成回答，直接报错。
     if client is None:
         raise ValueError("run_rag_and_llm_only requires a configured VictimClient.")
+    if not run_rag and not run_llm_only:
+        raise ValueError("At least one of run_rag or run_llm_only must be enabled.")
     variant = str(variant_id or "").strip()
     if not variant:
         raise ValueError("variant_id must be non-empty")
@@ -341,18 +345,19 @@ def run_rag_and_llm_only(
     append_llm = False
     if resume and not force:
         # 续跑模式下，先扫描已有输出，记下哪些查询已经成功完成。
-        compact_response_file(rag_output)
+        if run_rag:
+            compact_response_file(rag_output)
         if run_llm_only:
             compact_response_file(llm_output)
-        done_rag = _successful_query_ids(rag_output)
-        done_llm = _successful_query_ids(llm_output)
-        append_rag = rag_output.exists()
-        append_llm = llm_output.exists()
+        done_rag = _successful_query_ids(rag_output) if run_rag else set()
+        done_llm = _successful_query_ids(llm_output) if run_llm_only else set()
+        append_rag = run_rag and rag_output.exists()
+        append_llm = run_llm_only and llm_output.exists()
 
     # 把基准文件读成"audit_id → 整行"的字典，便于按 id 快速查目标文档。
     benchmark = {row["audit_id"]: row for row in read_jsonl(benchmark_path)}
-    # 创建检索器(会加载索引)。
-    retriever = RagRetriever(index_dir)
+    # 仅 RAG 路需要加载索引；matched LLM-only 对照不触碰检索器。
+    retriever = RagRetriever(index_dir) if run_rag else None
     created_at = datetime.now(timezone.utc).isoformat()
 
     # 限速方式二选一：
@@ -383,7 +388,7 @@ def run_rag_and_llm_only(
     for query_row in accepted_queries:
         qid = str(query_row["query_id"])
         # 只要 RAG 或(启用了 LLM-only 时)LLM-only 任一边还没成功，就需要处理这条查询。
-        if qid not in done_rag or (run_llm_only and qid not in done_llm):
+        if (run_rag and qid not in done_rag) or (run_llm_only and qid not in done_llm):
             pending.append(query_row)
 
     def process(query_row: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int]:
@@ -403,17 +408,17 @@ def run_rag_and_llm_only(
         # 按 audit_id 找到这条查询对应的样本，进而拿到"目标文档 id"。
         sample = benchmark.get(str(query_row["audit_id"]), {})
         target_doc_id = str(sample.get("doc_id", ""))
-        # 先做一次检索，RAG 和后续判断都要用到检索结果。
-        retrieved = retriever.retrieve(query, top_k=top_k)
-        retrieved_doc_ids = [item.doc_id for item in retrieved]
-        retrieval_scores = [item.score for item in retrieved]
-        contexts = [item.text for item in retrieved]
         rag_row: dict[str, Any] | None = None
         llm_row: dict[str, Any] | None = None
         fails = 0
 
         # —— RAG 模式：只有这条查询的 RAG 还没成功时才跑 ——
-        if query_id not in done_rag:
+        if run_rag and query_id not in done_rag:
+            assert retriever is not None
+            retrieved = retriever.retrieve(query, top_k=top_k)
+            retrieved_doc_ids = [item.doc_id for item in retrieved]
+            retrieval_scores = [item.score for item in retrieved]
+            contexts = [item.text for item in retrieved]
             response, error = _call_generator(
                 client,
                 build_rag_prompt(query, contexts),
@@ -523,7 +528,9 @@ def run_rag_and_llm_only(
     if llm_rows:
         write_jsonl(llm_rows, llm_output, append=append_llm)
 
-    rag_stats = compact_response_file(rag_output)
+    rag_stats = compact_response_file(rag_output) if run_rag else {
+        "input_rows": 0, "unique_queries": 0, "duplicates_removed": 0, "succeeded": 0, "failed": 0,
+    }
     llm_stats = compact_response_file(llm_output) if run_llm_only else {
         "input_rows": 0, "unique_queries": 0, "duplicates_removed": 0, "succeeded": 0, "failed": 0,
     }
@@ -548,12 +555,16 @@ def run_rag_and_llm_only(
         "attempted_queries": completed,
         "completed_queries": completed,
         "failures": failures,
-        "rag_integrity": {**rag_stats, "missing": max(0, planned - rag_stats["succeeded"])},
+        "rag_integrity": {
+            **rag_stats,
+            "missing": max(0, planned - rag_stats["succeeded"]) if run_rag else 0,
+        },
         "llm_only_integrity": {
             **llm_stats,
             "missing": max(0, planned - llm_stats["succeeded"]) if run_llm_only else 0,
         },
         "max_workers": workers,
+        "run_rag": run_rag,
         "run_llm_only": run_llm_only,
         "allowed_fact_ids_count": (len(allowed_fact_ids) if allowed_fact_ids is not None else None),
         "requests_per_minute": requests_per_minute,
@@ -564,9 +575,18 @@ def run_rag_and_llm_only(
         "config_snapshot": config_snapshot or {},
     }
     # 两个输出各自配一份同样的 manifest，方便单独追溯。
-    write_json(manifest, rag_output.with_suffix(".manifest.json"))
-    write_json(manifest, llm_output.with_suffix(".manifest.json"))
-    LOGGER.info("Finished dual mode run for %s: queries=%s failures=%s", dataset, completed, failures)
+    if run_rag:
+        write_json(manifest, rag_output.with_suffix(".manifest.json"))
+    if run_llm_only:
+        write_json(manifest, llm_output.with_suffix(".manifest.json"))
+    LOGGER.info(
+        "Finished response run for %s: rag=%s llm_only=%s queries=%s failures=%s",
+        dataset,
+        run_rag,
+        run_llm_only,
+        completed,
+        failures,
+    )
     return manifest
 
 

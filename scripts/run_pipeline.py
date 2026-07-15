@@ -44,6 +44,7 @@ from src.utils.run_context import (
     P0_PROTOCOL,
     archive_provenance_files,
     archive_run,
+    archived_query_source_whitelist,
     archived_source_whitelist,
     artifact_inventory,
     benchmark_snapshot,
@@ -209,6 +210,7 @@ def build_steps() -> list[PipelineStep]:
                 # 仅当指定 --victim-profile 时才透传(选用哪个受害者 LLM 画像来生成回答)。
                 *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
                 *(["--llm-only"] if args.llm_only else []),
+                *(["--skip-rag"] if args.run_role == "matched_control" else []),
             ),
         ),
         PipelineStep(
@@ -380,6 +382,8 @@ def selected_steps(args: argparse.Namespace, experiment_config: dict) -> list[Pi
 
     selected: list[PipelineStep] = []
     for step in steps:
+        if args.run_role == "matched_control" and step.number != 10:
+            continue
         # 是否落在 --from-step ~ --to-step 区间内。
         in_range = args.from_step <= step.number <= args.to_step
         # 未指定 --only-steps 时默认全选;指定后只保留白名单内的步骤。
@@ -580,11 +584,15 @@ def _archive_run_products(
             "command": "python " + " ".join(sys.argv),
         }
         model = victim_model_slug()
-        stages = None if args.llm_only else [
-            "facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "diagnostics",
-            "query_controls", "rag_responses", "parsed_stance", "scores", "baselines", "defenses",
-            "mechanisms", "reports", "query_control_responses", "query_control_scores",
-        ]
+        stages = (
+            ["facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "llm_only_responses"]
+            if args.run_role == "matched_control"
+            else [
+                "facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "diagnostics",
+                "query_controls", "rag_responses", "parsed_stance", "scores", "baselines", "defenses",
+                "mechanisms", "reports", "query_control_responses", "query_control_scores",
+            ]
+        )
         archive = archive_run(args.dataset, run_id, model=model, stages=stages)
         root = run_dir(args.dataset, run_id, model=model)
         archive["provenance_files"] = archive_provenance_files(
@@ -593,7 +601,11 @@ def _archive_run_products(
         archive["inventory"] = artifact_inventory(root)
         archive["inventory_hash"] = sha256_obj(archive["inventory"])
         manifest["archive"] = archive
-        whitelist = archived_source_whitelist(root)
+        whitelist = (
+            archived_query_source_whitelist(root)
+            if args.run_role == "matched_control"
+            else archived_source_whitelist(root)
+        )
         manifest["source_whitelist"] = whitelist
         manifest["experiment_identity"] = build_experiment_identity(
             manifest, str(whitelist.get("source_whitelist_hash") or "")
@@ -619,6 +631,9 @@ def main() -> int:
     experiment_config = load_yaml(Path(args.experiment_config))
     # 未显式指定数据集时，回退到实验配置里的默认数据集(再兜底为 "enron")。
     args.dataset = args.dataset or str(experiment_config.get("default_dataset", "enron"))
+    if args.run_role == "matched_control" and not args.llm_only:
+        print("error: matched_control requires --llm-only", file=sys.stderr)
+        return 2
     try:
         steps = selected_steps(args, experiment_config)
     except (ValueError, argparse.ArgumentTypeError) as exc:

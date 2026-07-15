@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -481,6 +482,71 @@ def archived_source_whitelist(root: str | Path) -> dict[str, Any]:
     }
 
 
+def archived_query_source_whitelist(root: str | Path) -> dict[str, Any]:
+    """从归档的固定查询计划重建 matched-control 的评估 source whitelist。"""
+    run_root = Path(root)
+    query_paths = list(
+        (run_root / "stealth_filtered_queries").rglob("*_paired_queries.jsonl")
+    )
+    query_rows = list(read_jsonl(query_paths[0])) if len(query_paths) == 1 else []
+    source_groups: dict[str, set[str]] = defaultdict(set)
+    for row in query_rows:
+        if not row.get("accepted", True):
+            continue
+        group = str(row.get("group") or "")
+        if group not in {"KB_Member", "True_Non_Member"}:
+            continue
+        source_key = str(
+            row.get("source_key")
+            or row.get("source_id")
+            or row.get("doc_id")
+            or row.get("audit_id")
+            or ""
+        )
+        if source_key:
+            source_groups[source_key].add(group)
+    conflicts = sorted(key for key, groups in source_groups.items() if len(groups) != 1)
+    source_keys = sorted(source_groups)
+    groups = {
+        group: sum(1 for values in source_groups.values() if values == {group})
+        for group in ("KB_Member", "True_Non_Member")
+    }
+    return {
+        "query_files": len(query_paths),
+        "source_count": len(source_keys),
+        "source_counts_by_group": groups,
+        "source_group_conflicts": conflicts,
+        "source_whitelist_hash": sha256_obj(source_keys) if source_keys else "",
+        "query_plan_path": str(query_paths[0]) if len(query_paths) == 1 else "",
+    }
+
+
+def _matched_control_provenance(
+    run_root: Path,
+    query_whitelist: dict[str, Any],
+) -> dict[str, Any]:
+    """核对 matched-control 响应清单是否来自同一固定查询计划且未运行 RAG。"""
+    manifest_paths = list(
+        (run_root / "llm_only_responses").rglob("*_llm_only_responses.manifest.json")
+    )
+    response_manifest = read_json(manifest_paths[0]) if len(manifest_paths) == 1 else {}
+    query_path = Path(str(query_whitelist.get("query_plan_path") or ""))
+    query_hash = sha256_file(query_path) if query_path.is_file() else ""
+    return {
+        "manifest_files": len(manifest_paths),
+        "run_rag": response_manifest.get("run_rag"),
+        "run_llm_only": response_manifest.get("run_llm_only"),
+        "query_hash_matches": bool(
+            query_hash and response_manifest.get("queries_hash") == query_hash
+        ),
+        "source_whitelist_hash_matches": bool(
+            query_whitelist.get("source_whitelist_hash")
+            and response_manifest.get("source_whitelist_hash")
+            == query_whitelist.get("source_whitelist_hash")
+        ),
+    }
+
+
 def _baseline_whitelist_integrity(run_root: Path, source_whitelist_hash: str) -> dict[str, Any]:
     """验证每个 baseline 的 source 集与 PCV 主评估 whitelist 完全一致。"""
     baseline_root = run_root / "baselines"
@@ -511,7 +577,11 @@ def _baseline_whitelist_integrity(run_root: Path, source_whitelist_hash: str) ->
     }
 
 
-def archived_integrity_summary(root: str | Path) -> dict[str, Any]:
+def archived_integrity_summary(
+    root: str | Path,
+    *,
+    run_role: str = "main",
+) -> dict[str, Any]:
     """统计 canonical 所需的查询、双路响应、baseline 与 source coverage 完整性。"""
     run_root = Path(root)
     query_rows = [
@@ -540,7 +610,10 @@ def archived_integrity_summary(root: str | Path) -> dict[str, Any]:
         1 for row in coverage_rows
         if bool(row.get("attack_eligible", True)) and not bool(row.get("execution_complete", row.get("evaluation_eligible")))
     )
-    whitelist = archived_source_whitelist(run_root)
+    score_whitelist = archived_source_whitelist(run_root)
+    query_whitelist = archived_query_source_whitelist(run_root)
+    whitelist = query_whitelist if run_role == "matched_control" else score_whitelist
+    matched_control_provenance = _matched_control_provenance(run_root, query_whitelist)
     baseline_whitelist = _baseline_whitelist_integrity(
         run_root, str(whitelist.get("source_whitelist_hash") or "")
     )
@@ -553,13 +626,16 @@ def archived_integrity_summary(root: str | Path) -> dict[str, Any]:
         "coverage_rows": len(coverage_rows),
         "incomplete_sources": incomplete_sources,
         "source_whitelist": whitelist,
+        "score_source_whitelist": score_whitelist,
+        "query_source_whitelist": query_whitelist,
+        "matched_control_provenance": matched_control_provenance,
         "baseline_whitelist": baseline_whitelist,
     }
 
 
-def archived_failure_count(root: str | Path) -> int:
+def archived_failure_count(root: str | Path, *, run_role: str = "main") -> int:
     """兼容旧调用：返回双路无效响应、baseline 失败与不完整 source 总数。"""
-    summary = archived_integrity_summary(root)
+    summary = archived_integrity_summary(root, run_role=run_role)
     return (
         int(summary["rag"]["invalid"])
         + int(summary["llm_only"]["invalid"])
@@ -610,11 +686,19 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         completed_analyses = set(manifest.get("canonical_analyses_completed") or [])
         if not required_analyses.issubset(completed_analyses):
             reasons.append("canonical_analyses_incomplete")
-    required_steps = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    required_steps = (
+        {10}
+        if run_role == "matched_control"
+        else {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    )
     selected = {int(step) for step in manifest.get("steps_selected", [])}
     completed = {int(step) for step in manifest.get("steps_run", [])}
     if not required_steps.issubset(selected) or not required_steps.issubset(completed):
-        reasons.append("full_p0_pipeline_not_completed")
+        reasons.append(
+            "matched_control_collection_not_completed"
+            if run_role == "matched_control"
+            else "full_p0_pipeline_not_completed"
+        )
     benchmark = manifest.get("benchmark") or {}
     if not str(benchmark.get("benchmark_hash") or "").strip():
         reasons.append("benchmark_hash_missing")
@@ -638,12 +722,13 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         or str(prereg_cell.get("seed")) != str(CANONICAL_SPLIT_SEED)
     ):
         reasons.append("preregistration_missing_or_mismatched")
-    if not list((run_root / "scores").rglob("*_pcv_scores_source_scores.jsonl")):
-        reasons.append("source_scores_missing")
-    if not list((run_root / "scores").rglob("*_source_coverage.jsonl")):
-        reasons.append("source_coverage_missing")
-    if not list((run_root / "reports").rglob("*_final_report.json")):
-        reasons.append("final_report_missing")
+    if run_role == "main":
+        if not list((run_root / "scores").rglob("*_pcv_scores_source_scores.jsonl")):
+            reasons.append("source_scores_missing")
+        if not list((run_root / "scores").rglob("*_source_coverage.jsonl")):
+            reasons.append("source_coverage_missing")
+        if not list((run_root / "reports").rglob("*_final_report.json")):
+            reasons.append("final_report_missing")
     archive = manifest.get("archive") or {}
     inventory = archive.get("inventory") or []
     if not inventory or archive.get("inventory_hash") != sha256_obj(inventory):
@@ -662,56 +747,72 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
             if not archived.is_file() or sha256_file(archived) != str(row.get("sha256") or ""):
                 reasons.append("provenance_archive_hash_mismatch")
                 break
-    integrity = archived_integrity_summary(run_root)
+    integrity = archived_integrity_summary(run_root, run_role=run_role)
     if not integrity["planned_queries"] or integrity["query_duplicates"]:
         reasons.append("query_plan_missing_or_duplicate")
-    required_response_modes = ["rag"]
-    if bool(manifest.get("run_llm_only", False)):
-        required_response_modes.append("llm_only")
+    required_response_modes = ["llm_only"] if run_role == "matched_control" else ["rag"]
     for mode in required_response_modes:
         state = integrity[mode]
         if state["invalid"] or state["duplicates"] or state["missing"] or state["unexpected"]:
             reasons.append(f"{mode}_responses_incomplete")
-    if integrity["baseline_failures"]:
-        reasons.append("baseline_failures")
-    if not integrity["coverage_rows"] or integrity["incomplete_sources"]:
-        reasons.append("source_coverage_incomplete")
     whitelist = integrity["source_whitelist"]
-    if (
-        whitelist["score_files"] != 1
-        or whitelist["coverage_files"] != 1
-        or not whitelist["score_coverage_match"]
-    ):
-        reasons.append("source_whitelist_invalid")
-    baseline_whitelist = integrity["baseline_whitelist"]
-    if (
-        baseline_whitelist["comparison_files"] != 1
-        or not baseline_whitelist["source_score_files"]
-        or baseline_whitelist["mismatched_methods"]
-    ):
-        reasons.append("baseline_source_whitelist_mismatch")
+    if run_role == "matched_control":
+        if (
+            whitelist["query_files"] != 1
+            or not whitelist["source_count"]
+            or whitelist["source_group_conflicts"]
+        ):
+            reasons.append("query_source_whitelist_invalid")
+        matched_provenance = integrity["matched_control_provenance"]
+        if (
+            matched_provenance["manifest_files"] != 1
+            or matched_provenance["run_rag"] is not False
+            or matched_provenance["run_llm_only"] is not True
+            or not matched_provenance["query_hash_matches"]
+            or not matched_provenance["source_whitelist_hash_matches"]
+        ):
+            reasons.append("matched_control_provenance_invalid")
+    else:
+        if integrity["baseline_failures"]:
+            reasons.append("baseline_failures")
+        if not integrity["coverage_rows"] or integrity["incomplete_sources"]:
+            reasons.append("source_coverage_incomplete")
+        if (
+            whitelist["score_files"] != 1
+            or whitelist["coverage_files"] != 1
+            or not whitelist["score_coverage_match"]
+        ):
+            reasons.append("source_whitelist_invalid")
+        baseline_whitelist = integrity["baseline_whitelist"]
+        if (
+            baseline_whitelist["comparison_files"] != 1
+            or not baseline_whitelist["source_score_files"]
+            or baseline_whitelist["mismatched_methods"]
+        ):
+            reasons.append("baseline_source_whitelist_mismatch")
     expected_identity = build_experiment_identity(
         manifest, str(whitelist.get("source_whitelist_hash") or "")
     )
     if manifest.get("experiment_identity") != expected_identity:
         reasons.append("experiment_identity_missing_or_mismatched")
-    report_paths = list((run_root / "reports").rglob("*_final_report.json"))
-    if len(report_paths) == 1:
-        report = read_json(report_paths[0])
-        if report.get("evaluation_unit") != "source":
-            reasons.append("report_not_source_level")
-        if report.get("source_whitelist_hash") != whitelist.get("source_whitelist_hash"):
-            reasons.append("report_source_whitelist_mismatch")
-        report_inputs = report.get("input_provenance") or {}
-        source_score_path = Path(str(whitelist.get("source_scores_path") or ""))
-        if (
-            not source_score_path.is_file()
-            or (report_inputs.get("source_scores") or {}).get("sha256") != sha256_file(source_score_path)
-        ):
-            reasons.append("report_input_provenance_mismatch")
-    elif report_paths:
-        reasons.append("multiple_final_reports")
-    transport_failures = archived_failure_count(run_root)
+    if run_role == "main":
+        report_paths = list((run_root / "reports").rglob("*_final_report.json"))
+        if len(report_paths) == 1:
+            report = read_json(report_paths[0])
+            if report.get("evaluation_unit") != "source":
+                reasons.append("report_not_source_level")
+            if report.get("source_whitelist_hash") != whitelist.get("source_whitelist_hash"):
+                reasons.append("report_source_whitelist_mismatch")
+            report_inputs = report.get("input_provenance") or {}
+            source_score_path = Path(str(whitelist.get("source_scores_path") or ""))
+            if (
+                not source_score_path.is_file()
+                or (report_inputs.get("source_scores") or {}).get("sha256") != sha256_file(source_score_path)
+            ):
+                reasons.append("report_input_provenance_mismatch")
+        elif report_paths:
+            reasons.append("multiple_final_reports")
+    transport_failures = archived_failure_count(run_root, run_role=run_role)
     return {
         "eligible": not reasons,
         "reasons": reasons,

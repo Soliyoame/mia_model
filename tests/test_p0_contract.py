@@ -161,6 +161,76 @@ class P0CanonicalRunTests(unittest.TestCase):
         manifest["experiment_identity"] = build_experiment_identity(manifest, whitelist_hash)
         return manifest
 
+    def _matched_fixture(self, root: Path) -> dict:
+        (root / "stealth_filtered_queries").mkdir(parents=True)
+        (root / "llm_only_responses").mkdir(parents=True)
+        query_path = root / "stealth_filtered_queries" / "toy_paired_queries.jsonl"
+        write_jsonl([{
+            "query_id": "q1",
+            "source_key": "s1",
+            "group": "KB_Member",
+            "accepted": True,
+        }], query_path)
+        write_jsonl([{
+            "query_id": "q1",
+            "response": "Consistent",
+            "error": None,
+        }], root / "llm_only_responses" / "toy_llm_only_responses.jsonl")
+        whitelist_hash = sha256_obj(["s1"])
+        write_json({
+            "run_rag": False,
+            "run_llm_only": True,
+            "queries_hash": sha256_file(query_path),
+            "source_whitelist_hash": whitelist_hash,
+        }, root / "llm_only_responses" / "toy_llm_only_responses.manifest.json")
+        (root / "provenance").mkdir()
+        (root / "provenance" / "000_data.yaml").write_text("seed: 42\n", encoding="utf-8")
+        inventory = artifact_inventory(root)
+        manifest = {
+            "run_id": "matched-1",
+            "dataset": "toy",
+            "run_role": "matched_control",
+            "status": "candidate",
+            "source": "pipeline (run_pipeline.py)",
+            "victim_model": "victim-model",
+            "victim_provider": "openai_compatible",
+            "victim_endpoint": "https://example.invalid/v1",
+            "scale": "formal",
+            "split_seed": 42,
+            "git": {"commit": "abc123", "dirty": False},
+            "steps_failed": None,
+            "steps_selected": [10],
+            "steps_run": [10],
+            "benchmark": {"benchmark_hash": "fixed-hash", "hash_matches": True},
+            "configs": {"data": {"sha256": "config-hash"}},
+            "preregistration": {
+                "sha256": "preregistered-hash",
+                "suite_id": "submission",
+                "selection_rule": CANONICAL_SELECTION_RULE,
+                "cell": {
+                    "dataset": "toy",
+                    "victim_model": "victim-model",
+                    "run_role": "matched_control",
+                    "scale": "formal",
+                    "seed": 42,
+                },
+            },
+            "input_provenance": [{"exists": True, "sha256": "input-hash"}],
+            "archive": {
+                "inventory": inventory,
+                "inventory_hash": sha256_obj(inventory),
+                "provenance_files": [{
+                    "path": "provenance/000_data.yaml",
+                    "source_path": "data.yaml",
+                    "sha256": sha256_file(root / "provenance" / "000_data.yaml"),
+                }],
+            },
+            "protocol": P0_PROTOCOL,
+            "run_llm_only": True,
+        }
+        manifest["experiment_identity"] = build_experiment_identity(manifest, whitelist_hash)
+        return manifest
+
     def test_canonical_gate_requires_clean_reproducible_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -190,6 +260,43 @@ class P0CanonicalRunTests(unittest.TestCase):
             result = canonical_eligibility(manifest, root)
             self.assertFalse(result["eligible"])
             self.assertIn("main_run_must_be_rag_only", result["reasons"])
+
+    def test_matched_control_is_response_only_and_does_not_require_rag_scores_or_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._matched_fixture(root)
+            result = canonical_eligibility(manifest, root)
+            self.assertTrue(result["eligible"], result["reasons"])
+            self.assertEqual(result["integrity"]["source_whitelist"]["source_count"], 1)
+
+    def test_matched_control_requires_complete_llm_only_responses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._matched_fixture(root)
+            (root / "llm_only_responses" / "toy_llm_only_responses.jsonl").unlink()
+            inventory = artifact_inventory(root)
+            manifest["archive"]["inventory"] = inventory
+            manifest["archive"]["inventory_hash"] = sha256_obj(inventory)
+            result = canonical_eligibility(manifest, root)
+            self.assertFalse(result["eligible"])
+            self.assertIn("llm_only_responses_incomplete", result["reasons"])
+
+    def test_matched_control_rejects_a_manifest_that_ran_rag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._matched_fixture(root)
+            response_manifest_path = (
+                root / "llm_only_responses" / "toy_llm_only_responses.manifest.json"
+            )
+            response_manifest = read_json(response_manifest_path)
+            response_manifest["run_rag"] = True
+            write_json(response_manifest, response_manifest_path)
+            inventory = artifact_inventory(root)
+            manifest["archive"]["inventory"] = inventory
+            manifest["archive"]["inventory_hash"] = sha256_obj(inventory)
+            result = canonical_eligibility(manifest, root)
+            self.assertFalse(result["eligible"])
+            self.assertIn("matched_control_provenance_invalid", result["reasons"])
 
     def test_suite_allows_only_one_canonical_per_cell(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
