@@ -12,8 +12,7 @@
   抛错而不是静默回退到别的模型。
 - 配对反事实 claim 生成:只替换同类型(同 entity_type)的一个实体,真值 claim
   保持原样,反事实 claim 必须含新实体且不含原实体。
-- 立场解析 + PCV/CG-CMS 打分:context gain(RAG 相对 LLM-only 的增益)的计算,
-  即最终得分会扣除 LLM-only 自身就能恢复的部分。
+- 立场解析 + PCV 打分:RAG-only PVS 是主分，context gain 仅保留为阴性对照/归因字段。
 """
 
 from __future__ import annotations
@@ -213,8 +212,8 @@ class PcvMiaTests(unittest.TestCase):
             # 原实体不能残留在反事实 claim 里,否则就不是一处干净的替换。
             self.assertNotIn("$48,720", row["counterfactual_claim"])
 
-    def test_stance_and_pcv_score_use_context_gain(self) -> None:
-        """验证立场解析 + PCV 打分使用 context gain:最终 pcv_score 为 RAG 增益扣除 LLM-only 自身增益。"""
+    def test_stance_and_pcv_score_use_rag_only_pvs(self) -> None:
+        """验证 P0 主分使用 RAG-only 成对验证，LLM-only 只进入诊断字段。"""
         with temporary_dir() as tmp:
             queries = tmp / "queries.jsonl"
             rag = tmp / "rag.jsonl"
@@ -310,12 +309,12 @@ class PcvMiaTests(unittest.TestCase):
             self.assertEqual(row["cvg_llm"], -1.0)
             # context gain = RAG 增益 - LLM-only 增益 = 2.0 - (-1.0) = 3.0。
             self.assertEqual(row["cg_cvg"], 3.0)
-            # 最终 pcv_score 取 context gain,体现"扣除 LLM-only 自身恢复"后的成员信号。
-            # 未提供 facts_path 时权重退化为 1.0(向后兼容):加权平均 == 简单平均 == cg_cvg。
-            self.assertEqual(row["pcv_score"], 3.0)
+            # P0 主分不减 LLM-only，直接取 RAG-only PVS；context gain 只用于归因。
+            self.assertEqual(row["pvs_rag"], 2.0)
+            self.assertEqual(row["pcv_score"], 2.0)
 
     def test_weighted_pcv_score_three_views(self) -> None:
-        """方案 D:质量加权聚合给出三口径(cg_cvg/pcv_score/pcv_score_primary)且数值正确。"""
+        """验证 RAG-only 主分与旧 context-gain 诊断口径同时保留且数值正确。"""
         with temporary_dir() as tmp:
             parsed = tmp / "parsed.jsonl"
             scores = tmp / "scores.jsonl"
@@ -347,13 +346,47 @@ class PcvMiaTests(unittest.TestCase):
             row = list(read_jsonl(scores))[0]
             # 不加权简单平均: (3.0 + 1.5) / 2 = 2.25
             self.assertEqual(row["cg_cvg"], 2.25)
-            # 质量加权: (0.8*3.0 + 0.2*1.5) / (0.8+0.2) = 2.7
-            self.assertAlmostEqual(row["pcv_score"], 2.7)
+            # RAG-only 主分简单平均: (2.0 + 1.5) / 2 = 1.75。
+            self.assertAlmostEqual(row["pcv_score"], 1.75)
+            # 旧质量加权 context gain 仅作为诊断字段保留。
+            self.assertAlmostEqual(row["pcv_score_context_gain_weighted"], 2.7)
             # 仅 primary 口径: 只用 f1(primary) -> 3.0
             self.assertEqual(row["pcv_score_primary"], 3.0)
             self.assertEqual(row["num_primary_pairs"], 1)
-            # 阈值判定应跟随主分 pcv_score,而不是旧口径 cg_cvg。
-            self.assertTrue(row["predicted_member_t2.5"])
+            # 阈值判定跟随 RAG-only 主分，而不是旧 context-gain 口径。
+            self.assertFalse(row["predicted_member_t2.5"])
+
+    def test_source_level_score_aggregates_multiple_chunks(self) -> None:
+        """同一 source 的多个 audit/chunk 必须聚合为一行并取等权均值。"""
+        with temporary_dir() as tmp:
+            parsed = tmp / "parsed.jsonl"
+            scores = tmp / "toy_pcv_scores.jsonl"
+            rows = []
+            for audit_id, support in (("a1", True), ("a2", False)):
+                base = {
+                    "audit_id": audit_id,
+                    "source_id": "source-1",
+                    "source_key": "toy::source-1",
+                    "dataset": "toy",
+                    "group": "KB_Member",
+                    "pair_id": f"p-{audit_id}",
+                    "fact_id": f"f-{audit_id}",
+                    "entity_type": "MONEY",
+                }
+                rows.extend(
+                    [
+                        {**base, "mode": "rag", "claim_type": "true", "supports_true_claim": support},
+                        {**base, "mode": "rag", "claim_type": "counterfactual", "corrects_to_original_entity": support},
+                        {**base, "mode": "llm_only", "claim_type": "true"},
+                        {**base, "mode": "llm_only", "claim_type": "counterfactual"},
+                    ]
+                )
+            write_jsonl(rows, parsed)
+            compute_pcv_scores("toy", parsed, scores, force=True)
+            source_rows = list(read_jsonl(tmp / "toy_pcv_scores_source_scores.jsonl"))
+            self.assertEqual(len(source_rows), 1)
+            self.assertEqual(source_rows[0]["num_chunks"], 2)
+            self.assertEqual(source_rows[0]["pcv_score"], 1.0)
 
     def test_fact_extraction_guarantees_coverage(self) -> None:
         """方案 D:每篇有可成句实体的文档都保底产出事实,且每条带 quality_weight/selection_tier。"""

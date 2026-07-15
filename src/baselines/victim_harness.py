@@ -26,6 +26,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections import defaultdict
+from statistics import mean
 from typing import Any, Callable
 
 import numpy as np
@@ -46,6 +48,39 @@ from .RAG_MIA.rag_mia_reference import RAGMIA
 from .S2MIA.s2mia_reference import S2
 
 LOGGER = get_logger(__name__)
+
+
+def is_retryable_api_error(exc: Exception) -> bool:
+    """仅识别值得等待后重试的 API/网络错误,避免对缺依赖或代码异常空等。"""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    message = str(exc).lower()
+    markers = (
+        "empty_response",
+        "timed out",
+        "timeout",
+        "urlopen error",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "remote end closed",
+        "unexpected_eof",
+        "eof occurred",
+        "temporarily unavailable",
+        "http 403",
+        "authorization failed",
+        "http 408",
+        "http 425",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "http 520",
+        "http 522",
+        "http 524",
+    )
+    return any(marker in message for marker in markers)
 
 
 # ============================================================
@@ -84,6 +119,9 @@ class Services:
     retries: int = 3
     retry_backoff_base: float = 2.0
     retry_backoff_max: float = 30.0
+    # 短重试耗尽后,API/网络错误进入长冷却并重试同一请求,直到成功。
+    retry_until_success: bool = True
+    retry_cooldown_seconds: float = 300.0
     victim_calls: int = 0
     attacker_calls: int = 0
     _embedder: Any = field(default=None, repr=False)
@@ -95,23 +133,56 @@ class Services:
     attacker_bucket: Any = None
     # 并发下保护调用计数自增(victim_calls/attacker_calls)的锁。
     _count_lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
+    _scope_local: Any = field(default_factory=threading.local, repr=False, compare=False)
 
-    def _with_retries(self, fn: Callable[[], str], what: str) -> str:
-        """带指数退避地调用 fn;吸收瞬时错误(如 victim 网关 524)。"""
-        last_error: Exception | None = None
-        for attempt in range(self.retries + 1):
-            try:
-                return fn()
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                if attempt >= self.retries:
-                    break
-                delay = min(self.retry_backoff_max, self.retry_backoff_base * (2 ** attempt))
-                LOGGER.warning("%s 第%s次失败,%.1fs 后重试:%s", what, attempt + 1, delay, str(exc)[:120])
-                if delay > 0:
-                    time.sleep(delay)
-        assert last_error is not None
-        raise last_error
+    def begin_scope(self) -> None:
+        """开始一个目标的调用计数作用域；线程池下各目标互不串扰。"""
+        self._scope_local.victim_calls = 0
+        self._scope_local.attacker_calls = 0
+
+    def scope_counts(self) -> tuple[int, int]:
+        return (
+            int(getattr(self._scope_local, "victim_calls", 0)),
+            int(getattr(self._scope_local, "attacker_calls", 0)),
+        )
+
+    def _with_retries(
+        self,
+        fn: Callable[[], str],
+        what: str,
+        before_attempt: Callable[[], None] | None = None,
+    ) -> str:
+        """短指数退避耗尽后,对 API/网络错误长冷却并无限重试同一请求。"""
+        retry_cycle = 0
+        while True:
+            last_error: Exception | None = None
+            for attempt in range(self.retries + 1):
+                try:
+                    if before_attempt is not None:
+                        before_attempt()
+                    response = fn()
+                    if not str(response or "").strip():
+                        raise ValueError("empty_response")
+                    return str(response)
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if attempt >= self.retries:
+                        break
+                    delay = min(self.retry_backoff_max, self.retry_backoff_base * (2 ** attempt))
+                    LOGGER.warning("%s 第%s次失败,%.1fs 后重试:%s", what, attempt + 1, delay, str(exc)[:120])
+                    if delay > 0:
+                        time.sleep(delay)
+            assert last_error is not None
+            if not self.retry_until_success or not is_retryable_api_error(last_error):
+                raise last_error
+            retry_cycle += 1
+            delay = max(0.0, float(self.retry_cooldown_seconds))
+            LOGGER.warning(
+                "%s 短重试耗尽;长冷却轮次=%s,%.1fs 后重试同一请求:%s",
+                what, retry_cycle, delay, str(last_error)[:160],
+            )
+            if delay > 0:
+                time.sleep(delay)
 
     def rag_answer(self, query: str) -> str:
         """检索 top_k → 通用 RAG prompt → victim 作答(带重试)。计 1 次 victim 调用。
@@ -123,16 +194,16 @@ class Services:
         retrieved = self.retriever.retrieve(query, top_k=self.top_k)
         contexts = [r.text for r in retrieved]
         prompt = build_generic_rag_prompt(query, contexts)
-        if self.victim_bucket is not None:
-            self.victim_bucket.acquire()  # 令牌桶限速点
         out = self._with_retries(
             lambda: self.victim.generate(
                 prompt, temperature=self.temperature, timeout=self.timeout, max_tokens=self.max_tokens
             ),
             what="victim.generate",
+            before_attempt=(self.victim_bucket.acquire if self.victim_bucket is not None else None),
         )
         with self._count_lock:
             self.victim_calls += 1
+        self._scope_local.victim_calls = int(getattr(self._scope_local, "victim_calls", 0)) + 1
         # 令牌桶模式下桶已限速,不再固定 sleep;否则沿用旧的 per-call 间隔。
         if self.victim_bucket is None and self.request_interval_seconds > 0:
             time.sleep(self.request_interval_seconds)
@@ -145,11 +216,14 @@ class Services:
         """
         if self.attacker_chat is None:
             raise RuntimeError("该 baseline 需要 attacker LLM,请配置 sibling profile。")
-        if self.attacker_bucket is not None:
-            self.attacker_bucket.acquire()  # 令牌桶限速点
-        out = self._with_retries(lambda: self.attacker_chat(prompt), what="attacker.chat")
+        out = self._with_retries(
+            lambda: self.attacker_chat(prompt),
+            what="attacker.chat",
+            before_attempt=(self.attacker_bucket.acquire if self.attacker_bucket is not None else None),
+        )
         with self._count_lock:
             self.attacker_calls += 1
+        self._scope_local.attacker_calls = int(getattr(self._scope_local, "attacker_calls", 0)) + 1
         if self.attacker_bucket is None and self.request_interval_seconds > 0:
             time.sleep(self.request_interval_seconds)
         return out
@@ -217,6 +291,7 @@ def score_s2mia(text: str, svc: Services) -> float:
 
 _MBA_SINGLETON: "MBAHighDiff | None" = None
 _MBA_LOCK = threading.Lock()
+_MBA_INFERENCE_LOCK = threading.Lock()
 
 
 def _get_mba_singleton() -> "MBAHighDiff":
@@ -234,11 +309,13 @@ def score_mba(text: str, svc: Services) -> float:
 
     单例加载 proxy LM(默认 gpt2,离线只选词);victim 仍纯黑盒,只看填空 prompt。选词与打分
     逻辑见 MBA/mba_highdiff.py。【并发安全】:用 build_query/score_response 走【局部】
-    mask_answers(线程独立),不碰单例实例状态——旧的 get_attack_query→get_mia_score 隔着
-    victim 慢调用共享 self.mask_answers,并发下会被别的目标覆盖而串味算错分。
+    mask_answers(线程独立),不碰单例实例状态。Hugging Face tokenizer/model 的内部
+    借用状态不保证多线程并发安全,因此只对本地选词阶段串行化;锁在 victim 调用前释放,
+    不影响后续 RAG/API 并发。
     """
     atk = _get_mba_singleton()
-    query, mask_answers = atk.build_query(text)  # 局部 mask_answers,线程独立
+    with _MBA_INFERENCE_LOCK:
+        query, mask_answers = atk.build_query(text)  # 局部 mask_answers,线程独立
     resp = svc.rag_answer(query)
     return float(MBAHighDiff.score_response(resp, mask_answers))
 
@@ -426,15 +503,49 @@ def load_targets(splits_dir: str | Path) -> list[dict[str, Any]]:
             LOGGER.warning("Split file missing: %s", path)
             continue
         for row in read_jsonl(path):
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
             targets.append(
                 {
                     "doc_id": str(row.get("doc_id")),
                     "group": str(row.get("group")),
                     "text": str(row.get("text") or ""),
                     "source_id": row.get("source_id"),
+                    "source_key": row.get("source_key") or metadata.get("source_key"),
                 }
             )
     return targets
+
+
+def aggregate_baseline_source_scores(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把成功的 chunk-level baseline 分数等权聚合为 source-level 分数。"""
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    source_groups: dict[str, str] = {}
+    for row in rows:
+        if row.get("score") is None or row.get("error"):
+            continue
+        source_key = str(row.get("source_key") or row.get("source_id") or row.get("doc_id"))
+        group = str(row.get("group"))
+        previous = source_groups.setdefault(source_key, group)
+        if previous != group:
+            raise RuntimeError(f"Baseline source crosses membership groups: {source_key}: {previous} vs {group}")
+        buckets[source_key].append(row)
+
+    source_rows: list[dict[str, Any]] = []
+    for source_key, source_chunks in sorted(buckets.items()):
+        first = source_chunks[0]
+        source_rows.append(
+            {
+                "baseline": first.get("baseline"),
+                "source_key": source_key,
+                "source_id": first.get("source_id"),
+                "group": first.get("group"),
+                "score": mean(float(row["score"]) for row in source_chunks),
+                "num_chunks": len(source_chunks),
+                "victim_calls": sum(int(row.get("victim_calls", 0)) for row in source_chunks),
+                "attacker_calls": sum(int(row.get("attacker_calls", 0)) for row in source_chunks),
+            }
+        )
+    return source_rows
 
 
 def run_one_baseline(
@@ -463,9 +574,10 @@ def run_one_baseline(
     output = Path(output_path)
     # 断点续跑:已打分的 doc_id 跳过。
     done: dict[str, dict[str, Any]] = {}
+    target_ids = {str(target["doc_id"]) for target in targets}
     if resume and not force and output.exists():
         for r in read_jsonl(output):
-            if r.get("score") is not None and not r.get("error"):
+            if str(r.get("doc_id")) in target_ids and r.get("score") is not None and not r.get("error"):
                 done[str(r.get("doc_id"))] = r
 
     rows: list[dict[str, Any]] = list(done.values())
@@ -475,18 +587,23 @@ def run_one_baseline(
         """给单个目标打分(工作线程执行:只读共享 services,不碰 rows/磁盘)。返回一行结果。"""
         score: float | None = None
         error: str | None = None
+        services.begin_scope()
         try:
             score = float(spec.fn(t["text"], services))
-        except Exception as exc:  # 单个目标失败不应中断整批
+        except Exception as exc:  # 非 API 异常仍记录失败,避免缺依赖/代码错误无限空等
             error = str(exc)
             LOGGER.warning("%s failed on doc_id=%s: %s", name, t["doc_id"], error)
+        victim_calls, attacker_calls = services.scope_counts()
         return {
             "baseline": name,
             "doc_id": t["doc_id"],
             "group": t["group"],
             "source_id": t.get("source_id"),
+            "source_key": t.get("source_key"),
             "score": score,
             "error": error,
+            "victim_calls": victim_calls,
+            "attacker_calls": attacker_calls,
         }
 
     def _consume(row: dict[str, Any]) -> None:
@@ -507,12 +624,18 @@ def run_one_baseline(
 
     # 只用成功打分的行算指标。
     scored = [r for r in rows if r.get("score") is not None]
-    metrics = summarize_membership_scores(scored, score_key="score", threshold=threshold) if scored else {}
+    source_rows = aggregate_baseline_source_scores(scored)
+    source_output = output.with_name(f"{output.stem}_source_scores.jsonl")
+    write_jsonl(source_rows, source_output)
+    metrics = summarize_membership_scores(source_rows, score_key="score", threshold=threshold) if source_rows else {}
     return {
         "baseline": name,
         "output_path": str(output),
-        "scored": len(scored),
+        "scored": len(source_rows),
+        "scored_chunks": len(scored),
         "failed": len(rows) - len(scored),
+        "source_output_path": str(source_output),
+        "evaluation_unit": "source",
         "victim_calls": services.victim_calls,
         "attacker_calls": services.attacker_calls,
         "metrics": metrics,

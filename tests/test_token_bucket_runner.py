@@ -27,7 +27,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from src.rag.runner import TokenBucket, run_rag_and_llm_only
+from src.rag.runner import TokenBucket, _call_generator, run_rag_and_llm_only
 from src.utils.io import read_jsonl, write_jsonl
 
 
@@ -90,7 +90,7 @@ def _make_inputs(work: Path, n: int):
     return qp, bp
 
 
-def _run(work, qp, bp, client, *, workers, rpm, tag):
+def _run(work, qp, bp, client, *, workers, rpm, tag, variant_id="full_pvs"):
     rag_out = work / f"rag_{tag}.jsonl"
     llm_out = work / f"llm_{tag}.jsonl"
     with patch("src.rag.runner.RagRetriever", _FakeRetriever):
@@ -98,6 +98,8 @@ def _run(work, qp, bp, client, *, workers, rpm, tag):
             dataset="edgar", queries_path=qp, benchmark_path=bp, index_dir=work / "idx",
             rag_output_path=rag_out, llm_output_path=llm_out, client=client,
             resume=False, force=True, max_workers=workers, requests_per_minute=rpm,
+            run_llm_only=True,
+            variant_id=variant_id,
         )
     rag = {r["query_id"]: r["response"] for r in read_jsonl(rag_out)}
     llm = {r["query_id"]: r["response"] for r in read_jsonl(llm_out)}
@@ -136,6 +138,31 @@ class TokenBucketTest(unittest.TestCase):
 
 
 class ConcurrentRunnerTest(unittest.TestCase):
+    def test_variant_provenance_is_written_to_rows_and_manifest(self) -> None:
+        with temporary_dir() as work:
+            qp, bp = _make_inputs(work, 1)
+            rag_out = work / "rag_control.jsonl"
+            llm_out = work / "llm_control.jsonl"
+            with patch("src.rag.runner.RagRetriever", _FakeRetriever):
+                manifest = run_rag_and_llm_only(
+                    dataset="edgar",
+                    queries_path=qp,
+                    benchmark_path=bp,
+                    index_dir=work / "idx",
+                    rag_output_path=rag_out,
+                    llm_output_path=llm_out,
+                    client=_DetClient(),
+                    resume=False,
+                    force=True,
+                    variant_id="random_same_type_counterfactual",
+                )
+            row = next(read_jsonl(rag_out))
+            self.assertEqual(row["variant_id"], "random_same_type_counterfactual")
+            self.assertEqual(manifest["variant_id"], "random_same_type_counterfactual")
+            self.assertEqual(manifest["query_budget"], 1)
+            self.assertTrue(manifest["queries_hash"])
+            self.assertTrue(manifest["source_whitelist_hash"])
+
     def test_concurrent_output_equals_serial(self) -> None:
         """workers=4(+令牌桶) 与 workers=1 的 RAG/LLM 输出逐条一致(并发不打乱/丢/重)。"""
         with temporary_dir() as work:
@@ -162,6 +189,42 @@ class ConcurrentRunnerTest(unittest.TestCase):
 
             # 8 query × 2 call × 0.05s:串行 ~0.8s,4 并发 ~0.2s。留足裕度,只断言明显更快。
             self.assertLess(concur_t, serial_t * 0.6, f"并发未有效抗卡顿: serial={serial_t:.2f} concur={concur_t:.2f}")
+
+
+class RetryUntilSuccessTest(unittest.TestCase):
+    def test_generator_retries_across_cooldown_cycles_until_success(self) -> None:
+        class _FlakyClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def generate(self, prompt: str, **kw) -> str:
+                self.calls += 1
+                if self.calls < 5:
+                    raise TimeoutError("The read operation timed out")
+                return "ok"
+
+        client = _FlakyClient()
+        response, error = _call_generator(
+            client, "prompt", temperature=0.0, timeout=1.0, max_tokens=8,
+            retries=1, retry_backoff_base=0, retry_backoff_max=0,
+            retry_until_success=True, retry_cooldown_seconds=0,
+        )
+        self.assertEqual(client.calls, 5)
+        self.assertEqual(response, "ok")
+        self.assertIsNone(error)
+
+    def test_non_api_error_is_returned_without_infinite_retry(self) -> None:
+        class _BrokenClient:
+            def generate(self, prompt: str, **kw) -> str:
+                raise ValueError("invalid local payload")
+
+        response, error = _call_generator(
+            _BrokenClient(), "prompt", temperature=0.0, timeout=1.0, max_tokens=8,
+            retries=0, retry_backoff_base=0, retry_backoff_max=0,
+            retry_until_success=True, retry_cooldown_seconds=0,
+        )
+        self.assertEqual(response, "")
+        self.assertIn("invalid local payload", error or "")
 
 
 if __name__ == "__main__":

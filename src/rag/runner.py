@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     # 进度条；没装 tqdm 就用"原样返回"的替身，不影响逻辑。
@@ -30,11 +30,81 @@ except ImportError:  # pragma: no cover
 
 from .retriever import RagRetriever
 from ..llm.victim_client import VictimClient
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..utils.hash import sha256_file, sha256_obj
+from ..utils.io import read_jsonl, write_json, write_jsonl, write_jsonl_atomic
 from ..utils.logger import get_logger
 
 
 LOGGER = get_logger(__name__)
+
+
+def is_retryable_generator_error(exc: Exception) -> bool:
+    """识别需要长冷却后继续重试的模型 API/网络错误。"""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    message = str(exc).lower()
+    markers = (
+        "empty_response",
+        "timed out",
+        "timeout",
+        "urlopen error",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "remote end closed",
+        "unexpected_eof",
+        "eof occurred",
+        "temporarily unavailable",
+        "http 403",
+        "authorization failed",
+        "http 408",
+        "http 425",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "http 520",
+        "http 522",
+        "http 524",
+    )
+    return any(marker in message for marker in markers)
+
+
+def response_is_success(row: dict[str, Any]) -> bool:
+    """只有无错误且回答非空的记录才是有效模型响应。"""
+    return bool(row.get("query_id") and not row.get("error") and str(row.get("response") or "").strip())
+
+
+def compact_response_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """按 query_id 成功优先压实；同为成功或失败时保留最后一条。"""
+    best: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        query_id = str(row.get("query_id") or "")
+        if not query_id:
+            continue
+        previous = best.get(query_id)
+        if previous is None or response_is_success(row) or not response_is_success(previous):
+            best[query_id] = row
+    compacted = [best[key] for key in sorted(best)]
+    succeeded = sum(1 for row in compacted if response_is_success(row))
+    return compacted, {
+        "input_rows": len(rows),
+        "unique_queries": len(compacted),
+        "duplicates_removed": max(0, len(rows) - len(compacted)),
+        "succeeded": succeeded,
+        "failed": len(compacted) - succeeded,
+    }
+
+
+def compact_response_file(path: str | Path) -> dict[str, int]:
+    """压实一个响应 JSONL，并用原子替换避免留下半截文件。"""
+    p = Path(path)
+    rows = list(read_jsonl(p)) if p.exists() else []
+    compacted, stats = compact_response_rows(rows)
+    if rows:
+        write_jsonl_atomic(compacted, p)
+    return stats
 
 
 class TokenBucket:
@@ -153,6 +223,7 @@ def _make_llm_row(
     temperature: float,
     max_tokens: int,
     created_at: str,
+    variant_id: str,
 ) -> dict[str, Any]:
     """构造一条 LLM-only 结果行。
 
@@ -163,10 +234,14 @@ def _make_llm_row(
     return {
         "request_id": f"llm_req_{query_id}",
         "mode": "llm_only",
+        "variant_id": variant_id,
         "query_id": query_id,
         "pair_id": query_row.get("pair_id"),
         "fact_id": query_row.get("fact_id"),
         "audit_id": query_row["audit_id"],
+        "doc_id": query_row.get("doc_id"),
+        "source_id": query_row.get("source_id") or query_row.get("doc_id"),
+        "source_key": query_row.get("source_key") or query_row.get("source_id") or query_row.get("doc_id"),
         "claim_type": query_row.get("claim_type"),
         "dataset": dataset,
         "group": query_row["group"],
@@ -196,14 +271,17 @@ def run_rag_and_llm_only(
     retries: int = 2,
     retry_backoff_base: float = 2.0,
     retry_backoff_max: float = 60.0,
+    retry_until_success: bool = True,
+    retry_cooldown_seconds: float = 300.0,
     request_interval_seconds: float = 0.0,
     max_workers: int = 1,
     resume: bool = True,
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
-    run_llm_only: bool = True,
+    run_llm_only: bool = False,
     allowed_fact_ids: set[str] | None = None,
     requests_per_minute: float = 0.0,
+    variant_id: str = "full_pvs",
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -226,6 +304,8 @@ def run_rag_and_llm_only(
         retries:                 失败后最多重试几次。
         retry_backoff_base:      重试退避的基数(指数退避)。
         retry_backoff_max:       重试退避的上限秒数。
+        retry_until_success:     API/网络错误在短重试耗尽后是否长冷却并继续重试到成功。
+        retry_cooldown_seconds:  每轮短重试耗尽后的长冷却秒数。
         request_interval_seconds:每次请求之间的固定间隔(限速，防止把 API 打挂)。
         max_workers:             并发线程数，>1 时多条查询并行处理。
         resume:                  断点续跑：跳过已成功的查询。
@@ -248,6 +328,9 @@ def run_rag_and_llm_only(
     # 没有大模型客户端就没法生成回答，直接报错。
     if client is None:
         raise ValueError("run_rag_and_llm_only requires a configured VictimClient.")
+    variant = str(variant_id or "").strip()
+    if not variant:
+        raise ValueError("variant_id must be non-empty")
     rag_output = Path(rag_output_path)
     llm_output = Path(llm_output_path)
     # done_rag / done_llm：已经成功跑完的查询 id 集合(用于跳过)。
@@ -258,6 +341,9 @@ def run_rag_and_llm_only(
     append_llm = False
     if resume and not force:
         # 续跑模式下，先扫描已有输出，记下哪些查询已经成功完成。
+        compact_response_file(rag_output)
+        if run_llm_only:
+            compact_response_file(llm_output)
         done_rag = _successful_query_ids(rag_output)
         done_llm = _successful_query_ids(llm_output)
         append_rag = rag_output.exists()
@@ -284,7 +370,7 @@ def run_rag_and_llm_only(
             token_bucket.acquire()
 
     # 收集本次需要处理的 query（任一模式尚未成功完成）。
-    pending: list[dict[str, Any]] = []
+    accepted_queries: list[dict[str, Any]] = []
     for query_row in read_jsonl(queries_path):
         # 只处理通过筛选的查询(accepted)；默认 True 是为兼容没有该字段的老数据。
         if not query_row.get("accepted", True):
@@ -292,6 +378,9 @@ def run_rag_and_llm_only(
         # primary-only 砍量：只保留 fact_id 在白名单内的 query（None=不过滤）。
         if allowed_fact_ids is not None and str(query_row.get("fact_id")) not in allowed_fact_ids:
             continue
+        accepted_queries.append(query_row)
+    pending: list[dict[str, Any]] = []
+    for query_row in accepted_queries:
         qid = str(query_row["query_id"])
         # 只要 RAG 或(启用了 LLM-only 时)LLM-only 任一边还没成功，就需要处理这条查询。
         if qid not in done_rag or (run_llm_only and qid not in done_llm):
@@ -325,7 +414,6 @@ def run_rag_and_llm_only(
 
         # —— RAG 模式：只有这条查询的 RAG 还没成功时才跑 ——
         if query_id not in done_rag:
-            rate_gate()  # 令牌桶限速点(启用时);否则空操作,由下方 post_sleep 限速。
             response, error = _call_generator(
                 client,
                 build_rag_prompt(query, contexts),
@@ -335,6 +423,9 @@ def run_rag_and_llm_only(
                 retries=retries,
                 retry_backoff_base=retry_backoff_base,
                 retry_backoff_max=retry_backoff_max,
+                retry_until_success=retry_until_success,
+                retry_cooldown_seconds=retry_cooldown_seconds,
+                before_attempt=rate_gate,
             )
             # 每次请求后按配置歇一会儿(限速)；用令牌桶时 post_sleep=0(桶已限速)。
             _sleep_between_requests(post_sleep)
@@ -343,10 +434,14 @@ def run_rag_and_llm_only(
             rag_row = {
                 "request_id": f"rag_req_{query_id}",
                 "mode": "rag",
+                "variant_id": variant,
                 "query_id": query_id,
                 "pair_id": query_row.get("pair_id"),
                 "fact_id": query_row.get("fact_id"),
                 "audit_id": query_row["audit_id"],
+                "doc_id": query_row.get("doc_id"),
+                "source_id": query_row.get("source_id") or query_row.get("doc_id"),
+                "source_key": query_row.get("source_key") or query_row.get("source_id") or query_row.get("doc_id"),
                 "claim_type": query_row.get("claim_type"),
                 "dataset": dataset,
                 "group": query_row["group"],
@@ -366,7 +461,6 @@ def run_rag_and_llm_only(
 
         # —— LLM-only 模式：该查询 LLM-only 还没成功、且未关闭该路时才跑 ——
         if run_llm_only and query_id not in done_llm:
-            rate_gate()
             response, error = _call_generator(
                 client,
                 build_llm_only_prompt(query),
@@ -376,6 +470,9 @@ def run_rag_and_llm_only(
                 retries=retries,
                 retry_backoff_base=retry_backoff_base,
                 retry_backoff_max=retry_backoff_max,
+                retry_until_success=retry_until_success,
+                retry_cooldown_seconds=retry_cooldown_seconds,
+                before_attempt=rate_gate,
             )
             _sleep_between_requests(post_sleep)
             if error:
@@ -383,6 +480,7 @@ def run_rag_and_llm_only(
             llm_row = _make_llm_row(
                 query_row, response, error,
                 dataset=dataset, temperature=temperature, max_tokens=max_tokens, created_at=created_at,
+                variant_id=variant,
             )
         return rag_row, llm_row, fails
 
@@ -425,19 +523,42 @@ def run_rag_and_llm_only(
     if llm_rows:
         write_jsonl(llm_rows, llm_output, append=append_llm)
 
+    rag_stats = compact_response_file(rag_output)
+    llm_stats = compact_response_file(llm_output) if run_llm_only else {
+        "input_rows": 0, "unique_queries": 0, "duplicates_removed": 0, "succeeded": 0, "failed": 0,
+    }
+    planned = len({str(row["query_id"]) for row in accepted_queries})
+
     manifest = {
         "dataset": dataset,
+        "variant_id": variant,
+        "query_budget": planned,
         "queries_path": str(queries_path),
+        "queries_hash": sha256_file(queries_path),
+        "source_whitelist_hash": sha256_obj(sorted({
+            str(row.get("source_key") or row.get("source_id") or row.get("doc_id"))
+            for row in accepted_queries
+            if str(row.get("group")) in {"KB_Member", "True_Non_Member"}
+        })),
         "benchmark_path": str(benchmark_path),
         "index_dir": str(index_dir),
         "rag_output_path": str(rag_output),
         "llm_output_path": str(llm_output),
+        "planned_queries": planned,
+        "attempted_queries": completed,
         "completed_queries": completed,
         "failures": failures,
+        "rag_integrity": {**rag_stats, "missing": max(0, planned - rag_stats["succeeded"])},
+        "llm_only_integrity": {
+            **llm_stats,
+            "missing": max(0, planned - llm_stats["succeeded"]) if run_llm_only else 0,
+        },
         "max_workers": workers,
         "run_llm_only": run_llm_only,
         "allowed_fact_ids_count": (len(allowed_fact_ids) if allowed_fact_ids is not None else None),
         "requests_per_minute": requests_per_minute,
+        "retry_until_success": retry_until_success,
+        "retry_cooldown_seconds": retry_cooldown_seconds,
         "rate_limit_mode": "token_bucket" if token_bucket is not None else "fixed_interval",
         "created_at": created_at,
         "config_snapshot": config_snapshot or {},
@@ -459,6 +580,9 @@ def _call_generator(
     retries: int,
     retry_backoff_base: float,
     retry_backoff_max: float,
+    retry_until_success: bool = False,
+    retry_cooldown_seconds: float = 300.0,
+    before_attempt: Callable[[], None] | None = None,
 ) -> tuple[str, str | None]:
     """带重试调用 generator。
 
@@ -469,34 +593,47 @@ def _call_generator(
         prompt:            提示词。
         temperature/timeout/max_tokens: 生成参数(见上面主函数说明)。
         retries:           最多额外重试次数。
-        retry_backoff_base/retry_backoff_max: 控制重试等待时间。
+        retry_backoff_base/retry_backoff_max: 控制短重试等待时间。
+        retry_until_success: API/网络错误是否在短重试耗尽后继续长冷却重试。
+        retry_cooldown_seconds: 长冷却时间。
     返回:
         (response, error)：成功时 error 为 None；多次失败后返回 ("", 错误信息)。
     """
-    last_error = None
-    # 总共尝试 retries+1 次(第 1 次 + retries 次重试)。
-    for attempt in range(retries + 1):
-        try:
-            # 成功就立即返回回答和 None(表示无错误)。
-            return client.generate(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens), None
-        except Exception as exc:
-            last_error = str(exc)
-            # 已经是最后一次尝试，记录警告并跳出循环。
-            if attempt >= retries:
-                LOGGER.warning("Generator call failed attempt=%s error=%s", attempt + 1, last_error)
-                break
-            # 还能再试：算出本次该等多久，打日志后睡一会儿再重试。
-            delay = _retry_delay(attempt, retry_backoff_base, retry_backoff_max)
-            LOGGER.warning(
-                "Generator call failed attempt=%s retry_in=%.1fs error=%s",
-                attempt + 1,
-                delay,
-                last_error,
-            )
-            if delay > 0:
-                time.sleep(delay)
-    # 全部失败，返回空回答和最后一次的错误信息。
-    return "", last_error
+    retry_cycle = 0
+    while True:
+        last_exception: Exception | None = None
+        # 总共尝试 retries+1 次(第 1 次 + retries 次短重试)。
+        for attempt in range(retries + 1):
+            try:
+                if before_attempt is not None:
+                    before_attempt()
+                response = client.generate(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+                if not str(response or "").strip():
+                    raise ValueError("empty_response")
+                return str(response), None
+            except Exception as exc:  # noqa: BLE001
+                last_exception = exc
+                if attempt >= retries:
+                    break
+                delay = _retry_delay(attempt, retry_backoff_base, retry_backoff_max)
+                LOGGER.warning(
+                    "Generator call failed attempt=%s retry_in=%.1fs error=%s",
+                    attempt + 1, delay, str(exc),
+                )
+                if delay > 0:
+                    time.sleep(delay)
+        assert last_exception is not None
+        if not retry_until_success or not is_retryable_generator_error(last_exception):
+            LOGGER.warning("Generator call failed after short retries error=%s", str(last_exception))
+            return "", str(last_exception)
+        retry_cycle += 1
+        delay = max(0.0, float(retry_cooldown_seconds))
+        LOGGER.warning(
+            "Generator short retries exhausted; cooldown_cycle=%s retry_in=%.1fs error=%s",
+            retry_cycle, delay, str(last_exception),
+        )
+        if delay > 0:
+            time.sleep(delay)
 
 
 def _retry_delay(attempt: int, retry_backoff_base: float, retry_backoff_max: float) -> float:

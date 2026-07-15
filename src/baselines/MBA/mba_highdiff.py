@@ -24,8 +24,8 @@ proxy LM 只在 attacker 侧**离线选词**(不碰 victim);victim 仍只看最�
 - 跳过官方的拼写纠正模型(spell-correction):它只为兜底被 BPE 切碎的 OCR/拼写错词;edgar
   财报文本干净,fragmented 词直接用其多子词的 max-rank 近似(官方 FRAGMENT 分支逻辑,但不做
   拼写纠正、候选只保留原词)。差分测试据此断言。
-- fragmented 判定与首子词取用统一走 add_special_tokens=False,适配 gpt2(无 BOS),
-  对齐官方"词被切成多于一个子词"的本意。
+- fragmented 判定与首子词取用统一走 add_special_tokens=False,并按词在正文中的真实
+  前导空格形式编码,适配 gpt2(无 BOS),对齐官方"词被切成多于一个子词"的本意。
 """
 
 from __future__ import annotations
@@ -104,9 +104,18 @@ class MBAHighDiff:
         """统一不加 special token 的子词 id(适配 gpt2 无 BOS)。"""
         return self.tok(text, add_special_tokens=False)["input_ids"]
 
+    def _contextual_word_ids(self, word: str) -> list[int]:
+        """返回单词出现在正文中间时的 token id。
+
+        GPT-2 一类 byte-level BPE 会把前导空格编码进 token；例如 ``contract`` 与
+        `` contract`` 是两个不同 token。MBA 计算 P(word|prefix) 时必须使用后者，
+        否则 rank 对应的不是模型在当前 prefix 后实际预测的词元。
+        """
+        return self._ids(" " + word)
+
     def _fragmented_indices(self, words: list[str]) -> set[int]:
         """proxy tokenizer 把哪些词切成了多于一个子词(对齐官方 _fragmented_word_extraction)。"""
-        return {i for i, w in enumerate(words) if len(self._ids(w)) > 1}
+        return {i for i, w in enumerate(words) if len(self._contextual_word_ids(w)) > 1}
 
     def _compute_rank(self, prefix: str, token_id: int) -> int:
         """rank(P(token|prefix)):token 在"下一个词"概率排序里的名次(0=最可能)。
@@ -152,17 +161,17 @@ class MBAHighDiff:
                     score = -1
                     cand_within.append([""])
                 elif j not in frag:
-                    tok_ids = self._ids(words[j])
-                    score = self._compute_rank(prefix + " ", tok_ids[0]) if tok_ids else -1
+                    tok_ids = self._contextual_word_ids(words[j])
+                    score = self._compute_rank(prefix, tok_ids[0]) if tok_ids else -1
                     cand_within.append([words[j]])
                 else:
                     # fragmented:逐子词在累进 prefix 上算 rank,取 max(此处不做拼写纠正)。
-                    tok_ids = self._ids(words[j])
+                    tok_ids = self._contextual_word_ids(words[j])
                     inner_scores: list[int] = []
                     seen: list[int] = []
                     for tok in tok_ids:
                         inner_str = self.tok.decode(seen)
-                        inner_scores.append(self._compute_rank(prefix + " " + inner_str, tok))
+                        inner_scores.append(self._compute_rank(prefix + inner_str, tok))
                         seen.append(tok)
                     score = max(inner_scores) if inner_scores else -1
                     cand_within.append([words[j]])

@@ -138,6 +138,8 @@ def generate_paired_claims_file(
                     "fact_id": fact["fact_id"],
                     "audit_id": fact["audit_id"],
                     "doc_id": fact.get("doc_id"),
+                    "source_id": fact.get("source_id") or fact.get("doc_id"),
+                    "source_key": fact.get("source_key") or fact.get("source_id") or fact.get("doc_id"),
                     "dataset": fact["dataset"],
                     "group": fact["group"],
                     "true_claim": true_claim,

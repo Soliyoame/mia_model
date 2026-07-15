@@ -79,6 +79,8 @@ def main() -> int:
         false_acceptance_penalty_value=float(scoring.get("false_acceptance_penalty", 0.0)),
         thresholds=[float(x) for x in scoring.get("thresholds", [0.3, 0.5, 0.7, 1.0])],
         facts_path=resolve_path(config["paths"]["facts_dir"]) / f"{args.dataset}_facts.jsonl",
+        benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
+        queries_path=resolve_path(config["paths"]["stealth_filtered_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
         resume=not args.no_resume,
         force=args.force,
     )

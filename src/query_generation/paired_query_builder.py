@@ -129,6 +129,8 @@ def generate_paired_queries_file(
                     "fact_id": pair["fact_id"],
                     "audit_id": pair["audit_id"],
                     "doc_id": pair.get("doc_id"),
+                    "source_id": pair.get("source_id") or pair.get("doc_id"),
+                    "source_key": pair.get("source_key") or pair.get("source_id") or pair.get("doc_id"),
                     "dataset": pair["dataset"],
                     "group": pair["group"],
                     "claim_type": claim_type,

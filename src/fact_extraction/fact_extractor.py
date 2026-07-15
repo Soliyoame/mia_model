@@ -304,6 +304,8 @@ def extract_facts_file(
                     "fact_id": fact_id,
                     "audit_id": row["audit_id"],
                     "doc_id": row.get("doc_id"),
+                    "source_id": row.get("source_id") or row.get("doc_id"),
+                    "source_key": row.get("source_key") or row.get("source_id") or row.get("doc_id"),
                     "dataset": row["dataset"],
                     "group": row["group"],
                     "subject": _subject_from_sentence(sentence, entity_text),

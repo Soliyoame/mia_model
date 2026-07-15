@@ -62,6 +62,7 @@ class SentenceTransformerEmbeddingModel:
 
     # 要加载的模型名称(来自 configs 配置或默认值)。
     model_name: str
+    local_files_only: bool = False
 
     def __post_init__(self) -> None:
         """dataclass 初始化后自动调用：在这里真正把模型加载进内存。
@@ -75,7 +76,10 @@ class SentenceTransformerEmbeddingModel:
         from sentence_transformers import SentenceTransformer
 
         # 按名字下载/加载模型(第一次会联网下载，之后用本地缓存)。
-        self._model = SentenceTransformer(self.model_name)
+        self._model = SentenceTransformer(
+            self.model_name,
+            local_files_only=self.local_files_only,
+        )
         self.name = self.model_name
         # 询问模型它输出的向量是多少维。
         dim = self._model.get_sentence_embedding_dimension()
@@ -97,7 +101,13 @@ class SentenceTransformerEmbeddingModel:
         return np.asarray(vectors, dtype="float32")
 
 
-def build_embedding_model(model_name: str | None, backend: str = "auto", dim: int = 384) -> EmbeddingModel:
+def build_embedding_model(
+    model_name: str | None,
+    backend: str = "auto",
+    dim: int = 384,
+    *,
+    local_files_only: bool = False,
+) -> EmbeddingModel:
     """Create the configured embedding model.
 
     ``dim`` is retained for backward-compatible call sites, but real embedding
@@ -127,7 +137,7 @@ def build_embedding_model(model_name: str | None, backend: str = "auto", dim: in
         raise ValueError("Hashing embedding is disabled. Configure a real sentence-transformers model.")
     # 这几种写法都表示"用 sentence-transformers 真实模型"。
     if normalized_backend in {"auto", "sentence_transformers", "sentence-transformer"}:
-        return SentenceTransformerEmbeddingModel(model_name)
+        return SentenceTransformerEmbeddingModel(model_name, local_files_only=local_files_only)
     # 其它后端名都不认识，报错提示。
     raise ValueError(f"Unsupported embedding backend: {backend}")
 

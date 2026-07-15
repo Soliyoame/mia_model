@@ -16,12 +16,74 @@
 
 from __future__ import annotations
 
+import math
+import random
 from typing import Any
 
 
 def safe_div(num: float, den: float) -> float:
     """安全除法:分母为 0 时返回 0.0,避免除零崩溃。"""
     return num / den if den else 0.0
+
+
+def _binomial_cdf(k: int, n: int, probability: float) -> float:
+    """计算 P(X<=k)，用于无额外依赖的精确二项区间。"""
+    if k < 0:
+        return 0.0
+    if k >= n:
+        return 1.0
+    return sum(
+        math.comb(n, index)
+        * probability**index
+        * (1.0 - probability) ** (n - index)
+        for index in range(k + 1)
+    )
+
+
+def clopper_pearson_interval(
+    successes: int,
+    trials: int,
+    *,
+    confidence: float = 0.95,
+) -> tuple[float | None, float | None]:
+    """返回二项比例的双侧 Clopper-Pearson 精确置信区间。"""
+    if trials <= 0 or successes < 0 or successes > trials:
+        return None, None
+    alpha = 1.0 - confidence
+
+    def bisect(predicate: Any) -> float:
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2.0
+            if predicate(mid):
+                hi = mid
+            else:
+                lo = mid
+        return (lo + hi) / 2.0
+
+    lower = 0.0 if successes == 0 else bisect(
+        lambda p: 1.0 - _binomial_cdf(successes - 1, trials, p) >= alpha / 2.0
+    )
+    upper = 1.0 if successes == trials else bisect(
+        lambda p: _binomial_cdf(successes, trials, p) <= alpha / 2.0
+    )
+    return lower, upper
+
+
+def low_fpr_exact_intervals(negative_count: int) -> list[dict[str, Any]]:
+    """列出 0/1/2 个误报对应的 FPR 与精确区间。"""
+    rows: list[dict[str, Any]] = []
+    for false_positives in range(3):
+        if false_positives > negative_count:
+            continue
+        lower, upper = clopper_pearson_interval(false_positives, negative_count)
+        rows.append({
+            "false_positives": false_positives,
+            "negative_count": negative_count,
+            "FPR": safe_div(false_positives, negative_count),
+            "FPR_CI95": [lower, upper],
+        })
+    return rows
 
 
 def roc_auc(rows: list[dict[str, Any]], score_key: str = "pcv_score", positive_group: str = "KB_Member") -> float | None:
@@ -137,7 +199,11 @@ def threshold_curve(rows: list[dict[str, Any]], score_key: str = "pcv_score") ->
         每个阈值一行指标的列表。
     """
     # 候选阈值 = 数据中出现过的所有分数 ∪ 几个常用值,去重后升序。
-    scores = sorted({float(row.get(score_key, 0.0)) for row in rows} | {0.0, 0.2, 0.3, 0.4, 0.5, 1.0})
+    # 显式加入 ±∞，保证 ROC 一定包含 (FPR=0,TPR=0) 与 (FPR=1,TPR=1) 两个端点。
+    scores = sorted(
+        {float(row.get(score_key, 0.0)) for row in rows}
+        | {float("-inf"), 0.0, 0.2, 0.3, 0.4, 0.5, 1.0, float("inf")}
+    )
     return [rates_at_threshold(rows, threshold, score_key=score_key) for threshold in scores]
 
 
@@ -173,11 +239,229 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     # Accuracy@best:扫所有阈值能达到的最高准确率(=攻击正确判定成员/非成员的最高比率)。
     # 注意是"最优阈值下"的准确率,严格比较时该用独立验证集定阈,这里作方向性参考。
     best_acc = max((float(r["Accuracy"]) for r in curve), default=0.0)
+    oracle_tpr_1 = tpr_at_fpr(curve, 0.01)
+    oracle_tpr_5 = tpr_at_fpr(curve, 0.05)
     return {
         "AUC": roc_auc(rows, score_key=score_key),
         **fixed,
+        "Oracle Accuracy@best": best_acc,
+        "Oracle TPR@1%FPR": oracle_tpr_1,
+        "Oracle TPR@5%FPR": oracle_tpr_5,
+        # 旧字段保留兼容，但新报告必须显示 Oracle 前缀。
         "Accuracy@best": best_acc,
-        "TPR@1%FPR": tpr_at_fpr(curve, 0.01),
-        "TPR@5%FPR": tpr_at_fpr(curve, 0.05),
+        "TPR@1%FPR": oracle_tpr_1,
+        "TPR@5%FPR": oracle_tpr_5,
         "threshold_curve": curve,
+    }
+
+
+def conformal_nonmember_p_value(
+    score: float,
+    reserve_scores: list[float],
+) -> float:
+    """用已知非成员 Reserve 分数计算保守的非成员 conformal p-value。
+
+    高分更像成员。使用 ``>=`` 将与候选并列的 Reserve 计入尾部，避免随机拆 ties 美化结果。
+    """
+    if not reserve_scores:
+        raise ValueError("Reserve scores are required for conformal calibration")
+    tail = sum(1 for value in reserve_scores if value >= score)
+    return (1.0 + tail) / (len(reserve_scores) + 1.0)
+
+
+def summarize_conformal_membership(
+    rows: list[dict[str, Any]],
+    *,
+    score_key: str = "pcv_score",
+    alpha: float = 0.01,
+    calibration_group: str = "Reserve",
+    positive_group: str = "KB_Member",
+) -> dict[str, Any]:
+    """在独立 Reserve 上冻结 conformal 规则，再评估测试 TPR/FPR。"""
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0,1): {alpha}")
+    reserve_scores = [
+        float(row.get(score_key, 0.0))
+        for row in rows
+        if str(row.get("group")) == calibration_group
+    ]
+    eval_rows = [row for row in rows if str(row.get("group")) != calibration_group]
+    if not reserve_scores:
+        return {
+            "status": "missing_reserve",
+            "target_alpha": alpha,
+            "reserve_count": 0,
+            "score_key": score_key,
+        }
+
+    predictions: list[tuple[dict[str, Any], bool, float]] = []
+    for row in eval_rows:
+        p_value = conformal_nonmember_p_value(float(row.get(score_key, 0.0)), reserve_scores)
+        predictions.append((row, p_value <= alpha, p_value))
+
+    pos_total = sum(1 for row, _, _ in predictions if str(row.get("group")) == positive_group)
+    true_non_total = sum(1 for row, _, _ in predictions if str(row.get("group")) == "True_Non_Member")
+    spoof_total = sum(1 for row, _, _ in predictions if str(row.get("group")) == "Spoofed_Non_Member")
+    tp = sum(1 for row, pred, _ in predictions if pred and str(row.get("group")) == positive_group)
+    fp_true = sum(1 for row, pred, _ in predictions if pred and str(row.get("group")) == "True_Non_Member")
+    fp_spoof = sum(1 for row, pred, _ in predictions if pred and str(row.get("group")) == "Spoofed_Non_Member")
+    negative_total = true_non_total + spoof_total
+    return {
+        "status": "ok",
+        "target_alpha": alpha,
+        "score_key": score_key,
+        "reserve_count": len(reserve_scores),
+        "eval_count": len(eval_rows),
+        "TPR": safe_div(tp, pos_total),
+        "realized_FPR": safe_div(fp_true + fp_spoof, negative_total),
+        "FPR-True_Non_Member": safe_div(fp_true, true_non_total),
+        "FPR-Spoofed_Non_Member": safe_div(fp_spoof, spoof_total),
+        "true_positives": tp,
+        "false_positives": fp_true + fp_spoof,
+        "positive_count": pos_total,
+        "negative_count": negative_total,
+        "min_attainable_p": 1.0 / (len(reserve_scores) + 1.0),
+    }
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    """小型线性插值分位数，避免为 CI 引入额外依赖。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = (len(ordered) - 1) * q
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return ordered[lo]
+    weight = pos - lo
+    return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
+
+
+def bootstrap_auc_ci(
+    rows: list[dict[str, Any]],
+    *,
+    score_key: str = "pcv_score",
+    positive_group: str = "KB_Member",
+    n_bootstrap: int = 2000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """在正/负 source 池内分层重采样，给 source-level AUC 计算 95% CI。"""
+    positives = [row for row in rows if str(row.get("group")) == positive_group]
+    negatives = [row for row in rows if str(row.get("group")) != positive_group]
+    point = roc_auc(rows, score_key=score_key, positive_group=positive_group)
+    if not positives or not negatives or n_bootstrap <= 0:
+        return {"estimate": point, "ci95": [None, None], "bootstrap": 0, "seed": seed}
+    rng = random.Random(seed)
+    samples: list[float] = []
+    for _ in range(n_bootstrap):
+        sample = rng.choices(positives, k=len(positives)) + rng.choices(negatives, k=len(negatives))
+        auc = roc_auc(sample, score_key=score_key, positive_group=positive_group)
+        if auc is not None:
+            samples.append(float(auc))
+    return {
+        "estimate": point,
+        "ci95": [_percentile(samples, 0.025), _percentile(samples, 0.975)],
+        "bootstrap": n_bootstrap,
+        "seed": seed,
+    }
+
+
+def bootstrap_conformal_ci(
+    rows: list[dict[str, Any]],
+    *,
+    score_key: str = "pcv_score",
+    alpha: float = 0.01,
+    calibration_group: str = "Reserve",
+    n_bootstrap: int = 2000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """同时重采样 Reserve 与测试组，传播 conformal 阈值的不确定性。"""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("group")), []).append(row)
+    reserve = grouped.get(calibration_group, [])
+    eval_groups = {group: values for group, values in grouped.items() if group != calibration_group}
+    point = summarize_conformal_membership(
+        rows, score_key=score_key, alpha=alpha, calibration_group=calibration_group
+    )
+    if not reserve or not eval_groups or n_bootstrap <= 0:
+        return {**point, "TPR_ci95": [None, None], "FPR_ci95": [None, None], "bootstrap": 0, "seed": seed}
+    rng = random.Random(seed)
+    tprs: list[float] = []
+    fprs: list[float] = []
+    for _ in range(n_bootstrap):
+        sample = rng.choices(reserve, k=len(reserve))
+        for values in eval_groups.values():
+            sample.extend(rng.choices(values, k=len(values)))
+        metric = summarize_conformal_membership(
+            sample, score_key=score_key, alpha=alpha, calibration_group=calibration_group
+        )
+        if metric.get("status") == "ok":
+            tprs.append(float(metric["TPR"]))
+            fprs.append(float(metric["realized_FPR"]))
+    return {
+        **point,
+        "TPR_ci95": [_percentile(tprs, 0.025), _percentile(tprs, 0.975)],
+        "FPR_ci95": [_percentile(fprs, 0.025), _percentile(fprs, 0.975)],
+        "bootstrap": n_bootstrap,
+        "seed": seed,
+    }
+
+
+def paired_bootstrap_metric_delta(
+    left_rows: list[dict[str, Any]],
+    right_rows: list[dict[str, Any]],
+    *,
+    left_score_key: str,
+    right_score_key: str,
+    id_key: str = "source_key",
+    positive_group: str = "KB_Member",
+    n_bootstrap: int = 2000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """在共同 source 上使用相同分层重采样索引，估计 left-right 指标差。"""
+    left = {str(row.get(id_key)): row for row in left_rows}
+    right = {str(row.get(id_key)): row for row in right_rows}
+    common = sorted(set(left) & set(right))
+    common = [key for key in common if str(left[key].get("group")) == str(right[key].get("group"))]
+    positives = [key for key in common if str(left[key].get("group")) == positive_group]
+    negatives = [key for key in common if str(left[key].get("group")) != positive_group]
+
+    def metrics(keys: list[str]) -> tuple[dict[str, Any], dict[str, Any]]:
+        lrows = [left[key] for key in keys]
+        rrows = [right[key] for key in keys]
+        return (
+            summarize_membership_scores(lrows, score_key=left_score_key),
+            summarize_membership_scores(rrows, score_key=right_score_key),
+        )
+
+    point_left, point_right = metrics(common) if positives and negatives else ({}, {})
+    fields = ("AUC", "Oracle TPR@1%FPR", "Oracle TPR@5%FPR")
+    point = {
+        field: (
+            float(point_left[field]) - float(point_right[field])
+            if point_left.get(field) is not None and point_right.get(field) is not None else None
+        )
+        for field in fields
+    }
+    samples: dict[str, list[float]] = {field: [] for field in fields}
+    if positives and negatives and n_bootstrap > 0:
+        rng = random.Random(seed)
+        for _ in range(n_bootstrap):
+            sampled = rng.choices(positives, k=len(positives)) + rng.choices(negatives, k=len(negatives))
+            lmetric, rmetric = metrics(sampled)
+            for field in fields:
+                if lmetric.get(field) is not None and rmetric.get(field) is not None:
+                    samples[field].append(float(lmetric[field]) - float(rmetric[field]))
+    return {
+        "common_sources": len(common),
+        "positive_sources": len(positives),
+        "negative_sources": len(negatives),
+        "estimate": point,
+        "ci95": {field: [_percentile(values, 0.025), _percentile(values, 0.975)] for field, values in samples.items()},
+        "bootstrap": n_bootstrap if positives and negatives else 0,
+        "seed": seed,
     }

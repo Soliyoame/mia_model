@@ -67,7 +67,14 @@ def main() -> int:
     args = parse_args()
     logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/report.log"), level="INFO")
     out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
-    scores_path = model_scoped_dir("outputs/scores", args.dataset) / f"{args.dataset}_pcv_scores.jsonl"
+    scores_dir = model_scoped_dir("outputs/scores", args.dataset)
+    source_scores_path = scores_dir / f"{args.dataset}_pcv_scores_source_scores.jsonl"
+    if not source_scores_path.exists():
+        raise FileNotFoundError(f"Source-level scores are required for final report: {source_scores_path}")
+    scores_path = source_scores_path
+    coverage_path = scores_dir / f"{args.dataset}_pcv_scores_source_coverage.jsonl"
+    if not coverage_path.exists():
+        raise FileNotFoundError(f"Source coverage ledger is required for final report: {coverage_path}")
     report_json_path = out_dir / f"{args.dataset}_final_report.json"
     summary_md_path = out_dir / f"{args.dataset}_summary.md"
     report = generate_final_report(
@@ -76,7 +83,7 @@ def main() -> int:
         scores_path=scores_path,
         stealth_manifest_path=resolve_path("outputs/stealth_filtered_queries") / f"{args.dataset}_paired_queries.manifest.json",
         index_manifest_path=resolve_path("indexes") / args.dataset / "index_manifest.json",
-        baseline_path=model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_results.jsonl",
+        baseline_path=model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_comparison.jsonl",
         mechanism_path=model_scoped_dir("outputs/mechanisms", args.dataset) / f"{args.dataset}_mechanism_report.json",
         defense_path=model_scoped_dir("outputs/defenses", args.dataset) / f"{args.dataset}_defense_results.json",
         report_json_path=report_json_path,
@@ -84,6 +91,7 @@ def main() -> int:
         threshold=args.threshold,
         resume=not args.no_resume,
         force=args.force,
+        coverage_path=coverage_path,
     )
     logger.info("Step 15 finished: %s", report)
 
@@ -128,8 +136,9 @@ def main() -> int:
             "scale": _read_scale(),
             "victim_model": os.environ.get("PCV_VICTIM_MODEL", ""),
             "auc_pcv": metrics.get("AUC"),
-            "tpr_at_1fpr": metrics.get("TPR@1%FPR"),
-            "tpr_at_5fpr": metrics.get("TPR@5%FPR"),
+            "oracle_tpr_at_1fpr": metrics.get("Oracle TPR@1%FPR"),
+            "oracle_tpr_at_5fpr": metrics.get("Oracle TPR@5%FPR"),
+            "calibrated_alpha_1": full_report.get("calibrated_attack_results", {}).get("alpha_0.01"),
         },
     )
     hist = [r for r in read_jsonl(index_path(args.dataset)) if r.get("kind") == "final_report"]

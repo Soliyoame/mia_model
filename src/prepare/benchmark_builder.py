@@ -88,6 +88,7 @@ def build_pcv_attack_benchmark(
         groups.append(("Reserve", reserve_path, False))
 
     records: list[dict[str, Any]] = []
+    source_groups: dict[str, str] = {}
     audit_idx = 0
     created_at = datetime.now(timezone.utc).isoformat()
     for group, path, in_kb in groups:
@@ -95,12 +96,22 @@ def build_pcv_attack_benchmark(
             # 安全校验:非成员组的记录绝不能带 in_knowledge_base=True,否则负类被污染。
             if group != "KB_Member" and bool(row.get("in_knowledge_base", False)):
                 raise RuntimeError(f"Non-member row is incorrectly marked as in_knowledge_base: {row.get('doc_id')}")
+            source_id = str(row.get("source_id") or row.get("doc_id") or row.get("sample_id") or "")
+            row_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            source_key = str(row.get("source_key") or row_meta.get("source_key") or source_id)
+            previous_group = source_groups.setdefault(source_key, group)
+            if previous_group != group:
+                raise RuntimeError(
+                    f"Source crosses benchmark groups: source_key={source_key} groups={previous_group},{group}"
+                )
             records.append(
                 {
                     "audit_id": f"{dataset}_audit_{audit_idx:06d}",
                     "dataset": dataset,
                     "group": group,
                     "doc_id": row.get("doc_id") or row.get("sample_id") or row.get("source_id"),
+                    "source_id": source_id,
+                    "source_key": source_key,
                     "text": row["text"],
                     "text_hash": row["text_hash"],
                     "in_knowledge_base": in_kb,
@@ -111,7 +122,7 @@ def build_pcv_attack_benchmark(
                         # spoof_scores 只对 Spoofed_Non_Member 组有意义,其它组留空。
                         "spoof_scores": row.get("spoof_scores") if group == "Spoofed_Non_Member" else None,
                         "experimental_role": _experimental_role(group),
-                        "source_metadata": row.get("metadata", {}),
+                        "source_metadata": row_meta,
                         "created_at": created_at,
                     },
                 }
@@ -129,6 +140,10 @@ def build_pcv_attack_benchmark(
         "num_true_non_member": counts["True_Non_Member"],
         "num_spoofed_non_member": counts["Spoofed_Non_Member"],
         "num_reserve": counts["Reserve"],
+        "source_counts": {
+            group: len({str(row.get("source_key")) for row in records if row.get("group") == group})
+            for group in counts
+        },
         "include_spoofed_nonmember": include_spoofed_nonmember,
         "include_reserve": include_reserve,
         "spoofed_non_member_switch": "PCV_ENABLE_SPOOFED_NONMEMBER",

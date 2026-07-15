@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
 
 from ..utils.io import read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from ..rag.runner import compact_response_rows, response_is_success
 
 
 LOGGER = get_logger(__name__)
@@ -218,10 +219,14 @@ def parse_stance_response(response_row: dict[str, Any], query_row: dict[str, Any
         "pair_id": query_row.get("pair_id") or response_row.get("pair_id"),
         "fact_id": query_row.get("fact_id") or response_row.get("fact_id"),
         "audit_id": response_row.get("audit_id") or query_row.get("audit_id"),
+        "doc_id": response_row.get("doc_id") or query_row.get("doc_id"),
+        "source_id": response_row.get("source_id") or query_row.get("source_id") or query_row.get("doc_id"),
+        "source_key": response_row.get("source_key") or query_row.get("source_key") or query_row.get("source_id") or query_row.get("doc_id"),
         "dataset": response_row.get("dataset") or query_row.get("dataset"),
         "group": response_row.get("group") or query_row.get("group"),
         "claim_type": claim_type,
         "query_type": query_row.get("query_type"),
+        "variant_id": query_row.get("variant_id") or response_row.get("variant_id") or "full_pvs",
         "entity_type": query_row.get("entity_type") or response_row.get("entity_type"),
         "expected_entity": original,
         "counterfactual_entity": counterfactual,
@@ -273,19 +278,45 @@ def parse_stance_files(
         return {"dataset": dataset, "output_path": str(output), "skipped_existing": True}
 
     # 把查询读成"query_id → 查询行"的字典,便于快速配对。
-    queries = {row["query_id"]: row for row in read_jsonl(queries_path)}
+    query_rows = list(read_jsonl(queries_path))
+    queries = {str(row["query_id"]): row for row in query_rows}
     rows: list[dict[str, Any]] = []
+    integrity: dict[str, Any] = {}
     # 依次处理 RAG 和 LLM-only 两个回答文件。
-    for path in [rag_responses_path, llm_responses_path]:
-        for response_row in tqdm(read_jsonl(path), desc=f"parse stance {Path(path).name}", unit="resp"):
-            # 用 query_id 找到这条回答对应的查询;找不到就跳过(数据不完整)。
-            query_row = queries.get(response_row.get("query_id"))
-            if not query_row:
+    for mode, path in [("rag", rag_responses_path), ("llm_only", llm_responses_path)]:
+        response_path = Path(path)
+        raw = list(read_jsonl(response_path)) if response_path.exists() else []
+        compacted, stats = compact_response_rows(raw)
+        valid_ids: set[str] = set()
+        unknown_query_ids = 0
+        for response_row in tqdm(compacted, desc=f"parse stance {Path(path).name}", unit="resp"):
+            if not response_is_success(response_row):
                 continue
+            # 用 query_id 找到这条回答对应的查询;找不到就跳过(数据不完整)。
+            query_id = str(response_row.get("query_id") or "")
+            query_row = queries.get(query_id)
+            if not query_row:
+                unknown_query_ids += 1
+                continue
+            valid_ids.add(query_id)
             rows.append(parse_stance_response(response_row, query_row))
+        expected = set(queries)
+        integrity[mode] = {
+            **stats,
+            "parsed": len(valid_ids),
+            "missing": len(expected - valid_ids),
+            "unknown_query_ids": unknown_query_ids,
+        }
 
     write_jsonl(rows, output)
-    manifest = {"dataset": dataset, "output_path": str(output), "parsed_responses": len(rows)}
+    manifest = {
+        "dataset": dataset,
+        "output_path": str(output),
+        "planned_queries": len(queries),
+        "query_duplicates": len(query_rows) - len(queries),
+        "parsed_responses": len(rows),
+        "integrity": integrity,
+    }
     write_json(manifest, manifest_path)
     LOGGER.info("Parsed stance rows: %s", len(rows))
     return manifest

@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from src.baselines import victim_harness as vh
 from src.baselines.MBA.mba_highdiff import MBAHighDiff, extract_mask_answers, normalize
@@ -152,6 +152,55 @@ class MBATests(unittest.TestCase):
         mba.mask_answers = {1: ["Apple"], 2: ["Boston"]}
         # Mask_1 填对(apple≈Apple)、Mask_2 填错(New York≠Boston)→ 1/2。
         self.assertAlmostEqual(mba.get_mia_score("[Mask_1]: apple\n[Mask_2]: New York"), 0.5)
+
+    def test_rank_uses_contextual_token_with_leading_space(self) -> None:
+        class FakeTokenizer:
+            def __call__(self, text: str, add_special_tokens: bool = False) -> dict[str, list[int]]:
+                del add_special_tokens
+                if text == " contract":
+                    return {"input_ids": [2775]}
+                if text == "contract":
+                    return {"input_ids": [28484]}
+                return {"input_ids": [42]}
+
+            def decode(self, ids: list[int]) -> str:
+                del ids
+                return ""
+
+        mba = object.__new__(MBAHighDiff)
+        mba.tok = FakeTokenizer()
+        mba.stop_words = set()
+        mba._compute_rank = Mock(return_value=1)
+
+        mba.mba_pipeline("one two three four five contract", num_masks=1)
+
+        mba._compute_rank.assert_called_once_with("one two three four five", 2775)
+
+    def test_fragmented_rank_advances_prefix_without_extra_space(self) -> None:
+        class FakeTokenizer:
+            def __call__(self, text: str, add_special_tokens: bool = False) -> dict[str, list[int]]:
+                del add_special_tokens
+                if text == " compound":
+                    return {"input_ids": [300, 301]}
+                return {"input_ids": [42]}
+
+            def decode(self, ids: list[int]) -> str:
+                return " com" if ids == [300] else ""
+
+        mba = object.__new__(MBAHighDiff)
+        mba.tok = FakeTokenizer()
+        mba.stop_words = set()
+        mba._compute_rank = Mock(side_effect=[10, 20])
+
+        mba.mba_pipeline("one two three four five compound", num_masks=1)
+
+        self.assertEqual(
+            mba._compute_rank.call_args_list,
+            [
+                unittest.mock.call("one two three four five", 300),
+                unittest.mock.call("one two three four five com", 301),
+            ],
+        )
 
 
 class RagMiaTests(unittest.TestCase):

@@ -28,15 +28,23 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.utils.io import resolve_path
+from src.utils.io import read_json, resolve_path
 from src.utils.logger import setup_logging
 from src.utils.run_context import (
+    CANONICAL_RUN_ROLES,
+    P0_PROTOCOL,
+    RUN_STATUSES,
     archive_run,
+    benchmark_snapshot,
+    canonical_eligibility,
     current_run_id,
     git_snapshot,
     local_timestamp,
     new_run_id,
     read_scale,
+    register_canonical_run,
+    run_dir,
+    victim_model_slug,
     write_run_manifest,
 )
 
@@ -61,6 +69,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional human label appended when a fresh run id is generated.",
     )
+    parser.add_argument(
+        "--status",
+        choices=tuple(status for status in RUN_STATUSES if status in {"candidate", "canonical", "legacy_feasibility"}),
+        default="candidate",
+        help="归档状态；canonical 必须同时提供 --suite-id 并通过门禁。",
+    )
+    parser.add_argument(
+        "--suite-id",
+        default=None,
+        help="canonical suite 标识；仅 --status canonical 时使用。",
+    )
+    parser.add_argument("--run-role", choices=CANONICAL_RUN_ROLES, default="main")
     return parser.parse_args()
 
 
@@ -83,8 +103,51 @@ def main() -> int:
     args = parse_args()
     logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/archive.log"), level="INFO")
     run_id = _resolve_run_id(args)
+    model = victim_model_slug()
+    root = run_dir(args.dataset, run_id, model=model)
 
-    archive = archive_run(args.dataset, run_id)
+    # canonical 不是重新抓取“当前工作区 latest”的别名，而是对一个既有 pipeline candidate
+    # 做显式晋升；这样 suite 永远绑定到当时已归档且可审计的那次运行。
+    if args.status == "canonical":
+        if not args.suite_id:
+            raise ValueError("--status canonical requires --suite-id")
+        existing_path = root / "run_manifest.json"
+        if not existing_path.exists():
+            raise FileNotFoundError(f"Candidate manifest not found: {existing_path}")
+        manifest = read_json(existing_path)
+        preregistered_suite = str((manifest.get("preregistration") or {}).get("suite_id") or "")
+        if preregistered_suite != args.suite_id:
+            raise ValueError(
+                f"Suite id {args.suite_id} does not match preregistration {preregistered_suite}"
+            )
+        if str(manifest.get("run_role") or "main") != args.run_role:
+            raise ValueError(
+                f"Run role {args.run_role} does not match manifest {manifest.get('run_role')}"
+            )
+        eligibility = canonical_eligibility(manifest, root)
+        manifest["canonical_eligibility"] = eligibility
+        if not eligibility["eligible"]:
+            write_run_manifest(args.dataset, run_id, manifest, model=model)
+            print(f"[晋升] candidate 未通过 canonical 门禁: {', '.join(eligibility['reasons'])}")
+            print(f"    清单: {existing_path}")
+            return 2
+        manifest["status"] = "canonical"
+        manifest["suite_id"] = args.suite_id
+        manifest["promoted_at"] = local_timestamp()
+        manifest_path = write_run_manifest(args.dataset, run_id, manifest, model=model)
+        try:
+            suite_path = register_canonical_run(args.suite_id, manifest, manifest_path)
+        except Exception:
+            manifest["status"] = "candidate"
+            manifest.pop("suite_id", None)
+            manifest.pop("promoted_at", None)
+            write_run_manifest(args.dataset, run_id, manifest, model=model)
+            raise
+        print(f"[晋升] canonical: {manifest_path}")
+        print(f"    suite: {suite_path}")
+        return 0
+
+    archive = archive_run(args.dataset, run_id, model=model)
     manifest = {
         "run_id": run_id,
         "run_name": args.run_name or "",
@@ -92,22 +155,30 @@ def main() -> int:
         "scale": read_scale(),
         "archived_at": local_timestamp(),
         "source": "manual (16_archive_run.py)",
-        "victim_model": os.environ.get("PCV_VICTIM_MODEL", ""),
+        "status": args.status,
+        "protocol": P0_PROTOCOL,
+        "run_role": args.run_role,
+        "victim_model": os.environ.get("PCV_VICTIM_MODEL", "") or model,
+        "benchmark": benchmark_snapshot(args.dataset),
         "git": git_snapshot(),
         "archive": archive,
     }
-    manifest_path = write_run_manifest(args.dataset, run_id, manifest)
+    eligibility = canonical_eligibility(manifest, root)
+    manifest["canonical_eligibility"] = eligibility
+    manifest_path = write_run_manifest(args.dataset, run_id, manifest, model=model)
 
     megabytes = archive["bytes"] / (1024 * 1024)
     logger.info(
-        "Archived %d files (%.1f MB) into outputs/runs/%s/%s/",
+        "Archived %d files (%.1f MB) into outputs/runs/%s/%s/%s/",
         archive["files"],
         megabytes,
         args.dataset,
+        model,
         run_id,
     )
-    print(f"[归档] outputs/runs/{args.dataset}/{run_id}/  ({archive['files']} 文件, {megabytes:.1f} MB)")
+    print(f"[归档] outputs/runs/{args.dataset}/{model}/{run_id}/  ({archive['files']} 文件, {megabytes:.1f} MB)")
     print(f"    清单: {manifest_path}")
+    print(f"    状态: {manifest['status']}")
     for stage, count in archive["by_stage"].items():
         print(f"    - {stage}: {count}")
     return 0

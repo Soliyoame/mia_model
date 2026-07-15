@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import mean
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -34,7 +36,7 @@ from src.baselines.victim_harness import (
     load_targets,
     run_one_baseline,
 )
-from src.evaluation.metrics import summarize_membership_scores
+from src.evaluation.metrics import paired_bootstrap_metric_delta, summarize_membership_scores
 from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
 from src.rag.retriever import RagRetriever
 from src.rag.runner import TokenBucket
@@ -42,6 +44,57 @@ from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_
 from src.utils.run_context import model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
+
+
+def _filter_sources(rows: list[dict], sources: set[str]) -> list[dict]:
+    return [row for row in rows if str(row.get("source_key") or row.get("source_id")) in sources]
+
+
+def _pcv_budget_rows(pair_rows: list[dict], budget: int) -> list[dict]:
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for row in pair_rows:
+        if row.get("complete_rag_pair") is False or row.get("cvg_rag") is None:
+            continue
+        buckets[str(row.get("source_key") or row.get("source_id"))].append(row)
+    out = []
+    pair_budget = budget // 2
+    for source_key, rows in sorted(buckets.items()):
+        chosen = sorted(rows, key=lambda row: str(row.get("logical_pair_id") or row.get("pair_id")))[:pair_budget]
+        if not chosen:
+            continue
+        out.append({
+            "source_key": source_key,
+            "group": chosen[0].get("group"),
+            "pcv_score": mean(float(row["cvg_rag"]) for row in chosen),
+            "victim_calls": 2 * len(chosen),
+        })
+    return out
+
+
+def _baseline_budget_rows(chunk_rows: list[dict], budget: int) -> list[dict]:
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for row in chunk_rows:
+        if row.get("score") is None or row.get("error"):
+            continue
+        buckets[str(row.get("source_key") or row.get("source_id") or row.get("doc_id"))].append(row)
+    out = []
+    for source_key, rows in sorted(buckets.items()):
+        chosen: list[dict] = []
+        used = 0
+        for row in sorted(rows, key=lambda item: str(item.get("doc_id"))):
+            calls = int(row.get("victim_calls", 0))
+            if calls <= 0 or used + calls > budget:
+                continue
+            chosen.append(row)
+            used += calls
+        if chosen:
+            out.append({
+                "source_key": source_key,
+                "group": chosen[0].get("group"),
+                "score": mean(float(row["score"]) for row in chosen),
+                "victim_calls": used,
+            })
+    return out
 
 
 def parse_args() -> argparse.Namespace:
@@ -118,21 +171,24 @@ def main() -> int:
     # requests_per_minute>0 启用全局令牌桶(全局速率恒 ≤ RPM);配合 max_workers>1,某目标卡在
     # 慢 victim 调用时别的目标继续发,把 RPM 管道填满。=0 时回退 request_interval_seconds 固定 sleep。
     rpm = float(gen_cfg.get("requests_per_minute", 0.0))
+    # sibling(attacker)是另一把 key/端点 → 用它自己的 RPM 独立限速;未配则回退成与 victim 同 RPM。
+    sibling_rpm = float(gen_cfg.get("sibling_requests_per_minute", 0.0)) or rpm
     max_workers = int(gen_cfg.get("max_workers", 1))
     victim_bucket = TokenBucket(rpm) if rpm > 0 else None
     if args.attacker == "victim":
         # attacker 复用 victim 端点/同一个 key → 共用【同一只】桶,两路调用合并计入该 key 的 RPM。
         attacker_bucket = victim_bucket
     else:
-        # attacker 走 sibling(不同 key)→ 自己一只桶,同 RPM 上限独立放行。
-        attacker_bucket = TokenBucket(rpm) if rpm > 0 else None
+        # attacker 走 sibling(另一把 key)→ 【自己一只桶】按 sibling_rpm 独立放行,不与 victim 抢速率。
+        attacker_bucket = TokenBucket(sibling_rpm) if sibling_rpm > 0 else None
     rate_mode = "token_bucket" if victim_bucket is not None else "fixed_interval"
     bucket_share = "none" if victim_bucket is None else ("shared" if attacker_bucket is victim_bucket else "separate")
-    logger.info("限速模式=%s rpm=%s max_workers=%s attacker=%s(bucket=%s)",
-                rate_mode, rpm, max_workers, args.attacker, bucket_share)
+    logger.info("限速模式=%s victim_rpm=%s sibling_rpm=%s max_workers=%s attacker=%s(bucket=%s)",
+                rate_mode, rpm, sibling_rpm, max_workers, args.attacker, bucket_share)
 
     # —— 逐个 baseline 跑 ——
     comparison: list[dict] = []
+    results_by_method: dict[str, dict] = {}
     for name in methods:
         svc = Services(
             retriever=retriever, victim=victim, attacker_chat=attacker_chat,
@@ -145,6 +201,9 @@ def main() -> int:
             retries=int(gen_cfg.get("retries", 3)),
             retry_backoff_base=float(gen_cfg.get("retry_backoff_base", 2.0)),
             retry_backoff_max=float(gen_cfg.get("retry_backoff_max", 30.0)),
+            # 短重试耗尽后,API/网络错误长冷却并重试同一请求,直到成功。
+            retry_until_success=bool(gen_cfg.get("retry_until_success", True)),
+            retry_cooldown_seconds=float(gen_cfg.get("retry_cooldown_seconds", 300.0)),
             # 令牌桶(抗卡顿):rpm=0 时为 None,自动回退到 request_interval_seconds 固定 sleep。
             victim_bucket=victim_bucket,
             attacker_bucket=attacker_bucket,
@@ -155,58 +214,110 @@ def main() -> int:
             threshold=threshold, resume=not args.no_resume, force=args.force,
             max_workers=max_workers,
         )
+        results_by_method[name] = res
         comparison.append(_table_row(name, res))
         logger.info("[%s] scored=%s failed=%s victim=%s attacker=%s AUC=%s",
                     name, res["scored"], res["failed"], res["victim_calls"], res["attacker_calls"],
                     res["metrics"].get("AUC"))
 
     # —— 把 PCV-MIA(本项目方法)从第 11 步分数拉进同一张表 ——
-    # 对齐实验条件(审稿命门):PCV-MIA 只在 baseline 实际跑的「同一批 doc_id」上评估,
-    # 保证逐行同源可比(尤其 --max-targets 子集时,避免 PCV 用全量、baseline 用子集的偏差)。
-    # 注:PCV 分数按 audit_id(每 chunk 一个审计单元)标识,baseline 按 doc_id(chunk 切分号);
-    # 两套编号不同,需经 facts 文件的 audit_id→doc_id 映射桥翻译后才能对齐。
+    # P0-2:chunk 是查询/检索单位，但统计单位固定为 source。PCV 与 baseline 都只在
+    # 本次 target 覆盖的同一批 source 上评估；--max-targets 仅用于试跑，canonical 不应使用。
     scores_dir = model_scoped_dir(config["paths"]["scores_dir"], args.dataset)
-    pcv_path = scores_dir / f"{args.dataset}_pcv_scores.jsonl"
+    pcv_path = scores_dir / f"{args.dataset}_pcv_scores_source_scores.jsonl"
+    budget_rows: list[dict] = []
     if pcv_path.exists():
-        target_ids = {t["doc_id"] for t in targets}
+        target_sources = {
+            str(t.get("source_key") or t.get("source_id") or t.get("doc_id"))
+            for t in targets
+        }
         all_pcv = list(read_jsonl(pcv_path))
-        # 建 audit_id→doc_id 映射:facts 每条记 audit_id+doc_id,一个 audit 唯一对应一个 chunk。
-        facts_path = resolve_path(config["paths"].get("facts_dir", "outputs/facts")) / f"{args.dataset}_facts.jsonl"
-        audit2doc: dict[str, str] = {}
-        if facts_path.exists():
-            for fr in read_jsonl(facts_path):
-                aid, did = fr.get("audit_id"), fr.get("doc_id")
-                if aid is not None and did is not None:
-                    audit2doc[str(aid)] = str(did)
-        else:
-            logger.warning("facts 不存在,PCV audit_id 无法映射回 doc_id,PCV-MIA 可能并表失败:%s", facts_path)
-
-        # 解析每个 PCV 行的 doc_id:优先自带 doc_id(向后兼容),否则用 audit_id 经 facts 翻译。
-        def _pcv_doc_id(row: dict) -> str | None:
-            if row.get("doc_id") is not None:
-                return str(row["doc_id"])
-            aid = row.get("audit_id")
-            return audit2doc.get(str(aid)) if aid is not None else None
-
-        pcv_rows = [r for r in all_pcv if _pcv_doc_id(r) in target_ids]
-        logger.info("PCV-MIA 对齐目标集:%s/%s 命中(baseline targets=%s,facts 映射 %s 条)",
-                    len(pcv_rows), len(all_pcv), len(target_ids), len(audit2doc))
+        pcv_rows = [
+            row for row in all_pcv
+            if str(row.get("source_key") or row.get("source_id") or row.get("audit_id")) in target_sources
+        ]
+        logger.info("PCV-MIA source 对齐:%s/%s 命中(target sources=%s)", len(pcv_rows), len(all_pcv), len(target_sources))
         if not pcv_rows:
-            logger.warning("PCV 分数与 baseline 目标无交集,跳过 PCV-MIA 并表(检查 facts 映射 / doc_id 命名是否一致)")
-        for key, label in (("pcv_score", "PCV-MIA"), ("cvg_rag", "PCV-MIA (cvg_rag)")):
-            if pcv_rows and key in pcv_rows[0]:
-                m = summarize_membership_scores(pcv_rows, score_key=key, threshold=threshold)
-                comparison.append(_table_row(label, {"scored": len(pcv_rows), "victim_calls": None, "attacker_calls": None, "metrics": m}))
+            logger.warning("PCV source 分数与 baseline 目标无交集,跳过 PCV-MIA 并表")
+        if pcv_rows:
+            source_rows_by_method = {
+                name: list(read_jsonl(Path(results_by_method[name]["source_output_path"])))
+                for name in methods
+            }
+            common_sources = {str(row.get("source_key")) for row in pcv_rows}
+            for rows in source_rows_by_method.values():
+                common_sources &= {str(row.get("source_key")) for row in rows}
+            if not common_sources:
+                raise RuntimeError("PCV 与所有 baseline 没有共同成功 source，不能生成公平对照")
+            pcv_common = _filter_sources(pcv_rows, common_sources)
+            comparison = []
+            for name in methods:
+                baseline_common = _filter_sources(source_rows_by_method[name], common_sources)
+                metrics = summarize_membership_scores(baseline_common, score_key="score", threshold=threshold)
+                row = _table_row(name, {**results_by_method[name], "scored": len(baseline_common), "metrics": metrics})
+                row["common_source_whitelist_size"] = len(common_sources)
+                row["paired_vs_pcv"] = paired_bootstrap_metric_delta(
+                    pcv_common,
+                    baseline_common,
+                    left_score_key="pcv_score",
+                    right_score_key="score",
+                )
+                comparison.append(row)
+            for key, label in (("pcv_score", "PCV-MIA"), ("cg_cvg", "PCV-MIA (context-gain control)")):
+                if key in pcv_common[0]:
+                    m = summarize_membership_scores(pcv_common, score_key=key, threshold=threshold)
+                    pairs = sum(int(row.get("num_pairs", 0)) for row in pcv_common)
+                    calls_per_pair = 2 if key == "pcv_score" else 4
+                    item = _table_row(label, {
+                        "scored": len(pcv_common),
+                        "victim_calls": pairs * calls_per_pair,
+                        "attacker_calls": 0,
+                        "metrics": m,
+                    })
+                    item["common_source_whitelist_size"] = len(common_sources)
+                    comparison.append(item)
+
+            pair_path = scores_dir / f"{args.dataset}_pcv_scores_pair_scores.jsonl"
+            pair_rows = list(read_jsonl(pair_path)) if pair_path.exists() else []
+            for name in methods:
+                chunk_rows = list(read_jsonl(results_by_method[name]["output_path"]))
+                for budget in (2, 4, 6, 8):
+                    pcv_budget = _pcv_budget_rows(pair_rows, budget)
+                    baseline_budget = _baseline_budget_rows(chunk_rows, budget)
+                    common_budget = {
+                        str(row.get("source_key")) for row in pcv_budget
+                    } & {str(row.get("source_key")) for row in baseline_budget}
+                    pcv_budget = _filter_sources(pcv_budget, common_budget)
+                    baseline_budget = _filter_sources(baseline_budget, common_budget)
+                    if not pcv_budget or not baseline_budget:
+                        continue
+                    budget_rows.append({
+                        "baseline": name,
+                        "victim_call_budget": budget,
+                        "common_sources": len(common_budget),
+                        "pcv_metrics": summarize_membership_scores(pcv_budget, score_key="pcv_score"),
+                        "baseline_metrics": summarize_membership_scores(baseline_budget, score_key="score"),
+                        "paired_delta": paired_bootstrap_metric_delta(
+                            pcv_budget,
+                            baseline_budget,
+                            left_score_key="pcv_score",
+                            right_score_key="score",
+                        ),
+                    })
     else:
-        logger.warning("PCV 分数不存在,对照表不含 PCV-MIA:%s", pcv_path)
+        logger.warning("PCV source-level 分数不存在,对照表不含 PCV-MIA:%s", pcv_path)
 
     # —— 写对照表 + manifest ——
     table_path = out_dir / f"{args.dataset}_baseline_comparison.jsonl"
     write_jsonl(comparison, table_path)
+    budget_path = out_dir / f"{args.dataset}_baseline_budget_matched.json"
+    write_json({"dataset": args.dataset, "budgets": [2, 4, 6, 8], "results": budget_rows}, budget_path)
     manifest = {
         "dataset": args.dataset,
         "methods": methods,
         "targets": {"total": len(targets), "KB_Member": n_kb, "True_Non_Member": n_tn},
+        "target_sources": len({str(t.get("source_key") or t.get("source_id") or t.get("doc_id")) for t in targets}),
+        "evaluation_unit": "source",
         "request_interval_seconds": interval,
         # 限速快照(抗卡顿):令牌桶 RPM / 并发数 / 模式,便于复现与排查。
         "requests_per_minute": rpm,
@@ -214,6 +325,7 @@ def main() -> int:
         "rate_limit_mode": rate_mode,
         "attacker_bucket": bucket_share,
         "comparison_path": str(table_path),
+        "budget_matched_path": str(budget_path),
         "victim_profile_used": victim_profile,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -239,6 +351,7 @@ def _table_row(name: str, res: dict) -> dict:
         "scored": res.get("scored"),
         "victim_calls": res.get("victim_calls"),
         "attacker_calls": res.get("attacker_calls"),
+        "evaluation_unit": "source",
     }
 
 

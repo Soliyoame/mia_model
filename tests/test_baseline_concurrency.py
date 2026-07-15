@@ -88,7 +88,7 @@ def _det_attacker(prompt: str) -> str:
 _TARGETS = [
     {"doc_id": f"doc{i}", "group": "KB_Member" if i % 2 == 0 else "True_Non_Member",
      "text": f"Sample record number {i} about entity E{i} located in city C{i} reporting value {i * 7}.",
-     "source_id": f"src{i % 3}"}
+     "source_id": f"{'member' if i % 2 == 0 else 'nonmember'}-src{i % 3}"}
     for i in range(12)
 ]
 
@@ -123,6 +123,47 @@ class ConcurrencyEquivalenceTests(unittest.TestCase):
 
 class MbaConcurrencyStateTests(unittest.TestCase):
     """MBA 的 mask_answers 必须是线程局部的(旧共享单例实现会在并发下串味)。"""
+
+    def test_mba_proxy_inference_is_serialized(self) -> None:
+        class _BorrowCheckedMBA:
+            def __init__(self) -> None:
+                self.active = 0
+                self.lock = threading.Lock()
+
+            def build_query(self, text: str):
+                with self.lock:
+                    self.active += 1
+                    active = self.active
+                try:
+                    if active > 1:
+                        raise RuntimeError("Already borrowed")
+                    time.sleep(0.05)
+                    return f"FILL::{text}", {1: [text]}
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+        class _EchoVictim:
+            def generate(self, prompt: str, **kw) -> str:
+                text = prompt.split("FILL::", 1)[1].split("\nAnswer:", 1)[0]
+                return f"[MASK_1]: {text}"
+
+        fake_mba = _BorrowCheckedMBA()
+        orig = vh._get_mba_singleton
+        vh._get_mba_singleton = lambda: fake_mba
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                out = Path(d) / "mba_serialized.jsonl"
+                svc = Services(retriever=_FakeRetriever(), victim=_EchoVictim(), top_k=1)
+                targets = [
+                    {"doc_id": f"d{i}", "group": "KB_Member", "text": f"answer-{i}", "source_id": f"s{i}"}
+                    for i in range(4)
+                ]
+                result = run_one_baseline("MBA", targets, svc, output_path=out, resume=False, max_workers=4)
+                self.assertEqual(result["failed"], 0)
+                self.assertTrue(all(score == 1.0 for score in _scores(out).values()))
+        finally:
+            vh._get_mba_singleton = orig
 
     def test_mba_concurrent_no_state_corruption(self) -> None:
         # 假 MBA 单例:不加载 gpt2。build_query 让「答案=该目标自己的文本」;打分走真实静态方法。
@@ -180,6 +221,50 @@ class RateLimitTests(unittest.TestCase):
         # 允许 20% 宽容(调度抖动),但必须证明确实被限速(不是一拥而上)。
         self.assertGreaterEqual(elapsed, min_expected * 0.8,
                                 f"victim 速率未被令牌桶限制:{len(stamps)} 次仅用 {elapsed:.2f}s")
+
+
+class ApiRetryUntilSuccessTests(unittest.TestCase):
+    def test_transient_api_failure_retries_same_request_until_success(self) -> None:
+        class _FlakyVictim:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def generate(self, prompt: str, **kw) -> str:
+                self.calls += 1
+                if self.calls < 5:
+                    raise TimeoutError("The read operation timed out")
+                return "Yes"
+
+        victim = _FlakyVictim()
+        svc = Services(
+            retriever=_FakeRetriever(), victim=victim, retries=1,
+            retry_until_success=True, retry_cooldown_seconds=0,
+        )
+        target = [{"doc_id": "d1", "group": "KB_Member", "text": "record", "source_id": "s1"}]
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "retry_success.jsonl"
+            result = run_one_baseline("RAG-MIA", target, svc, output_path=out, resume=False)
+            row = list(read_jsonl(out))[0]
+        self.assertEqual(victim.calls, 5)
+        self.assertEqual(result["failed"], 0)
+        self.assertIsNone(row["error"])
+
+    def test_non_api_error_is_not_retried_forever(self) -> None:
+        class _BrokenVictim:
+            def generate(self, prompt: str, **kw) -> str:
+                raise ValueError("invalid local test payload")
+
+        svc = Services(
+            retriever=_FakeRetriever(), victim=_BrokenVictim(), retries=0,
+            retry_until_success=True, retry_cooldown_seconds=0,
+        )
+        target = [{"doc_id": "d1", "group": "KB_Member", "text": "record", "source_id": "s1"}]
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "non_api_error.jsonl"
+            result = run_one_baseline("RAG-MIA", target, svc, output_path=out, resume=False)
+            row = list(read_jsonl(out))[0]
+        self.assertEqual(result["failed"], 1)
+        self.assertIn("invalid local test payload", row["error"])
 
 
 if __name__ == "__main__":

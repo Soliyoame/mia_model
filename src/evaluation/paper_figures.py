@@ -6,13 +6,12 @@
     - plots.py       : 2x2 综合仪表盘,给研究者自己快速体检用。
     - paper_figures.py(本文件): 论文级单图,统一样式、色盲安全配色、导出 PDF 矢量图 + 300dpi PNG。
 
-六张图(每张一个函数,各出 {name}.pdf + {name}.png):
+五张图(每张一个函数,各出 {name}.pdf + {name}.png):
     fig_roc         主攻击 ROC(AUC + 低FPR放大 inset + TPR@1%/5%FPR 工作点)。
     fig_separation  member vs non-member 的分数小提琴分布。
     fig_signals     cvg_rag / cvg_llm(阴性对照≈0.5) / cg_cvg / pcv_score 的 AUC 柱状。
     fig_baselines   PCV-MIA vs 各基线 的 AUC / TPR@1%FPR 分组柱状。
     fig_threshold   TPR / FPR / Accuracy 随阈值变化(来自 threshold_curve)。
-    fig_calibration 可靠性图:按 pcv_score 分箱看「经验成员占比」,展示分数与成员可能性的校准关系。
 
 约定:
 - 图内文字一律英文(指标名本就是 cvg_rag/AUC/FPR),避免中文字体豆腐块;数据集/受害者模型
@@ -153,7 +152,7 @@ def _headline(score_rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
     }
 
 
-# ============================ 六张论文图 ============================
+# ============================ 五张论文图 ============================
 
 
 def fig_roc(report: dict[str, Any], score_rows: list[dict[str, Any]], out_dir: Path, *, dataset: str, victim: str) -> list[Path]:
@@ -357,54 +356,6 @@ def fig_threshold(report: dict[str, Any], out_dir: Path, *, dataset: str, victim
         return _save(fig, ax, out_dir, "threshold", dataset=dataset, victim=victim)
 
 
-def fig_calibration(report: dict[str, Any], score_rows: list[dict[str, Any]], out_dir: Path, *, dataset: str, victim: str, n_bins: int = 8) -> list[Path]:
-    """可靠性图:把样本按 pcv_score 分位数分箱,每箱画「经验成员占比」,展示分数与成员可能性的单调校准关系。"""
-    key = report.get("main_score_key", "pcv_score")
-    rows = [r for r in score_rows if r.get("group") in (POSITIVE_GROUP, NEGATIVE_GROUP)]
-    if len(rows) < 4:
-        LOGGER.warning("fig_calibration: too few rows, skip")
-        return []
-    scores = np.array([float(r.get(key, 0.0)) for r in rows])
-    y = np.array([1.0 if r.get("group") == POSITIVE_GROUP else 0.0 for r in rows])
-    # 分位数分箱边界(去重,避免大量相同分数导致空箱)。
-    edges = np.unique(np.quantile(scores, np.linspace(0.0, 1.0, n_bins + 1)))
-    if edges.size < 2:
-        LOGGER.warning("fig_calibration: degenerate score distribution, skip")
-        return []
-
-    xs: list[float] = []
-    frac: list[float] = []
-    counts: list[int] = []
-    for b in range(edges.size - 1):
-        lo, hi = edges[b], edges[b + 1]
-        last = b == edges.size - 2
-        mask = (scores >= lo) & (scores <= hi) if last else (scores >= lo) & (scores < hi)
-        n = int(mask.sum())
-        if n == 0:
-            continue
-        xs.append(float(scores[mask].mean()))
-        frac.append(float(y[mask].mean()))
-        counts.append(n)
-
-    if not xs:
-        LOGGER.warning("fig_calibration: no populated bins, skip")
-        return []
-
-    with plt.rc_context(_PAPER_RC):
-        fig, ax = plt.subplots()
-        # 点大小按箱内样本数缩放(sqrt 更均衡)并封顶,避免大箱把点撑爆、被上边界截断。
-        cmax = max(counts)
-        sizes = [min(150.0, 22.0 + 90.0 * (c / cmax) ** 0.5) for c in counts]
-        ax.plot(xs, frac, "-", color=C_CALIB, lw=1.4, zorder=1)
-        ax.scatter(xs, frac, s=sizes, color=C_CALIB, alpha=0.85, edgecolors="white", linewidths=0.6, zorder=2)
-        ax.axhline(0.5, ls=":", color=C_MUTED, lw=0.8)
-        ax.set_ylim(-0.05, 1.08)
-        ax.set_xlabel(f"{key} (bin mean)")
-        ax.set_ylabel("Empirical member fraction")
-        ax.set_title("Score reliability", fontsize=9)
-        return _save(fig, ax, out_dir, "calibration", dataset=dataset, victim=victim)
-
-
 # ============================ 编排 + 图注 ============================
 
 
@@ -462,11 +413,6 @@ def _write_captions(
             f"operating threshold.",
             f"TPR / FPR / Accuracy 随判定阈值的变化({head});虚线为所选工作阈值。",
         ),
-        "calibration": (
-            f"Score reliability ({head}): samples binned by PCV score quantiles, plotting the "
-            f"empirical member fraction per bin (marker size ∝ bin count).",
-            f"分数可靠性图({head}):按 PCV 分数分位数分箱,画每箱的经验成员占比(点大小∝箱内样本数)。",
-        ),
     }
 
     lines = ["# PCV-MIA 论文图注", "", f"- {head}", "", "> 每条可直接粘进 LaTeX `\\caption{...}`。", ""]
@@ -482,7 +428,7 @@ def _write_captions(
 
 
 # 各论文图的名字 → 构造器(闭包在 render 里绑定数据),集中登记便于按需选跑。
-_FIGURES = ("roc", "separation", "signals", "baselines", "threshold", "calibration")
+_FIGURES = ("roc", "separation", "signals", "baselines", "threshold")
 
 
 def render_paper_figures(
@@ -498,7 +444,7 @@ def render_paper_figures(
 
     参数:
         report:        final_report.json 内容(report_builder.generate_final_report 结果)。
-        score_rows:    打分行(outputs/scores/{ds}_pcv_scores.jsonl)。
+        score_rows:    source-level 打分行(*_pcv_scores_source_scores.jsonl)。
         baseline_rows: 基线对比行(outputs/baselines/{ds}/{ds}_baseline_comparison.jsonl);无则 baselines 图跳过。
         out_dir:       输出根目录(实际写到其下的 figures/ 子目录)。
         dataset:       数据集名(写进脚注/图注)。
@@ -512,6 +458,9 @@ def render_paper_figures(
     victim = _victim_model(report)
     fig_dir = Path(out_dir) / "figures"
     baseline_rows = baseline_rows or []
+    if score_rows and any(not row.get("source_key") for row in score_rows):
+        raise ValueError("Paper figures require source-level score rows")
+    score_rows = [row for row in score_rows if str(row.get("group")) != "Reserve"]
 
     builders: dict[str, Callable[[], list[Path]]] = {
         "roc": lambda: fig_roc(report, score_rows, fig_dir, dataset=dataset, victim=victim),
@@ -519,7 +468,6 @@ def render_paper_figures(
         "signals": lambda: fig_signals(report, score_rows, fig_dir, dataset=dataset, victim=victim),
         "baselines": lambda: fig_baselines(baseline_rows, fig_dir, dataset=dataset, victim=victim),
         "threshold": lambda: fig_threshold(report, fig_dir, dataset=dataset, victim=victim),
-        "calibration": lambda: fig_calibration(report, score_rows, fig_dir, dataset=dataset, victim=victim),
     }
     names = figures or list(_FIGURES)
 

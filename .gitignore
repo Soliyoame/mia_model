@@ -15,19 +15,38 @@ ENV/
 .test_tmp/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
 .coverage
+.coverage.*
+coverage.xml
+junit.xml
 htmlcov/
 
+# Python build / packaging artifacts
+build/
+dist/
+site/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
 # Local editor and OS files
+.agents/
+.codex/
 .claude/
 .vscode/
 .idea/
+.ipynb_checkpoints/
 .DS_Store
 Thumbs.db
 
 # Secrets and local environment files
 .env
 .env.*
+!.env.example
+!.env.template
 *.key
 *.pem
 config/llm_api.json

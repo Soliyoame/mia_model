@@ -216,11 +216,10 @@ def filter_stealth_queries(
             }
         )
 
-    # 第二遍:按 pair 整体接受/拒绝。没有 pair_id 的老数据退化为按 query 单独成组,
-    # 保持旧的单条语义(向后兼容)。
+    # 第二遍:按 logical pair(pair_id + query_type)整体接受/拒绝。
     groups: dict[str, list[dict[str, Any]]] = {}
     for r in scored:
-        key = str(r.get("pair_id") or r.get("query_id"))
+        key = f"{r.get('pair_id') or r.get('query_id')}::{r.get('query_type') or 'default'}"
         groups.setdefault(key, []).append(r)
 
     accepted_rows: list[dict[str, Any]] = []
@@ -228,6 +227,15 @@ def filter_stealth_queries(
     accepted_pairs = 0
     rejected_pairs = 0
     for members in groups.values():
+        claim_types = [str(m.get("claim_type")) for m in members]
+        metadata_consistent = all(
+            len({str(m.get(field)) for m in members}) == 1
+            for field in ("pair_id", "query_type", "source_key", "group")
+        )
+        structurally_complete = sorted(claim_types) == ["counterfactual", "true"] and metadata_consistent
+        if not structurally_complete:
+            for member in members:
+                member["self_reject_reason"] = member.get("self_reject_reason") or "incomplete_pair"
         # 对内任一条触发拒绝条件,则整对拒绝。
         failing = [m for m in members if m.get("self_reject_reason")]
         if failing:

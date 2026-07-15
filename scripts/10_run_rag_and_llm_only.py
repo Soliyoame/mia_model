@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -41,8 +42,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
     parser.add_argument("--victim-profile", default=None)
+    parser.add_argument(
+        "--variant-id",
+        default="full_pvs",
+        help="实验变体标识；非 full_pvs 时输入/输出使用隔离的 query-control 目录",
+    )
+    parser.add_argument(
+        "--queries-path",
+        default=None,
+        help="显式查询计划 JSONL；省略时按 variant-id 从配置目录解析",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="显式启用可选的 LLM-only 归因对照；默认仅运行 RAG",
+    )
     # 提速开关(RPM 受限时用)：
     #   --primary-only  只跑 selection_tier=primary 的高质量 fact,同时砍 RAG 与 LLM-only 两路调用数。
     parser.add_argument("--primary-only", action="store_true",
@@ -69,9 +85,40 @@ def main() -> int:
         config_profile=gen_cfg.get("victim_profile"),
     )
     client, profile = build_victim_client(profiles, profile_name=profile_name)
+    variant_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(args.variant_id).strip()).strip("-")
+    if not variant_id or variant_id != str(args.variant_id).strip():
+        logger.error("非法 --variant-id: %r", args.variant_id)
+        return 2
     # RAG 回答与纯 LLM 回答分目录存放,便于后续对比。按 {数据集}/{模型}/ 分,换模型不覆盖。
-    rag_dir = ensure_dir(model_scoped_dir(config["paths"]["rag_responses_dir"], args.dataset))
-    llm_dir = ensure_dir(model_scoped_dir(config["paths"]["llm_only_responses_dir"], args.dataset))
+    if variant_id == "full_pvs":
+        default_queries_path = (
+            resolve_path(config["paths"]["queries_dir"])
+            / f"{args.dataset}_paired_queries.jsonl"
+        )
+        rag_dir = ensure_dir(model_scoped_dir(config["paths"]["rag_responses_dir"], args.dataset))
+        llm_dir = ensure_dir(model_scoped_dir(config["paths"]["llm_only_responses_dir"], args.dataset))
+        rag_output_path = rag_dir / f"{args.dataset}_rag_responses.jsonl"
+        llm_output_path = llm_dir / f"{args.dataset}_llm_only_responses.jsonl"
+    else:
+        control_queries_dir = resolve_path(
+            config["paths"].get("query_controls_dir", "outputs/query_controls")
+        )
+        default_queries_path = control_queries_dir / args.dataset / variant_id / "queries.jsonl"
+        control_dir = ensure_dir(
+            model_scoped_dir(
+                config["paths"].get(
+                    "query_control_responses_dir",
+                    "outputs/query_control_responses",
+                ),
+                args.dataset,
+            ) / variant_id
+        )
+        rag_output_path = control_dir / "rag_responses.jsonl"
+        llm_output_path = control_dir / "llm_only_responses.jsonl"
+    queries_path = resolve_path(args.queries_path) if args.queries_path else default_queries_path
+    if not queries_path.exists():
+        logger.error("查询计划不存在: %s", queries_path)
+        return 1
 
     # --primary-only:读 facts,取 selection_tier=primary 的 fact_id 白名单,砍掉低质量 fact 的 query。
     allowed_fact_ids: set[str] | None = None
@@ -90,11 +137,11 @@ def main() -> int:
 
     manifest = run_rag_and_llm_only(
         dataset=args.dataset,
-        queries_path=resolve_path(config["paths"]["queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
+        queries_path=queries_path,
         benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
         index_dir=resolve_path(config["paths"]["indexes_dir"]) / args.dataset,
-        rag_output_path=rag_dir / f"{args.dataset}_rag_responses.jsonl",
-        llm_output_path=llm_dir / f"{args.dataset}_llm_only_responses.jsonl",
+        rag_output_path=rag_output_path,
+        llm_output_path=llm_output_path,
         client=client,
         top_k=int(config.get("retrieval", {}).get("top_k", 5)),
         # temperature 默认 0 走贪心解码,保证可复现。
@@ -105,14 +152,18 @@ def main() -> int:
         retries=int(gen_cfg.get("retries", 2)),
         retry_backoff_base=float(gen_cfg.get("retry_backoff_base", 2.0)),
         retry_backoff_max=float(gen_cfg.get("retry_backoff_max", 60.0)),
+        retry_until_success=bool(gen_cfg.get("retry_until_success", True)),
+        retry_cooldown_seconds=float(gen_cfg.get("retry_cooldown_seconds", 300.0)),
         request_interval_seconds=float(gen_cfg.get("request_interval_seconds", 0.0)),
         max_workers=int(gen_cfg.get("max_workers", 1)),
         requests_per_minute=float(gen_cfg.get("requests_per_minute", 0.0)),
+        run_llm_only=bool(args.llm_only or gen_cfg.get("run_llm_only", False)),
         allowed_fact_ids=allowed_fact_ids,
         resume=not args.no_resume,
         force=args.force,
         # 把实际用到的 victim profile 一并写进配置快照,方便结果追溯。
         config_snapshot={**config, "victim_profile_used": profile},
+        variant_id=variant_id,
     )
     logger.info("Step 10 finished: %s", manifest)
     return 0

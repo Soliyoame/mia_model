@@ -48,3 +48,14 @@ scoring:
   # 去掉后 edgar TPR@1%FPR 0.790→0.815、d' 3.067→3.236。设 >0 可恢复(污染集"接受假声明"或有信号)。
   false_acceptance_penalty: 0.0
   thresholds: [0.3, 0.5, 0.7, 1.0]
+
+# 辅助脚本显式读取这些论文实验变体；默认流水线行为仍是 full_pvs。
+experiment_variants:
+  default: full_pvs
+  # full_pvs 本身已是 pair→chunk→source 的不加权分层平均，故不重复声明伪造的 unweighted 变体。
+  offline: [full_pvs, qplus_only, qminus_only, correction_only, quality_weighted, primary_only]
+  not_applicable:
+    unweighted: full_pvs already uses unweighted hierarchical means
+  query_controls: [random_same_type_counterfactual, independent_unpaired_query, no_stealth_filter]
+  shortcut_controls: [lexical_query_document_jaccard, embedding_query_document_cosine, retrieval_target_hit_rate, retrieval_max_score, query_token_count, query_char_count, query_digit_ratio, query_punctuation_ratio]
+  query_budgets: [2, 4, 6, 8]

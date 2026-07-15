@@ -37,14 +37,28 @@ from typing import Callable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.utils.io import load_yaml
+from src.utils.env import env_str
+from src.utils.io import load_yaml, resolve_path
 from src.utils.run_context import (
+    CANONICAL_RUN_ROLES,
+    P0_PROTOCOL,
+    archive_provenance_files,
     archive_run,
+    archived_source_whitelist,
+    artifact_inventory,
+    benchmark_snapshot,
+    build_experiment_identity,
+    canonical_eligibility,
+    file_snapshot,
     git_snapshot,
     new_run_id,
+    preregistration_snapshot,
     read_scale,
+    run_dir,
+    victim_model_slug,
     write_run_manifest,
 )
+from src.utils.hash import sha256_obj
 
 
 StepArgsBuilder = Callable[[argparse.Namespace], list[str]]
@@ -194,6 +208,7 @@ def build_steps() -> list[PipelineStep]:
                 *_config_arg(args.rag_config),
                 # 仅当指定 --victim-profile 时才透传(选用哪个受害者 LLM 画像来生成回答)。
                 *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                *(["--llm-only"] if args.llm_only else []),
             ),
         ),
         PipelineStep(
@@ -286,12 +301,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run PCV-MIA pipeline stages with one command.")
     parser.add_argument("--dataset", default=None, help="Dataset name. Defaults to configs/experiment_config.yaml.")
     parser.add_argument("--experiment-config", default=str(PROJECT_ROOT / "configs" / "experiment_config.yaml"))
+    parser.add_argument("--canonical-config", default=str(PROJECT_ROOT / "configs" / "canonical_suite.yaml"))
     parser.add_argument("--from-step", type=int, default=1, choices=range(1, 16), metavar="N")
     parser.add_argument("--to-step", type=int, default=15, choices=range(1, 16), metavar="N")
     parser.add_argument("--only-steps", default="", help="Comma/range list, for example: 2-9,11,15.")
     parser.add_argument("--skip-steps", default="", help="Comma/range list to skip, for example: 4,10.")
     parser.add_argument("--scale", choices=["small", "formal"], default=None, help="Forwarded to step 02.")
     parser.add_argument("--victim-profile", default=None, help="Forwarded to step 10.")
+    parser.add_argument("--run-role", choices=CANONICAL_RUN_ROLES, default="main")
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="显式启用 matched LLM-only 归因对照；默认主运行仅调用 RAG",
+    )
     parser.add_argument("--sibling-profile", default=None, help="Forwarded to step 04.")
     parser.add_argument("--threshold", type=float, default=None, help="Forwarded to step 15.")
     parser.add_argument("--data-config", default=str(PROJECT_ROOT / "configs" / "data_config.yaml"))
@@ -301,6 +323,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-config", default=str(PROJECT_ROOT / "configs" / "baseline_config.yaml"))
     parser.add_argument("--defense-config", default=str(PROJECT_ROOT / "configs" / "defense_config.yaml"))
     parser.add_argument("--force", action="store_true", help="Forward --force to every selected stage.")
+    parser.add_argument(
+        "--force-from-step",
+        type=int,
+        choices=range(1, 16),
+        default=None,
+        metavar="N",
+        help="从第 N 步起强制重建；可让第 10 步 resume 只补失败请求、再强制重建第 11-15 步。",
+    )
     parser.add_argument("--no-resume", action="store_true", help="Forward --no-resume to every selected stage.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
     parser.add_argument(
@@ -309,9 +339,19 @@ def parse_args() -> argparse.Namespace:
         help="Optional human label appended to the start-time run id, e.g. 20260707-153012_baseline-fix.",
     )
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="显式复用固定 run id；其次读取 PCV_RUN_ID，否则生成开始时间戳。",
+    )
+    parser.add_argument(
         "--no-archive",
         action="store_true",
         help="Skip collecting this run's products into outputs/runs/{dataset}/{run_id}/ at the end.",
+    )
+    parser.add_argument(
+        "--canonical-analyses",
+        action="store_true",
+        help="主流水线后运行离线消融、捷径诊断和三个在线强对照，再统一归档",
     )
     return parser.parse_args()
 
@@ -364,7 +404,87 @@ def command_for_step(step: PipelineStep, args: argparse.Namespace) -> list[str]:
     返回:
         子进程命令的参数列表。
     """
-    return [sys.executable, str(PROJECT_ROOT / "scripts" / step.script), *step.build_args(args)]
+    step_args = step.build_args(args)
+    if args.force_from_step is not None and step.number >= args.force_from_step and "--force" not in step_args:
+        step_args.append("--force")
+    return [sys.executable, str(PROJECT_ROOT / "scripts" / step.script), *step_args]
+
+
+def canonical_analysis_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
+    """构造显式 canonical 后处理命令；在线对照沿用普通 resume 语义。"""
+    model = victim_model_slug()
+    force = ["--force"] if args.force else []
+    common = ["--dataset", args.dataset]
+    commands: list[tuple[str, list[str]]] = [
+        (
+            "offline_ablation",
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "analyze_p0_ablation.py"),
+                *common,
+                "--model", model,
+                "--config", args.pcv_config,
+                "--seed", "42",
+            ],
+        ),
+        (
+            "shortcut_controls",
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "analyze_shortcut_controls.py"),
+                *common,
+                "--model", model,
+                "--attack-config", args.pcv_config,
+                "--rag-config", args.rag_config,
+                "--seed", "42",
+            ],
+        ),
+    ]
+    for variant in (
+        "random_same_type_counterfactual",
+        "independent_unpaired_query",
+        "no_stealth_filter",
+    ):
+        commands.extend([
+            (
+                f"prepare_query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_query_controls.py"),
+                    *common,
+                    "--variant", variant,
+                    "--config", args.pcv_config,
+                    "--seed", "42",
+                    *force,
+                ],
+            ),
+            (
+                f"run_query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "10_run_rag_and_llm_only.py"),
+                    *common,
+                    "--config", args.rag_config,
+                    "--variant-id", variant,
+                    *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                    *force,
+                ],
+            ),
+            (
+                f"query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "analyze_query_control.py"),
+                    *common,
+                    "--variant", variant,
+                    "--model", model,
+                    "--config", args.pcv_config,
+                    "--seed", "42",
+                    *force,
+                ],
+            ),
+        ])
+    return commands
 
 
 def _archive_run_products(
@@ -374,6 +494,8 @@ def _archive_run_products(
     failed_step: int | None,
     run_id: str,
     started: datetime,
+    canonical_analyses_completed: list[str] | None = None,
+    canonical_analysis_failed: str | None = None,
 ) -> None:
     """流水线收尾:把本次全部阶段产物拷进 run 文件夹,并写一份 run_manifest.json。
 
@@ -393,36 +515,94 @@ def _archive_run_products(
         return
     finished = datetime.now()
     try:
+        config_paths = {
+            "experiment": args.experiment_config,
+            "canonical": args.canonical_config,
+            "data": args.data_config,
+            "rag": args.rag_config,
+            "pcv": args.pcv_config,
+            "spoof": args.spoof_config,
+            "baseline": args.baseline_config,
+            "defense": args.defense_config,
+        }
+        split_dir = resolve_path("datasets/splits") / args.dataset
+        index_dir = resolve_path("indexes") / args.dataset
+        provenance_paths = [
+            resolve_path("datasets/benchmarks") / f"{args.dataset}_attack_benchmark.jsonl",
+            resolve_path("datasets/benchmarks") / f"{args.dataset}_benchmark_manifest.json",
+            split_dir / "split_manifest.json",
+            split_dir / "kb_member.jsonl",
+            split_dir / "true_non_member.jsonl",
+            split_dir / "reserve.jsonl",
+            index_dir / "index_manifest.json",
+            index_dir / "docstore.jsonl",
+            index_dir / "faiss.index",
+        ]
+        config_snapshots = {name: file_snapshot(path) for name, path in config_paths.items()}
+        input_provenance = [file_snapshot(path) for path in provenance_paths]
+        data_config = load_yaml(Path(args.data_config))
+        split_seed = int(data_config.get("split", {}).get("seed", -1))
+        victim_model = env_str("PCV_VICTIM_MODEL", "") or "unspecified"
+        preregistration = preregistration_snapshot(
+            args.canonical_config,
+            dataset=args.dataset,
+            victim_model=victim_model,
+            run_role=args.run_role,
+        )
         manifest: dict = {
             "run_id": run_id,
             "run_name": args.run_name or "",
+            "status": "invalid" if failed_step is not None or canonical_analysis_failed else "candidate",
+            "source": "pipeline (run_pipeline.py)",
+            "protocol": P0_PROTOCOL,
+            "run_role": args.run_role,
             "dataset": args.dataset,
-            "scale": read_scale(),
+            "scale": args.scale or read_scale(),
+            "split_seed": split_seed,
             "started_at": started.strftime("%Y-%m-%d %H:%M:%S"),
             "finished_at": finished.strftime("%Y-%m-%d %H:%M:%S"),
             "duration_seconds": round((finished - started).total_seconds(), 1),
             "steps_selected": [s.number for s in steps],
             "steps_run": executed,
             "steps_failed": failed_step,
-            "victim_model": os.environ.get("PCV_VICTIM_MODEL", ""),
+            "canonical_analyses_completed": canonical_analyses_completed or [],
+            "canonical_analysis_failed": canonical_analysis_failed,
+            "victim_model": victim_model,
+            "victim_provider": "openai_compatible",
+            "victim_endpoint": env_str("PCV_VICTIM_BASE_URL", ""),
+            "run_llm_only": bool(args.llm_only),
+            "benchmark": benchmark_snapshot(args.dataset),
             "git": git_snapshot(),
-            "configs": {
-                "experiment": args.experiment_config,
-                "data": args.data_config,
-                "rag": args.rag_config,
-                "pcv": args.pcv_config,
-                "spoof": args.spoof_config,
-                "baseline": args.baseline_config,
-                "defense": args.defense_config,
-            },
+            "effective_args": dict(vars(args)),
+            "configs": config_snapshots,
+            "preregistration": preregistration,
+            "input_provenance": input_provenance,
             "command": "python " + " ".join(sys.argv),
         }
-        archive = archive_run(args.dataset, run_id)
+        model = victim_model_slug()
+        stages = None if args.llm_only else [
+            "facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "diagnostics",
+            "query_controls", "rag_responses", "parsed_stance", "scores", "baselines", "defenses",
+            "mechanisms", "reports", "query_control_responses", "query_control_scores",
+        ]
+        archive = archive_run(args.dataset, run_id, model=model, stages=stages)
+        root = run_dir(args.dataset, run_id, model=model)
+        archive["provenance_files"] = archive_provenance_files(
+            root, [*config_snapshots.values(), *input_provenance]
+        )
+        archive["inventory"] = artifact_inventory(root)
+        archive["inventory_hash"] = sha256_obj(archive["inventory"])
         manifest["archive"] = archive
-        write_run_manifest(args.dataset, run_id, manifest)
+        whitelist = archived_source_whitelist(root)
+        manifest["source_whitelist"] = whitelist
+        manifest["experiment_identity"] = build_experiment_identity(
+            manifest, str(whitelist.get("source_whitelist_hash") or "")
+        )
+        manifest["canonical_eligibility"] = canonical_eligibility(manifest, root)
+        write_run_manifest(args.dataset, run_id, manifest, model=model)
         megabytes = archive["bytes"] / (1024 * 1024)
         print(
-            f"[归档] outputs/runs/{args.dataset}/{run_id}/"
+            f"[归档] outputs/runs/{args.dataset}/{model}/{run_id}/"
             f"  ({archive['files']} 文件, {megabytes:.1f} MB)"
         )
     except Exception as exc:  # noqa: BLE001 - 归档失败不应连累流水线主流程
@@ -456,7 +636,9 @@ def main() -> int:
     # 启动即盖一个"开始时间"戳作为 run_id,并 export 给所有子步骤(subprocess 默认继承本进程
     # 环境)。末端脚本(15/可行性/L2)的 current_run_id() 届时读回同一个 id,整套产物归到同一
     # run 文件夹——这也一并修好了过去"各末端脚本各生成各自时间戳"的老问题。
-    run_id = new_run_id(args.run_name)
+    explicit_run_id = str(args.run_id or "").strip()
+    inherited_run_id = os.environ.get("PCV_RUN_ID", "").strip()
+    run_id = explicit_run_id or inherited_run_id or new_run_id(args.run_name)
     started = datetime.now()
     if not args.dry_run:
         os.environ["PCV_RUN_ID"] = run_id
@@ -483,7 +665,52 @@ def main() -> int:
             return result.returncode
         executed.append(step.number)
 
-    _archive_run_products(args, steps, executed, failed_step, run_id, started)
+    analyses_completed: list[str] = []
+    failed_analysis: str | None = None
+    if args.canonical_analyses:
+        if args.run_role != "main" or args.llm_only:
+            print("error: --canonical-analyses is only valid for the RAG-only main run", file=sys.stderr)
+            failed_analysis = "invalid_run_role"
+        else:
+            for name, command in canonical_analysis_commands(args):
+                print(f"\n[analysis] {name}")
+                print(" ".join(command))
+                if args.dry_run:
+                    continue
+                result = subprocess.run(command, cwd=PROJECT_ROOT)
+                if result.returncode != 0:
+                    failed_analysis = name
+                    print(f"Canonical analysis {name} failed with exit code {result.returncode}.")
+                    _archive_run_products(
+                        args,
+                        steps,
+                        executed,
+                        failed_step,
+                        run_id,
+                        started,
+                        analyses_completed,
+                        failed_analysis,
+                    )
+                    return result.returncode
+                if name in {
+                    "offline_ablation",
+                    "shortcut_controls",
+                    "query_control:random_same_type_counterfactual",
+                    "query_control:independent_unpaired_query",
+                    "query_control:no_stealth_filter",
+                }:
+                    analyses_completed.append(name)
+
+    _archive_run_products(
+        args,
+        steps,
+        executed,
+        failed_step,
+        run_id,
+        started,
+        analyses_completed,
+        failed_analysis,
+    )
     return 0
 
 

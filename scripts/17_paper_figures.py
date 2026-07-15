@@ -8,7 +8,7 @@ run_pipeline 的 build_steps——论文图是按需产物,随时手动刷,不�
 
 读取(按数据集):
     outputs/reports/{ds}_final_report.json                    第 15 步的报告
-    outputs/scores/{ds}_pcv_scores.jsonl                      第 11 步的打分行
+    outputs/scores/{ds}/{model}/{ds}_pcv_scores_source_scores.jsonl  第 11 步的 source 主分
     outputs/baselines/{ds}/{ds}_baseline_comparison.jsonl     第 12 步的基线对比(可选,缺则跳过基线图)
 
 输出目录(优先级):
@@ -24,7 +24,6 @@ run_pipeline 的 build_steps——论文图是按需产物,随时手动刷,不�
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -34,7 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.evaluation.paper_figures import render_paper_figures
 from src.utils.io import read_json, read_jsonl, resolve_path
 from src.utils.logger import setup_logging
-from src.utils.run_context import current_run_id, model_scoped_dir, run_dir
+from src.utils.run_context import model_scoped_dir, resolve_suite_run, victim_model_slug
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,21 +44,41 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Render publication-quality PCV-MIA figures from existing results.")
     parser.add_argument("--dataset", required=True, help="Dataset name, e.g. edgar / enron.")
-    parser.add_argument("--run-id", default=None, help="Archive figures under this run id (outputs/runs/{ds}/{run_id}/).")
+    parser.add_argument("--suite-id", default=None, help="显式 canonical suite id；正式论文图必须使用。")
+    parser.add_argument("--run-role", default="main", help="Suite 内的 run role，默认 main。")
+    parser.add_argument("--run-id", default=None, help="显式归档 run id；输入和输出都绑定该 run。")
+    parser.add_argument("--model", default=None, help="与 --run-id 配合使用的模型目录 slug。")
+    parser.add_argument("--workspace", action="store_true", help="显式允许读取可覆盖工作区，仅用于诊断。")
     parser.add_argument("--out-dir", default=None, help="Override output root; figures go to its figures/ subdir.")
-    parser.add_argument("--figures", default=None, help="Comma list to render a subset, e.g. roc,signals,calibration.")
+    parser.add_argument("--figures", default=None, help="Comma list to render a subset, e.g. roc,signals,baselines.")
     return parser.parse_args()
 
 
-def _resolve_out_dir(args: argparse.Namespace, dataset: str) -> Path:
-    """按「--out-dir > --run-id > $PCV_RUN_ID > outputs/reports」的顺序决定输出根目录。"""
+def _resolve_run_root(args: argparse.Namespace, dataset: str) -> Path | None:
+    """解析显式 suite/run 输入；绝不按修改时间或 glob 选择 latest。"""
+    selectors = int(bool(args.suite_id)) + int(bool(args.run_id)) + int(bool(args.workspace))
+    if selectors != 1:
+        raise ValueError("Exactly one of --suite-id, --run-id, or --workspace is required")
+    if args.suite_id:
+        root, _, _ = resolve_suite_run(args.suite_id, dataset=dataset, run_role=args.run_role)
+        return root
+    if args.run_id:
+        model = args.model or victim_model_slug()
+        root = resolve_path("outputs/runs") / dataset / model / args.run_id
+        if not root.is_dir():
+            raise FileNotFoundError(f"Run directory not found: {root}")
+        return root
+    return None
+
+
+def _resolve_out_dir(args: argparse.Namespace, dataset: str, run_root: Path | None) -> Path:
+    """正式 suite 图写入 release；候选 run/诊断工作区写入各自显式目录。"""
     if args.out_dir:
         return resolve_path(args.out_dir)
-    if args.run_id and args.run_id.strip():
-        return run_dir(dataset, args.run_id.strip())
-    if os.environ.get("PCV_RUN_ID", "").strip():
-        return run_dir(dataset, current_run_id())
-    # 无 run 上下文:落到稳定的 reports/{数据集}/{模型}/ 目录,反复刷图不制造一堆 run 目录。
+    if args.suite_id:
+        return resolve_path("outputs/releases") / args.suite_id / dataset
+    if run_root is not None:
+        return run_root
     return model_scoped_dir("outputs/reports", dataset)
 
 
@@ -73,9 +92,19 @@ def main() -> int:
     logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/paper_figures.log"), level="INFO")
     ds = args.dataset
 
-    report_path = model_scoped_dir("outputs/reports", ds) / f"{ds}_final_report.json"
-    scores_path = model_scoped_dir("outputs/scores", ds) / f"{ds}_pcv_scores.jsonl"
-    baseline_path = model_scoped_dir("outputs/baselines", ds) / f"{ds}_baseline_comparison.jsonl"
+    try:
+        run_root = _resolve_run_root(args, ds)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        return 2
+    if run_root is None:
+        report_path = model_scoped_dir("outputs/reports", ds) / f"{ds}_final_report.json"
+        scores_path = model_scoped_dir("outputs/scores", ds) / f"{ds}_pcv_scores_source_scores.jsonl"
+        baseline_path = model_scoped_dir("outputs/baselines", ds) / f"{ds}_baseline_comparison.jsonl"
+    else:
+        report_path = run_root / "reports" / f"{ds}_final_report.json"
+        scores_path = run_root / "scores" / f"{ds}_pcv_scores_source_scores.jsonl"
+        baseline_path = run_root / "baselines" / f"{ds}_baseline_comparison.jsonl"
 
     if not report_path.exists():
         logger.error("report not found: %s", report_path)
@@ -83,12 +112,16 @@ def main() -> int:
         return 1
 
     report = read_json(report_path)
-    score_rows = list(read_jsonl(scores_path)) if scores_path.exists() else []
+    if not scores_path.exists():
+        logger.error("source-level scores not found: %s", scores_path)
+        print(f"错误:找不到 source-level 分数 {scores_path}(请强制重跑第 11 步)。", file=sys.stderr)
+        return 1
+    score_rows = list(read_jsonl(scores_path))
     baseline_rows = list(read_jsonl(baseline_path)) if baseline_path.exists() else []
     if not score_rows:
         logger.warning("no score rows at %s; score-based figures will be skipped", scores_path)
 
-    out_dir = _resolve_out_dir(args, ds)
+    out_dir = _resolve_out_dir(args, ds, run_root)
     figures = [s.strip() for s in args.figures.split(",") if s.strip()] if args.figures else None
     produced = render_paper_figures(report, score_rows, baseline_rows, out_dir, dataset=ds, figures=figures)
 

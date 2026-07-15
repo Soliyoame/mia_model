@@ -71,7 +71,9 @@ def main() -> int:
     args = parse_args()
     setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/feasibility.log"), level="INFO")
     out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
-    scores_path = model_scoped_dir("outputs/scores", args.dataset) / f"{args.dataset}_pcv_scores.jsonl"
+    scores_dir = model_scoped_dir("outputs/scores", args.dataset)
+    source_scores_path = scores_dir / f"{args.dataset}_pcv_scores_source_scores.jsonl"
+    scores_path = source_scores_path if source_scores_path.exists() else scores_dir / f"{args.dataset}_pcv_scores.jsonl"
     report = analyze_feasibility(
         dataset=args.dataset,
         scores_path=scores_path,

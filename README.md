@@ -14,7 +14,7 @@ Paired Counterfactual Verification Membership Inference Attack
 
 核心问题是：当某篇文档进入 RAG 知识库后，模型在回答真假事实验证问题时，是否会因为检索到私有上下文而获得额外的验证、否定和纠错能力。
 
-PCV-MIA 的做法是：从候选文档里抽取可验证事实，构造真实 claim 和最小同类型反事实 claim，再生成 Q+ / Q- 查询；同一批查询分别运行 `RAG` 和 `LLM-only`。如果 RAG 比 LLM-only 更能支持真实事实、否定反事实并纠正原实体，则这个差异更可能来自 RAG 知识库中的成员文档。
+PCV-MIA 的做法是：从候选文档里抽取可验证事实，构造真实 claim 和最小同类型反事实 claim，再生成 Q+ / Q- 查询。P0 主攻击只使用 `RAG` 返回的支持、否定和纠错行为计算 Paired Verification Score；`LLM-only` 作为预训练记忆/上下文增益的归因对照，不参与主攻击判定。
 
 一句话概括当前代码：
 
@@ -22,13 +22,38 @@ PCV-MIA 的做法是：从候选文档里抽取可验证事实，构造真实 cl
 KB isolation
 + attackable fact extraction
 + paired counterfactual verification
-+ RAG vs LLM-only context gain
-= document-level membership score
++ RAG-only paired verification score
+= source-document membership score
 ```
 
 ## 当前状态
 
-当前仓库实现的是 PCV-MIA 主流程和实验评估框架。**当前阶段定位是可行性验证**（确认攻击信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验等混淆因素），不是冲顶会的完整实验。成员分校准已从朴素的 `cg_cvg` 升级到 L1 群体校准（主分=z-score）与 L2 shadow 逐样本校准（见后文同名章节）；干净集（edgar）上实测最强终分是 cvg_rag/z-score（去误受后 AUC 0.954 / TPR@1%FPR 0.815 / Accuracy 0.934）。需要特别注意以下几点：
+### 2026-07-14：投稿级 canonical 完善进度
+
+- 已预注册 `configs/canonical_suite.yaml`：Edgar/Enron × main/matched-control，formal、seed 42、同一 Qwen victim，选择规则固定为首个通过全部门禁的 run。
+- canonical 门禁现强制检查干净 commit、benchmark/config/artifact hash、source coverage、响应完整性、source whitelist、baseline/report 同源，以及完整 suite 四格；不完整 suite 不能驱动正式图表。
+- 已接入 source-level 离线消融、2/4/6/8 调用预算曲线、三个在线 query control、文本/embedding/检索捷径诊断和跨 Edgar/Enron 的 stance 人工审计模板。
+- 当前 Edgar 仍只有 159 个测试 source 具备完整 RAG pair；现有诊断不是 canonical。Enron 仍需按 formal 新协议重建。
+- 现有工作区尚未形成干净 release commit，因此现在不得晋升 canonical 或发起正式大规模补跑。
+
+### 2026-07-11：P0/P1 工程状态
+
+- P0 协议层已切换为 **RAG-only Paired Verification Score** 主分，LLM-only/context gain 仅作归因与阴性对照；论文评估单位为 source document，chunk 仅是检索与查询单位。
+- 现有历史结果仍属于 `legacy_feasibility`，尚未重新生成可投稿的 canonical suite。
+- P1 基础设施修复已落地：source coverage/完整 pair 门禁、空回答重试与成功优先响应压实、source-only report/figures/baseline、归档 SHA-256 inventory，以及共同 source 的 paired/budget-matched baseline 统计。旧产物仍须从第 10/11 步断点补齐后强制重建，不能直接视为已修复结果。
+- 当前 Edgar/Qwen 模型分层响应中除 **356 个显式失败调用**外，还有 RAG 391、LLM-only 397 个空回答；新版 runner 会把空回答视为 `empty_response` 并重试，但旧文件必须断点补跑。
+- 当前工作区已出现真实模型目录与 `unspecified/` 并存。正式重跑完成前，不要把不同目录下的 responses、scores、baseline、mechanism 或 report 拼成同一次实验。
+
+P1 推荐恢复顺序：
+
+```text
+固定同一 PCV_RUN_ID 补跑失败与空回答调用
+→ 强制重建 parsed stance / source scores / source coverage
+→ 在共同 source whitelist 上重跑 baseline paired/budget-matched 统计
+→ 重建 feasibility、mechanism、figures、final report 与 run manifest
+```
+
+当前仓库实现的是 PCV-MIA 主流程和实验评估框架。P0 冻结主分是 source-level RAG-only PVS；L1 conformal、LLM-only/context gain 和 L2 shadow 都是校准或归因分析，不替代主攻击定义。历史 Edgar 数字只用于可行性参考，必须等 source-level canonical run 完整后再更新论文主表。需要特别注意以下几点：
 
 - RAG index 只能由 `KB_Member` 构建，代码中有硬检查。
 - `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 都不能进入 `indexes/`（`Reserve` 会从第 05 步起进入 benchmark 充当 L1 群体校准的零分布，但绝不进 RAG index）。
@@ -39,7 +64,14 @@ KB isolation
 - `Spoofed_Non_Member` 是可选 hard negative 对照组，不是 PCV-MIA 主方法必需部分。
 - `Reserve` 组从第 05 步起被纳入 benchmark，随主流水线跑出 `cvg_rag`，仅作为 L1 群体校准的"非成员零分布"；评估指标时必须排除（开关 `PCV_ENABLE_RESERVE_CALIBRATION`，默认 true）。
 - 当前 NER 只是 `EntityExtractor` 的可注入候选源接口，默认没有自动加载 NER 模型。
-- 部分 baseline 和 defense 是 reserved interface，不能当成已完成论文实验结果。
+- 5 个 baseline 已实现；defense 仍以 policy/report 骨架为主。P1 重跑完成前，现有 baseline 数值不得与新 source-level 主结果混用。
+
+### 2026-07-13：Baseline 与 API 请求可靠性
+
+- MBA 的 proxy-LM 选词阶段已串行化 Hugging Face tokenizer/model 访问，修复 `max_workers>1` 时的 `Already borrowed`。锁在 victim 请求前释放，不影响 RAG/API 并发。
+- PCV-MIA 第 10 步与第 12 步全部 baseline 共享「短指数退避 + 长冷却无限重试」语义。超时、SSL EOF、空回答、429/5xx 和网关偶发 403 不再丢弃查询，而是冷却后重试同一请求直到成功。
+- 每一次物理重试都重新经过令牌桶，不会绕过 `requests_per_minute`。缺依赖、解析错误等非 API 异常不会无限空等。
+- 默认长冷却是 300 秒。若端点长期宕机或授权永久不可用，进程会持续运行并重试；需人工停止时使用 `Ctrl+C`。
 
 ## 方法概览
 
@@ -82,9 +114,11 @@ KB isolation
 ```text
 fact extraction
 paired claim/query construction
-RAG / LLM-only dual inference
-CG-CVG scoring
+RAG inference
+RAG-only PVS source scoring
 ```
+
+LLM-only 仅在独立 matched-control run 中启用，用于判断预训练记忆/上下文增益，不参与主攻击分数。
 
 `Spoofed_Non_Member`、baseline、mechanism analysis 和 defense 都属于实验评估层，不是攻击算法本体。
 
@@ -110,6 +144,7 @@ tqdm
 numpy
 sentence-transformers
 matplotlib
+nltk
 ```
 
 可选加速依赖：
@@ -264,13 +299,16 @@ generation:
   max_tokens: 512
   timeout: 60
   retries: 2
-  retry_backoff_base: 5
-  retry_backoff_max: 120
-  request_interval_seconds: 1
+  retry_backoff_base: 30
+  retry_backoff_max: 300
+  retry_until_success: true
+  retry_cooldown_seconds: 300
+  request_interval_seconds: 15
   # 抗卡顿限速（令牌桶 + 并发）：requests_per_minute > 0 时启用全局令牌桶，
   # 全局速率恒 ≤ 此 RPM，但 max_workers>1 时某条 call 卡住不阻塞其他线程。
   # =0 则回退到 request_interval_seconds 固定间隔（旧行为）。详见「10. 双路推理」提速小节。
   requests_per_minute: 4
+  sibling_requests_per_minute: 4
   max_workers: 4
 ```
 
@@ -384,8 +422,18 @@ python scripts/run_pipeline.py --dataset enron --from-step 1 --to-step 9 --force
 配置好 `PCV_VICTIM_*` 后继续跑 LLM、评分和报告：
 
 ```powershell
-python scripts/run_pipeline.py --dataset enron --from-step 10 --to-step 15 --force
+python scripts/run_pipeline.py --dataset enron --from-step 10 --to-step 15 --force-from-step 11
 ```
+
+`--force-from-step 11` 会让第 10 步保留成功响应、只补失败/缺失请求，再强制重建 11–15；不要用全局 `--force` 误重查已成功的正式请求。
+
+正式 main run 还需显式运行全部投稿级分析：
+
+```powershell
+python scripts/run_pipeline.py --dataset edgar --scale formal --run-id edgar-qwen-formal-seed42 --force-from-step 11 --canonical-analyses
+```
+
+`--canonical-analyses` 会追加离线消融、预算/捷径诊断和三个在线 query control，并与主 run 一起归档。matched-control 使用独立 run id、`--run-role matched_control --llm-only`，不重复该开关。只有干净 commit 上生成且通过门禁的 candidate 才能由 `scripts/16_archive_run.py --status canonical --suite-id pcv-mia-paper-v1` 晋升。
 
 只跑核心攻击，不跑 spoof、baseline、defense：
 
@@ -435,18 +483,20 @@ outputs/reports/edgar/qwen3.5-397b-a17b/edgar_final_report.json
 
 涉及 rag_responses / llm_only_responses / parsed_stance / scores / baselines / mechanisms / defenses / reports / runs。第 **01–09** 步（facts / claims / queries，与受害者模型无关）**保持扁平**，`datasets/`、`indexes/` 也不变。
 
-> **模型名来自 `PCV_VICTIM_MODEL`**（如 `qwen/qwen3.5-397b-a17b` → 清洗为 `qwen3.5-397b-a17b`），**没设则全落到 `unspecified/`**。跑前务必设好（PowerShell：`$env:PCV_VICTIM_MODEL="qwen/qwen3.5-397b-a17b"`），否则会发现「scores 空了」其实是跑去 `unspecified/` 了。
+> **模型名来自 `PCV_VICTIM_MODEL`**（如 `qwen/qwen3.5-397b-a17b` → 清洗为 `qwen3.5-397b-a17b`），可由进程环境或项目 `.env` 提供；进程环境优先。未设置时仍会落到 `unspecified/`，canonical 门禁会拒绝该 run。
 
 ### 论文级图表
 
-第 15 步跑完会自动产 6 张**论文级单图**（各 `.pdf` 矢量 + `.png` 300dpi）到 run 文件夹的 `figures/`，附 `captions.md`（中英图注，可直接粘 LaTeX `\caption{}`）；也可随时手动刷：
+第 15 步跑完会自动产 5 张**论文级单图**（各 `.pdf` 矢量 + `.png` 300dpi）到 run 文件夹的 `figures/`，附 `captions.md`（中英图注，可直接粘 LaTeX `\caption{}`）；也可随时手动刷：
 
 ```powershell
-python scripts/17_paper_figures.py --dataset edgar                        # 全套 6 张
-python scripts/17_paper_figures.py --dataset edgar --figures roc,signals  # 只出某几张
+python scripts/17_paper_figures.py --dataset edgar --workspace                        # 显式工作区诊断
+python scripts/17_paper_figures.py --dataset edgar --workspace --figures roc,signals  # 只出某几张
+python scripts/17_paper_figures.py --dataset edgar --suite-id pcv-mia-paper-v1        # 正式 suite 图
+python scripts/build_canonical_release.py --suite-id pcv-mia-paper-v1                 # 绑定两数据集全部产物 hash
 ```
 
-6 张图：`roc`（PCV / cvg_rag / cvg_llm 阴性对照 多曲线 + 工作点）、`separation`（成员 vs 非成员分数小提琴）、`signals`（信号 AUC 柱 + 阴性对照标注）、`baselines`（PCV vs 基线）、`threshold`（TPR/FPR/Acc 随阈值）、`calibration`（分数可靠性曲线）。色盲安全配色、每图右上角记录数据集 + 受害者模型。逻辑在 `src/evaluation/paper_figures.py`；旧的 `plots.py` 2×2 自查仪表盘保留（`analyze_feasibility` / 第 15 步同时产出），只做研究者自查。
+5 张图：`roc`（PCV / cvg_rag / cvg_llm 阴性对照 多曲线 + 工作点）、`separation`（成员 vs 非成员分数小提琴）、`signals`（信号 AUC 柱 + 阴性对照标注）、`baselines`（PCV vs 基线）、`threshold`（TPR/FPR/Acc 随阈值）。未经概率校准的 PVS 不再绘制 reliability/calibration 图。色盲安全配色、每图右上角记录数据集 + 受害者模型。
 
 ## 分步命令
 
@@ -600,6 +650,13 @@ outputs/stealth_filtered_queries/enron_paired_queries.manifest.json
 python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_config.yaml --force
 ```
 
+默认只运行 RAG，以节省 token。需要论文归因或阴性对照时，显式增加 `--llm-only`；也可以在
+`configs/rag_config.yaml` 中将 `generation.run_llm_only` 设为 `true`。
+
+```bash
+python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_config.yaml --llm-only --force
+```
+
 输出：
 
 ```text
@@ -621,6 +678,11 @@ outputs/llm_only_responses/enron_llm_only_responses.manifest.json
   并发**不是**为了超过 RPM，而是为了在端点间歇卡顿时**仍能达到** RPM。`requests_per_minute: 0`
   则回退到 `request_interval_seconds` 固定间隔的旧行为。每条查询仍逐条单发，输出与串行**逐字节一致**。
   可用 `scripts/_smoke_token_bucket.py` 在换 key/端点后验证实际吞吐。
+
+- **API 失败不丢样本**（`retry_until_success` + `retry_cooldown_seconds`）：
+  每个请求先按 `retries` / `retry_backoff_*` 做短指数退避；若仍是可恢复的 API/网络错误，
+  则冷却 300 秒后继续请求同一 prompt，直到得到非空成功回答。该规则同时覆盖 RAG、可选
+  LLM-only 与第 12 步 baseline 的 victim/attacker 调用。
 
 - **`--primary-only`**（命令行开关）：只跑 `selection_tier=primary` 的高质量 fact 对应的 query，
   跳过仅作保底的 `fallback` fact，同时砍掉 RAG 与 LLM-only 两路调用数。每条 primary 仍单发、
@@ -662,8 +724,7 @@ pcv_score
 pcv_score_primary
 ```
 
-其中 `pcv_score` 是当前主分，按 fact 的 `quality_weight` 对 pair-level `CG-CVG`
-加权；`cg_cvg` 是不加权均值，保留为诊断和消融口径。
+其中 `pcv_score` 是当前主分：只使用 RAG 的 `Support(Q+) + Correction(Q-)`，先在 chunk 内平均 pair，再对 source 内 chunk 等权平均。`cg_cvg`、质量加权和 primary-only 都只保留为归因/消融口径。
 
 ### 12. 运行 baselines
 
@@ -674,8 +735,9 @@ python scripts/12_run_baselines.py --dataset enron --config configs/baseline_con
 输出：
 
 ```text
-outputs/baselines/{dataset}/{dataset}_{method}_scores.jsonl      # 每个 baseline 每目标分数
-outputs/baselines/{dataset}/{dataset}_baseline_comparison.jsonl  # 含 PCV-MIA 的对照表
+outputs/baselines/{dataset}/{model}/{dataset}_{method}_scores.jsonl
+outputs/baselines/{dataset}/{model}/{dataset}_{method}_scores_source_scores.jsonl
+outputs/baselines/{dataset}/{model}/{dataset}_baseline_comparison.jsonl
 ```
 
 5 个 baseline 均已按「方案一」忠实复现（原样移植官方确定性逻辑 + 接缝注入统一 RAG + 差分测试）：
@@ -690,6 +752,8 @@ DCMI         反义词扰动差分（base=BLEU 重叠），对齐官方 perturb.
 ```
 
 忠实度审计与实验条件对齐见 `src/baselines/BASELINES.md`；确定性逻辑由 `tests/test_baseline_adapters.py`（差分测试 14/14）背书。IA/DCMI 需 attacker LLM，可加 `--attacker victim` 复用受害模型。
+
+MBA 额外对共享 proxy-LM 的 tokenizer/model 选词阶段加了串行锁，解决真实 GPT-2 在多线程下的 `Already borrowed`；得到攻击 query 后立即释放锁，victim 请求仍可并发。所有 baseline 的可恢复 API 错误与第 10 步一样，会长冷却并持续重试到成功。
 
 ### 13. 机制分析
 
@@ -871,7 +935,7 @@ src/spoof/
   generator.py  可选 Spoofed_Non_Member 对照组生成
 
 src/baselines/
-  runner.py  baseline 统一输出接口
+  victim_harness.py  5 个 baseline 的统一 RAG/API 执行、重试、聚合与输出接口
 
 src/defenses/
   runner.py  defense policy report 骨架
@@ -1091,16 +1155,17 @@ CG-CVG = CVG_RAG - CVG_LLM
 文档级分数：
 
 ```text
-score_i = CG-CVG_i
-cg_cvg(x) = average_i(score_i)
-pcv_score(x) = sum_i quality_weight_i * score_i / sum_i quality_weight_i
-pcv_score_primary(x) = average_i(score_i where selection_tier_i = primary)
+PVS_pair = Support_RAG(Q+) + Correction_RAG(Q-)
+PVS_chunk = mean(PVS_pair within chunk)
+pcv_score(source) = mean(PVS_chunk within source)
+cg_cvg = PVS_RAG - PVS_LLM                 # 归因诊断
+pcv_score_context_gain_weighted            # 质量加权诊断
 ```
 
 当前代码中：
 
 ```text
-pcv_score 是主分；只有未提供 facts_path 或所有 fact 权重等价时，才退化为 cg_cvg。
+pcv_score 始终是 RAG-only、pair→chunk→source 的不加权分层主分。
 predicted_member_t* 这类阈值字段按 pcv_score 判定。
 ```
 
@@ -1352,15 +1417,18 @@ baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」�
 
 ## 研究记录
 
-仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v15.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
+仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v18.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录默认不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
 
-- [思路v15.txt](研究记录/思路v15.txt) 是**最新**增量文档（产物工程化三连：一次实验按开始时间归档 + 第 15 步可视化升级为 6 张论文级单图 + 模型相关产物按 `{数据集}/{模型}/` 分层）。
+- `思路v18` 记录 2026-07-13 baseline 复现就绪审计、MBA 并发修复、IA/DCMI 失败放大原因，以及 PCV-MIA/全 baseline 的 API 长冷却无限重试决策。
+- `思路v17` 固定 LLM-only 默认关闭与 P1 完整性基础设施修复。
+- `思路v16` 是当前最新协议增量：P0 固定 RAG-only 主攻击、source-level 评估、conformal 校准与 canonical run/suite；P1 负责修通实验基础设施。若该文件未纳入仓库，请以当前 README 与代码中的 `P0_PROTOCOL` 为准。
+- [思路v15.txt](研究记录/思路v15.txt) 是上一版工程化增量文档（run 归档、论文图、模型相关产物分层）。
 - [思路v11.txt](研究记录/思路v11.txt) 是终分层精炼（L1 主分→z-score、去误受项、per-term 去偏对照、门控否决、阈值-指标关系表 + Accuracy 输出；全程离线消融裁决，含两个被数据否决的方向）。
 - [思路v10.txt](思路v10.txt) 是 v9 的增量（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
 - [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
 - [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
 - [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
-- 新旧说法冲突时，以 `思路v11.txt` + `思路v10.txt` + 当前代码为准；这些没提到的细节再回 `思路v9.txt` / `思路v8.txt` / `思路v7.txt`。
+- 新旧说法冲突时，以 `思路v16` + 当前 README + 当前代码为准；旧版中的 context-gain 主分、chunk-level 主评估与历史数值仅作研究过程记录。
 - **当前阶段定位 = 可行性验证**（确认信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验），非冲顶会的完整实验。
 - v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
 - `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。

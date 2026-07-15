@@ -12,6 +12,8 @@ llm_profiles_path: configs/llm_profiles.yaml
 
 # ---------------- 输入/输出目录 ----------------
 paths:
+  query_controls_dir: outputs/query_controls
+  query_control_responses_dir: outputs/query_control_responses
   splits_dir: datasets/splits                          # 读：第 02 步切好的各组数据
   indexes_dir: indexes                                 # 写：第 03 步建好的 RAG 向量索引（只含 KB_Member）
   benchmark_dir: datasets/benchmarks                   # 读/写：固化的 attack benchmark（带 hash）
@@ -40,6 +42,7 @@ retrieval:
 
 # ---------------- 生成（第 10 步调 victim 大模型回答问题）----------------
 generation:
+  run_llm_only: false             # 默认只跑 RAG；论文归因/阴性对照实验时显式开启
   victim_profile: null            # 用哪个 profile：null=按 .env/llm_profiles.yaml 的默认（openai_api）
   temperature: 0.0                # 采样温度：0=确定性输出（注：实测 qwen3.5-flash temp=0 仍有~15%不复现）
   max_tokens: 512                 # 单次回答最多生成 512 token
@@ -47,6 +50,9 @@ generation:
   retries: 2                      # 失败后最多重试 2 次（从 4 下调：并发下卡顿由别的线程补，不必久等）
   retry_backoff_base: 30          # 重试等待基数（秒）：第 1 次等 ~30s，逐次指数退避
   retry_backoff_max: 300          # 重试等待上限：单次最多等 300 秒
+  # 短指数退避耗尽后,API/网络错误不丢弃:长冷却后重试同一请求,直到成功。
+  retry_until_success: true
+  retry_cooldown_seconds: 300     # 每轮短重试耗尽后冷却 5 分钟
   request_interval_seconds: 15    # 【仅在 requests_per_minute=0 时生效】每两次请求固定间隔（旧限速方式）
   # === 抗卡顿限速（令牌桶 + 并发）===
   # requests_per_minute > 0 时启用【全局令牌桶】：全局速率恒 ≤ 此 RPM（绝不超端点限流），
@@ -54,5 +60,9 @@ generation:
   # 并发【不是】为了超过 RPM，是为了在抖动下【仍能达到】RPM。实测卡顿会把每条均摊到 ~72–96s，
   # 而 4 RPM 理论只该 15s/条，本机制目标是把实际耗时拉回接近理论地板（潜在 ~4–5×）。
   # ⚠️ 必须设成你 key 的真实 RPM 上限（这里=4）。设 0 则回退到 request_interval_seconds 旧方式。
-  requests_per_minute: 4          # key 的每分钟请求上限（令牌桶按此匀速放行）
+  requests_per_minute: 4          # victim key 的每分钟请求上限（令牌桶按此匀速放行）
+  # sibling(attacker)是【另一把 key、另一个端点】→ 给它【单独一只令牌桶】按自己的 RPM 放行,
+  # 不跟 victim 抢速率(仅 --attacker sibling 生效;--attacker victim 时两路合用 victim 桶)。
+  # 0 或不填 = 回退成与 victim 同 RPM。
+  sibling_requests_per_minute: 4  # sibling key(windhub 等)的每分钟请求上限
   max_workers: 4                  # 并发线程数：令牌桶模式下需 >1 才能在卡顿时填满管道（建议 3~4）

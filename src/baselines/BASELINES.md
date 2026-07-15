@@ -30,7 +30,6 @@
 - `S2MIA/s2mia_reference.py` — 从 MIRABEL 抽取的自包含 S²MIA（含 S2Prompt）。
 - `RAG_MIA/rag_mia_reference.py` — 据论文重写的直接询问攻击。
 - `victim_harness.py` — **真实受害查询 harness**：目标枚举 + 通用 RAG 作答 + 5 个适配器（RAG-MIA/S2MIA/MBA/IA/DCMI）+ attacker 构造 + per-target 打分 + 指标。第 12 步实际调用它。
-- `runner.py` — 旧的「用现有 cvg 分数当占位」汇总器（已被 victim_harness 取代，保留备查）。
 
 ## 怎么跑
 

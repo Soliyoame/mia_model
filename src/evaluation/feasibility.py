@@ -47,7 +47,17 @@ CALIBRATION_GROUP = "Reserve"
 _NUMBER_RE = re.compile(r"\d[\d.,]*")
 # 信号拆解与分组均值都关心这几个字段(含三口径成员分 + L1 校准后的成员分)。
 # cg_cvg=不加权简单平均; pcv_score=质量加权(方案D主分); pcv_score_primary=仅高质量primary口径。
-_SCORE_KEYS = ["cvg_rag", "cvg_llm", "cg_cvg", "pcv_score", "pcv_score_primary", ZSCORE_KEY, PERCENTILE_KEY]
+_SCORE_KEYS = [
+    "pvs_rag",
+    "pcv_score",
+    "cvg_rag",
+    "cvg_llm",
+    "cg_cvg",
+    "pcv_score_context_gain_weighted",
+    "pcv_score_primary",
+    ZSCORE_KEY,
+    PERCENTILE_KEY,
+]
 # shortcut baseline 用的文本统计特征。
 _SHORTCUT_KEYS = ["char_length", "word_count", "digit_count", "entity_count", "entity_density"]
 
@@ -71,22 +81,35 @@ def _signal_decomposition(score_rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _shortcut_baseline(
     score_rows: list[dict[str, Any]],
-    benchmark_by_audit: dict[str, dict[str, Any]],
+    benchmark_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """② shortcut:只用文本统计特征算可分性 AUC(在被打分的同一批文档上)。"""
+    """② shortcut:按 audit 或 source 对齐文本统计特征，避免把相关 chunks 当独立样本。"""
+    benchmark_by_audit = {str(r.get("audit_id")): r for r in benchmark_rows}
+    benchmark_by_source: dict[str, list[dict[str, Any]]] = {}
+    for row in benchmark_rows:
+        source_key = str(row.get("source_key") or row.get("source_id") or row.get("audit_id"))
+        benchmark_by_source.setdefault(source_key, []).append(row)
     feats: list[dict[str, Any]] = []
     for row in score_rows:
-        bench = benchmark_by_audit.get(str(row.get("audit_id")), {})
-        text = str(bench.get("text") or "")
-        meta = bench.get("metadata") if isinstance(bench.get("metadata"), dict) else {}
+        if row.get("source_key") is not None:
+            benches = benchmark_by_source.get(str(row.get("source_key")), [])
+        else:
+            bench = benchmark_by_audit.get(str(row.get("audit_id")), {})
+            benches = [bench] if bench else []
+        texts = [str(bench.get("text") or "") for bench in benches]
+        metas = [bench.get("metadata") if isinstance(bench.get("metadata"), dict) else {} for bench in benches]
+
+        def avg(values: list[float]) -> float:
+            return mean(values) if values else 0.0
+
         feats.append(
             {
                 "group": row.get("group"),
-                "char_length": float(len(text)),
-                "word_count": float(len(text.split())),
-                "digit_count": float(len(_NUMBER_RE.findall(text))),
-                "entity_count": float(meta.get("entity_count") or 0.0),
-                "entity_density": float(meta.get("entity_density") or 0.0),
+                "char_length": avg([float(len(text)) for text in texts]),
+                "word_count": avg([float(len(text.split())) for text in texts]),
+                "digit_count": avg([float(len(_NUMBER_RE.findall(text))) for text in texts]),
+                "entity_count": avg([float(meta.get("entity_count") or 0.0) for meta in metas]),
+                "entity_density": avg([float(meta.get("entity_density") or 0.0) for meta in metas]),
             }
         )
     result: dict[str, Any] = {}
@@ -237,7 +260,7 @@ def analyze_feasibility(
         结果字典(同时已写入 output_path)。
     """
     score_rows = list(read_jsonl(scores_path))
-    benchmark_by_audit = {str(r.get("audit_id")): r for r in read_jsonl(benchmark_path)}
+    benchmark_rows = list(read_jsonl(benchmark_path))
 
     # L1 群体校准:用 Reserve 的 cvg_rag 估非成员零分布,给待测样本算校准分;
     # eval_rows 已剔除 Reserve(校准组不进评估),后续 AUC/shortcut 都在 eval_rows 上算。
@@ -245,7 +268,7 @@ def analyze_feasibility(
     eval_rows = calib["eval_rows"]
 
     signal = _signal_decomposition(eval_rows)
-    shortcut = _shortcut_baseline(eval_rows, benchmark_by_audit)
+    shortcut = _shortcut_baseline(eval_rows, benchmark_rows)
     overlap = _source_overlap(Path(splits_dir))
     verdict = _verdict(signal, shortcut, overlap)
     comparison = _calibration_comparison(eval_rows)
@@ -255,6 +278,7 @@ def analyze_feasibility(
         "dataset": dataset,
         "scored_samples": len(score_rows),       # 含 Reserve 的总打分数
         "eval_samples": len(eval_rows),          # 剔除 Reserve 后真正进评估的样本数
+        "evaluation_unit": "source_document" if score_rows and score_rows[0].get("source_key") is not None else "audit_chunk",
         "signal_decomposition": signal,
         "shortcut_baseline": shortcut,
         "source_overlap": overlap,
