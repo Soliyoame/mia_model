@@ -4,7 +4,7 @@
 ========
 本文件负责对一次攻击运行做"机制层面"的统计复盘:在 RAG 检索是否命中目标文档、检索内容里
 是否真的出现原始实体、模型是否据此纠正反事实声明等环节上,逐项算出比率,并按实体类型/查询类型
-分桶,辅以 Context Gain、查询-文档相似度等指标。它读入查询、RAG 响应、解析结果、打分与文档库,
+分桶,辅以 RAG-only PVS、查询-文档相似度等指标。它读入查询、RAG 响应、解析结果、打分与文档库,
 汇总成一份机制分析报告(json),用于解释攻击为何成功或失败,而非给出攻击判定本身。
 """
 
@@ -41,7 +41,7 @@ def run_mechanism_analysis(
         queries_path:       查询文件(jsonl),按 query_id 索引。
         rag_responses_path: RAG 响应文件(jsonl),含检索命中信息。
         parsed_path:        立场解析结果(jsonl),只取 mode=="rag" 的部分。
-        scores_path:        打分结果(jsonl),用于 Context Gain 等统计。
+        scores_path:        打分结果(jsonl),用于 RAG-only PVS 等统计。
         docstore_path:      文档库(jsonl),按 doc_id 聚合正文,用于实体证据判定。
         output_path:        机制报告输出路径(json)。
         resume:             断点续跑:报告已存在且非空则跳过。
@@ -85,10 +85,10 @@ def run_mechanism_analysis(
     # 按实体类型/查询类型分桶统计恢复率(成功纠正到原实体或支持真声明记为命中)。
     entity_type_stats = _rate_by_key(parsed, "entity_type", lambda row: bool(row.get("corrects_to_original_entity") or row.get("supports_true_claim")))
     query_type_stats = _rate_by_key(parsed, "query_type", lambda row: bool(row.get("corrects_to_original_entity") or row.get("supports_true_claim")))
-    # Context Gain 字段:cg_cvg 是当前 pcv_scorer 产出的真实 context-gain 字段;score_key 缺
-    # pcv_score 时退回 cg_cvg。原 fallback 名 cg_cms 经查全历史从未被产出过,是死兜底,已清除。
-    group_cg = _mean_by_key(scores, "group", "cg_cvg")
+    # main 机制报告只解释 RAG-only PVS；真正的 context gain 由独立 matched-control
+    # 在相同 source whitelist 上离线计算，不能读取 main 工作区中的旧 LLM-only 诊断字段。
     score_key = "pcv_score" if scores and "pcv_score" in scores[0] else "cg_cvg"
+    group_pvs = _mean_by_key(scores, "group", score_key)
 
     report = {
         "dataset": dataset,
@@ -103,9 +103,10 @@ def run_mechanism_analysis(
         "False Acceptance Rate": _mean_bool([bool(row.get("accepts_counterfactual")) for row in parsed if row.get("claim_type") == "counterfactual"]),
         # 证据覆盖率:在确有实体证据的样本中,模型最终提到原始实体的比例。
         "Entity Evidence Override Rate": _mean_bool(override_rows),
-        "Context Gain": {
+        "RAG-only PVS": {
+            "score_key": score_key,
             "overall_avg": mean([float(row.get(score_key, 0.0)) for row in scores]) if scores else 0.0,
-            "by_group": group_cg,
+            "by_group": group_pvs,
         },
         "Query-Document Similarity": {
             "avg": mean(similarity_values) if similarity_values else 0.0,
@@ -123,8 +124,8 @@ def run_mechanism_analysis(
             "note": "Run script 10 with different top_k values and compare reports for full ablation.",
         },
         "Control Group False Positive Analysis": {
-            "True_Non_Member_avg_context_gain": group_cg.get("True_Non_Member", 0.0),
-            "Spoofed_Non_Member_avg_context_gain": group_cg.get("Spoofed_Non_Member", 0.0),
+            "True_Non_Member_avg_pvs": group_pvs.get("True_Non_Member", 0.0),
+            "Spoofed_Non_Member_avg_pvs": group_pvs.get("Spoofed_Non_Member", 0.0),
             "Spoofed_Non_Member_role": "experimental_control_group_only",
             "note": "False positives should be inspected against nearest KB chunks in future ablation.",
         },
