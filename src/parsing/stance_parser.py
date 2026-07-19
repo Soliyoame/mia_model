@@ -249,7 +249,7 @@ def parse_stance_files(
     dataset: str,
     queries_path: str | Path,
     rag_responses_path: str | Path,
-    llm_responses_path: str | Path,
+    llm_responses_path: str | Path | None,
     output_path: str | Path,
     resume: bool = True,
     force: bool = False,
@@ -263,7 +263,7 @@ def parse_stance_files(
         dataset:             数据集名。
         queries_path:        查询文件,用来按 query_id 找到每条回答对应的查询。
         rag_responses_path:  RAG 模式回答文件。
-        llm_responses_path:  LLM-only 模式回答文件。
+        llm_responses_path:  LLM-only 模式回答文件；为 None 时只解析 RAG。
         output_path:         立场记录的输出路径(并派生 manifest)。
         resume:              断点续跑:结果已存在则跳过。
         force:               强制重跑。
@@ -282,8 +282,11 @@ def parse_stance_files(
     queries = {str(row["query_id"]): row for row in query_rows}
     rows: list[dict[str, Any]] = []
     integrity: dict[str, Any] = {}
-    # 依次处理 RAG 和 LLM-only 两个回答文件。
-    for mode, path in [("rag", rag_responses_path), ("llm_only", llm_responses_path)]:
+    # main canonical run 显式传 None，只解析 RAG；旧调用仍可同时解析两套回答。
+    response_sources: list[tuple[str, str | Path]] = [("rag", rag_responses_path)]
+    if llm_responses_path is not None:
+        response_sources.append(("llm_only", llm_responses_path))
+    for mode, path in response_sources:
         response_path = Path(path)
         raw = list(read_jsonl(response_path)) if response_path.exists() else []
         compacted, stats = compact_response_rows(raw)

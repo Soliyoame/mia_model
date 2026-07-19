@@ -218,7 +218,11 @@ def build_steps() -> list[PipelineStep]:
             "parse_stance_and_score",
             "11_parse_stance_and_score.py",
             "parse stance and score",
-            lambda args: _dataset_args(args, *_config_arg(args.pcv_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.pcv_config),
+                *(["--skip-llm-only"] if args.run_role == "main" else []),
+            ),
         ),
         PipelineStep(
             12,

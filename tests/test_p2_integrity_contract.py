@@ -63,6 +63,32 @@ class ResponseIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["integrity"]["llm_only"]["parsed"], 0)
             self.assertEqual(manifest["integrity"]["llm_only"]["missing"], 1)
 
+    def test_rag_only_parse_can_exclude_existing_llm_control(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queries = root / "queries.jsonl"
+            rag = root / "rag.jsonl"
+            llm = root / "llm.jsonl"
+            output = root / "stance.jsonl"
+            query = {
+                "query_id": "q1",
+                "pair_id": "p1",
+                "audit_id": "a1",
+                "group": "KB_Member",
+                "dataset": "toy",
+                "claim_type": "true",
+                "query_type": "compressed",
+            }
+            write_jsonl([query], queries)
+            write_jsonl([{**query, "mode": "rag", "response": "Consistent", "error": None}], rag)
+            write_jsonl([{**query, "mode": "llm_only", "response": "Unknown", "error": None}], llm)
+            manifest = parse_stance_files(
+                "toy", queries, rag, None, output, resume=False, force=True,
+            )
+            self.assertEqual(set(manifest["integrity"]), {"rag"})
+            self.assertEqual(manifest["parsed_responses"], 1)
+            self.assertEqual([row["mode"] for row in read_jsonl(output)], ["rag"])
+
 
 class CoverageContractTests(unittest.TestCase):
     def test_incomplete_pair_excludes_entire_source(self) -> None:

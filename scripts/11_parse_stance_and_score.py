@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Parse PCV-MIA stances and compute scores.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
+    parser.add_argument(
+        "--skip-llm-only",
+        action="store_true",
+        help="Parse only RAG responses; canonical main runs use an independent matched control.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     return parser.parse_args()
@@ -62,7 +67,12 @@ def main() -> int:
         dataset=args.dataset,
         queries_path=resolve_path(config["paths"]["stealth_filtered_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
         rag_responses_path=model_scoped_dir("outputs/rag_responses", args.dataset) / f"{args.dataset}_rag_responses.jsonl",
-        llm_responses_path=model_scoped_dir("outputs/llm_only_responses", args.dataset) / f"{args.dataset}_llm_only_responses.jsonl",
+        llm_responses_path=(
+            None
+            if args.skip_llm_only
+            else model_scoped_dir("outputs/llm_only_responses", args.dataset)
+            / f"{args.dataset}_llm_only_responses.jsonl"
+        ),
         output_path=parsed_path,
         resume=not args.no_resume,
         force=args.force,
