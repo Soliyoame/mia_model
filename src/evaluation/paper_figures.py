@@ -376,6 +376,8 @@ def _write_captions(
     auc = h.get("AUC")
     t1 = h.get("TPR@1%FPR")
     t5 = h.get("TPR@5%FPR")
+    llm_headline = _headline(score_rows, "cvg_llm") if score_rows else {}
+    llm_auc = llm_headline.get("AUC")
 
     def _f(v: Any) -> str:
         return f"{float(v):.3f}" if isinstance(v, (int, float)) else "n/a"
@@ -386,11 +388,11 @@ def _write_captions(
             f"Membership-inference ROC on {head}. PCV-MIA reaches AUC={_f(auc)}, with "
             f"TPR={_f(t1)} at 1% FPR and TPR={_f(t5)} at 5% FPR (marked dots). "
             f"The retrieval signal cvg_rag and the model-only negative control cvg_llm are "
-            f"overlaid; cvg_llm stays near the diagonal, indicating the attack signal comes "
-            f"from knowledge-base membership rather than a shortcut.",
+            f"overlaid; cvg_llm AUC={_f(llm_auc)} quantifies separability already present "
+            f"without retrieval and is used only for attribution.",
             f"成员推理 ROC({head})。PCV-MIA 达到 AUC={_f(auc)},1% 误报率下检出率 {_f(t1)}、"
             f"5% 误报率下 {_f(t5)}(图中圆点)。图中叠加了检索信号 cvg_rag 与纯模型的"
-            f"阴性对照 cvg_llm;cvg_llm 贴近对角线,表明攻击信号来自知识库成员身份而非捷径。",
+            f"阴性对照 cvg_llm；其 AUC={_f(llm_auc)} 衡量无检索时已有的可分性，仅用于归因。",
         ),
         "separation": (
             f"Distribution of the PCV membership score for members vs. non-members ({head}). "
@@ -399,10 +401,11 @@ def _write_captions(
         ),
         "signals": (
             f"Signal decomposition by AUC ({head}). The retrieval-grounded signal cvg_rag is "
-            f"discriminative, while the model-only cvg_llm stays near 0.5 (negative control), "
-            f"showing the signal stems from knowledge-base membership rather than a shortcut.",
-            f"各信号的 AUC 拆解({head})。带检索的 cvg_rag 有区分度,而纯模型的 cvg_llm 贴近 0.5"
-            f"(阴性对照),说明信号来自知识库成员身份而非捷径。",
+            f"shown alongside the model-only control (cvg_llm AUC={_f(llm_auc)}). Deviations "
+            f"of cvg_llm from 0.5 expose prior or distributional contamination rather than "
+            f"changing the RAG-only attack score.",
+            f"各信号的 AUC 拆解({head})。带检索的 cvg_rag 与纯模型阴性对照并列展示；"
+            f"cvg_llm AUC={_f(llm_auc)}，偏离 0.5 表示先验或分布污染，不改变 RAG-only 主分。",
         ),
         "baselines": (
             f"Attack comparison of PCV-MIA against baselines by AUC and TPR@1%FPR ({head}).",

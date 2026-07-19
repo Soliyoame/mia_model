@@ -28,13 +28,14 @@ KB isolation
 
 ## 当前状态
 
-### 2026-07-14：投稿级 canonical 完善进度
+### 2026-07-19：投稿级 canonical 完善进度
 
 - 已预注册 `configs/canonical_suite.yaml`：Edgar/Enron × main/matched-control，formal、seed 42、同一 Qwen victim，选择规则固定为首个通过全部门禁的 run。
 - canonical 门禁现强制检查干净 commit、benchmark/config/artifact hash、source coverage、响应完整性、source whitelist、baseline/report 同源，以及完整 suite 四格；不完整 suite 不能驱动正式图表。
 - 已接入 source-level 离线消融、2/4/6/8 调用预算曲线、三个在线 query control、文本/embedding/检索捷径诊断和跨 Edgar/Enron 的 stance 人工审计模板。
-- 当前 Edgar 仍只有 159 个测试 source 具备完整 RAG pair；现有诊断不是 canonical。Enron 仍需按 formal 新协议重建。
-- 现有工作区尚未形成干净 release commit，因此现在不得晋升 canonical 或发起正式大规模补跑。
+- Edgar formal 主查询计划含 4,446 条 query、2,223 个完整 pair；当前 Qwen 模型目录中的 RAG 响应已达到 4,446/4,446 成功，无重复、空回答、失败或缺失。Step 10 的主攻击采集已经补完，但后续 source-level canonical 重建和门禁尚未执行。
+- Edgar 独立 matched-control 的 LLM-only 响应目前为 3,877/4,446 成功，仍缺 569 条；Enron formal 的 01–09 已完成，主查询计划含 4,766 条 query、2,383 个完整 pair，但同一 Qwen victim 下的 RAG/LLM-only 响应尚未采集。因此两数据集当前都还不是 canonical run。
+- canonical release 会从完整 matched-control 响应离线重建 `pvs_llm`，在与主运行完全相同的 source whitelist 上生成 `cg_cvg = pcv_score - pvs_llm` 归因诊断；`pcv_score` 始终保留为 RAG-only 主分，不被归因对照改写。
 
 ### 2026-07-11：P0/P1 工程状态
 

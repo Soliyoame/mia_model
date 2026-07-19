@@ -10,6 +10,7 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.evaluation.matched_control import build_matched_control_analysis  # noqa: E402
 from src.evaluation.paper_figures import render_paper_figures  # noqa: E402
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import ensure_dir, read_json, read_jsonl, resolve_path, write_json  # noqa: E402
@@ -81,6 +82,7 @@ def collect_dataset_release(
 
     report_path = _unique(main_root / "reports", f"{dataset}_final_report.json")
     source_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_scores.jsonl")
+    score_manifest_path = _unique(main_root / "scores", f"{dataset}_pcv_scores.manifest.json")
     coverage_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_coverage.jsonl")
     baseline_path = _unique(main_root / "baselines", f"{dataset}_baseline_comparison.jsonl")
     mechanism_path = _unique(main_root / "mechanisms", f"{dataset}_mechanism_report.json")
@@ -96,6 +98,8 @@ def collect_dataset_release(
         raise RuntimeError(f"Matched-control source whitelist mismatch for {dataset}")
     if control_response_manifest.get("run_rag") is not False:
         raise RuntimeError(f"Matched-control unexpectedly ran RAG for {dataset}")
+    if control_response_manifest.get("run_llm_only") is not True:
+        raise RuntimeError(f"Matched-control did not run LLM-only for {dataset}")
     if report.get("source_whitelist_hash") != expected_whitelist:
         raise RuntimeError(f"Report/run source whitelist mismatch for {dataset}")
     ablation = read_json(ablation_path)
@@ -124,12 +128,34 @@ def collect_dataset_release(
         }
 
     release_dir = ensure_dir(resolve_path("outputs/releases") / suite_id / dataset)
+    score_manifest = read_json(score_manifest_path)
+    matched_analysis = build_matched_control_analysis(
+        dataset=dataset,
+        queries_path=control_query_path,
+        llm_responses_path=control_llm_path,
+        main_source_scores_path=source_path,
+        output_dir=release_dir,
+        unknown_lambda=float(score_manifest.get("unknown_lambda", 0.5)),
+        refusal_penalty=float(score_manifest.get("refusal_penalty", 0.5)),
+        false_acceptance_penalty_value=float(
+            score_manifest.get("false_acceptance_penalty", 0.0)
+        ),
+        n_bootstrap=2000,
+        seed=42,
+    )
+    matched_artifacts = {
+        name: _artifact(Path(path), release_dir)
+        for name, path in matched_analysis["paths"].items()
+    }
+    canonical_source_path = Path(
+        matched_analysis["paths"]["canonical_source_scores"]
+    )
     figure_artifacts: list[dict[str, Any]] = []
     if render_figures:
         baseline_rows = list(read_jsonl(baseline_path))
         produced = render_paper_figures(
             report,
-            list(read_jsonl(source_path)),
+            list(read_jsonl(canonical_source_path)),
             baseline_rows,
             release_dir,
             dataset=dataset,
@@ -160,6 +186,7 @@ def collect_dataset_release(
         "artifacts": {
             "final_report": _artifact(report_path, main_root),
             "source_scores": _artifact(source_path, main_root),
+            "canonical_source_scores": matched_artifacts["canonical_source_scores"],
             "source_coverage": _artifact(coverage_path, main_root),
             "baseline_comparison": _artifact(baseline_path, main_root),
             "mechanism": _artifact(mechanism_path, main_root),
@@ -167,6 +194,7 @@ def collect_dataset_release(
             "offline_ablation": _artifact(ablation_path, main_root),
             "shortcut_controls": _artifact(shortcut_path, main_root),
             "query_controls": query_controls,
+            "matched_control_attribution": matched_artifacts,
             "paper_figures": figure_artifacts,
         },
     }
