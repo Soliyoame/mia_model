@@ -28,13 +28,13 @@ KB isolation
 
 ## 当前状态
 
-### 2026-07-19：投稿级 canonical 完善进度
+### 2026-07-20：投稿级 canonical 完善进度
 
 - 已预注册 `configs/canonical_suite.yaml`：Edgar/Enron × main/matched-control，formal、seed 42、同一 Qwen victim，选择规则固定为首个通过全部门禁的 run。
 - canonical 门禁现强制检查干净 commit、benchmark/config/artifact hash、source coverage、响应完整性、source whitelist、baseline/report 同源，以及完整 suite 四格；不完整 suite 不能驱动正式图表。
-- 已接入 source-level 离线消融、2/4/6/8 调用预算曲线、三个在线 query control、文本/embedding/检索捷径诊断和跨 Edgar/Enron 的 stance 人工审计模板。
+- 已接入 source-level 离线消融、2/4/6/8 调用预算曲线、三个在线 query control、文本/embedding/检索捷径诊断和跨 Edgar/Enron 的 stance 人工审计模板。预算曲线现在在共同 source 上报告 AUC bootstrap CI，以及相对 full PVS 的 paired delta。
 - Edgar formal 主查询计划含 4,446 条 query、2,223 个完整 pair；当前 Qwen 模型目录中的 RAG 响应已达到 4,446/4,446 成功，无重复、空回答、失败或缺失。Step 10 的主攻击采集已经补完，但后续 source-level canonical 重建和门禁尚未执行。
-- Edgar 独立 matched-control 的 LLM-only 响应目前为 3,877/4,446 成功，仍缺 569 条；Enron formal 的 01–09 已完成，主查询计划含 4,766 条 query、2,383 个完整 pair，但同一 Qwen victim 下的 RAG/LLM-only 响应尚未采集。因此两数据集当前都还不是 canonical run。
+- Edgar 独立 matched-control 的 LLM-only 响应当前保留为 incomplete attribution control（已知 3,877/4,446 成功，仍缺 569 条）；由于 victim API 暂不可用，暂不将其纳入 canonical 归因结论。Enron formal 的 01–09 已完成，主查询计划含 4,766 条 query、2,383 个完整 pair，但同一 Qwen victim 下的 RAG/LLM-only 响应尚未采集。因此两数据集当前都还不是 canonical run。
 - canonical release 会从完整 matched-control 响应离线重建 `pvs_llm`，在与主运行完全相同的 source whitelist 上生成 `cg_cvg = pcv_score - pvs_llm` 归因诊断；`pcv_score` 始终保留为 RAG-only 主分，不被归因对照改写。
 
 ### 2026-07-11：P0/P1 工程状态
@@ -304,7 +304,7 @@ generation:
   retry_backoff_max: 300
   retry_until_success: true
   retry_cooldown_seconds: 300
-  request_interval_seconds: 15
+  request_interval_seconds: 20
   # 抗卡顿限速（令牌桶 + 并发）：requests_per_minute > 0 时启用全局令牌桶，
   # 全局速率恒 ≤ 此 RPM，但 max_workers>1 时某条 call 卡住不阻塞其他线程。
   # =0 则回退到 request_interval_seconds 固定间隔（旧行为）。详见「10. 双路推理」提速小节。
@@ -661,13 +661,25 @@ python scripts/10_run_rag_and_llm_only.py --dataset enron --config configs/rag_c
 直接调用第 10 步时，`--llm-only` 表示在 RAG 路之外增加 matched 响应。内部 `--skip-rag` 只供
 `run_pipeline.py --run-role matched_control --llm-only` 使用，用于确保独立对照不触碰 RAG 产物。
 
+长时间调用建议显式缩短写盘间隔。下面的 matched-control 命令每完成一条响应就立即写盘；中断后
+重复执行同一命令即可，runner 会压实已有文件、跳过成功项，只补失败、空回答和缺失项：
+
+```powershell
+$env:PCV_RUN_ID = "edgar-qwen-formal-seed42-matched"
+python scripts/10_run_rag_and_llm_only.py --dataset edgar --config configs/rag_config.yaml --llm-only --skip-rag --checkpoint-every 1
+```
+
+`--checkpoint-every` 必须为正整数，默认值为 `200`。设为 `1` 会增加少量磁盘写入，但最适合昂贵、
+易中断的 victim API；断点续跑时不要增加 `--force` 或 `--no-resume`。若 API 长期不可用，可以停止
+并保留成功响应，但该产物必须标记为 incomplete matched-control，不能通过 canonical 完整性门禁。
+
 输出：
 
 ```text
-outputs/rag_responses/enron_rag_responses.jsonl
-outputs/rag_responses/enron_rag_responses.manifest.json
-outputs/llm_only_responses/enron_llm_only_responses.jsonl
-outputs/llm_only_responses/enron_llm_only_responses.manifest.json
+outputs/rag_responses/{dataset}/{model}/{dataset}_rag_responses.jsonl
+outputs/rag_responses/{dataset}/{model}/{dataset}_rag_responses.manifest.json
+outputs/llm_only_responses/{dataset}/{model}/{dataset}_llm_only_responses.jsonl
+outputs/llm_only_responses/{dataset}/{model}/{dataset}_llm_only_responses.manifest.json
 ```
 
 这一步需要配置 `PCV_VICTIM_*`。
@@ -849,6 +861,35 @@ outputs/reports/enron_report_table.md
 ## 辅助脚本（不在 01-15 主流水线）
 
 这些脚本读取主流水线产物做诊断/校准，不修改主流水线，也不重跑 LLM。
+
+### 投稿级离线消融与预算曲线
+
+```powershell
+python scripts/analyze_p0_ablation.py --dataset edgar --model qwen3.5-397b-a17b --bootstrap 2000 --seed 42
+```
+
+输出使用 source-level 评估，在同一 source whitelist 上报告 full PVS、Q+ only、Q- only、
+correction only、质量加权和 primary-only。2/4/6/8 次 RAG 调用预算曲线固定使用满足最大预算的
+共同 source；每档均包含 AUC 95% bootstrap CI，以及 full PVS 相对其他变体的 source-paired delta。
+
+### Stance parser 人工审计
+
+两个数据集的当前 victim RAG 与 parsed stance 都完整后，生成至少 200 条分层盲标样本：
+
+```powershell
+python scripts/stance_audit.py --dataset both --model qwen3.5-397b-a17b --sample-size 200 --seed 42
+```
+
+模板按 dataset × group × claim type 分层，并故意隐藏 parser 的 `stance`；人工只填写
+`human_stance`，不得修改其他字段。manifest 会冻结样本 whitelist 和 parser prediction hash。
+标注完成后计算 accuracy、macro-F1 和混淆矩阵：
+
+```powershell
+python scripts/stance_audit.py --dataset both --model qwen3.5-397b-a17b --annotations outputs/diagnostics/stance_audit/qwen3.5-397b-a17b/both_stance_audit_annotations.jsonl --minimum-labeled 200
+```
+
+若 Enron 尚未完成，可以先对 Edgar 抽取 100 条；最终仍须补齐 Enron，并保证两个数据集合计至少
+200 条后再形成论文审计结论。
 
 ### 可行性验证
 

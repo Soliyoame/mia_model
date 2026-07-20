@@ -2,10 +2,36 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.stance_audit import evaluate_annotations, stratified_sample
+from scripts.stance_audit import (
+    attach_parser_predictions,
+    blind_annotation_rows,
+    evaluate_annotations,
+    parser_prediction_hash,
+    stratified_sample,
+)
 
 
 class StanceAuditTests(unittest.TestCase):
+    def test_annotation_template_hides_parser_prediction(self) -> None:
+        rows = [{
+            "dataset": "edgar",
+            "query_id": "q1",
+            "stance": "supports_true_claim",
+            "human_stance": "",
+        }]
+        blinded = blind_annotation_rows(rows)
+        self.assertNotIn("stance", blinded[0])
+        self.assertIn("stance", rows[0])
+
+    def test_frozen_parser_prediction_is_restored_for_evaluation(self) -> None:
+        rows = [{"dataset": "edgar", "query_id": "q1", "human_stance": "unknown"}]
+        joined = attach_parser_predictions(rows, {("edgar", "q1"): "unknown"})
+        self.assertEqual(joined[0]["stance"], "unknown")
+        self.assertEqual(
+            parser_prediction_hash(joined),
+            parser_prediction_hash([{**rows[0], "stance": "unknown"}]),
+        )
+
     def test_stratified_sample_covers_available_strata(self) -> None:
         rows = [
             {"group": "KB_Member", "claim_type": "true", "query_id": "a"},

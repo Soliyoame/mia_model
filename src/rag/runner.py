@@ -283,6 +283,7 @@ def run_rag_and_llm_only(
     allowed_fact_ids: set[str] | None = None,
     requests_per_minute: float = 0.0,
     variant_id: str = "full_pvs",
+    checkpoint_every: int = 200,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -322,6 +323,7 @@ def run_rag_and_llm_only(
                                  ≤ 此 RPM,但配合 max_workers>1,某条 call 卡住时别的线程仍能发满 RPM,
                                  抗端点间歇卡顿(实测卡顿会把每条均摊到 ~72–96s,远超 4RPM 的 15s 地板)。
                                  =0(默认)沿用旧行为(每条 call 后固定 sleep request_interval_seconds)。
+        checkpoint_every:        累积多少条响应后写盘；必须为正整数，默认 200。
     返回:
         manifest(字典)：本次运行的统计与路径信息。
     异常:
@@ -332,6 +334,8 @@ def run_rag_and_llm_only(
         raise ValueError("run_rag_and_llm_only requires a configured VictimClient.")
     if not run_rag and not run_llm_only:
         raise ValueError("At least one of run_rag or run_llm_only must be enabled.")
+    if checkpoint_every < 1:
+        raise ValueError("checkpoint_every must be a positive integer.")
     variant = str(variant_id or "").strip()
     if not variant:
         raise ValueError("variant_id must be non-empty")
@@ -508,12 +512,12 @@ def run_rag_and_llm_only(
             if llm_row is not None:
                 llm_rows.append(llm_row)
             completed += 1
-            # 攒够 200 行就落盘一次(分批写)，避免全部堆在内存里、也防中途崩溃丢太多。
-            if len(rag_rows) >= 200:
+            # 按配置的 checkpoint 间隔分批写盘，降低中断后的重复请求量。
+            if len(rag_rows) >= checkpoint_every:
                 write_jsonl(rag_rows, rag_output, append=append_rag)
                 append_rag = True
                 rag_rows.clear()
-            if len(llm_rows) >= 200:
+            if len(llm_rows) >= checkpoint_every:
                 write_jsonl(llm_rows, llm_output, append=append_llm)
                 append_llm = True
                 llm_rows.clear()
@@ -522,7 +526,7 @@ def run_rag_and_llm_only(
         if executor is not None:
             executor.shutdown(wait=True)
 
-    # 把最后不足 200 行的剩余结果也写出去。
+    # 把最后不足 checkpoint 间隔的剩余结果也写出去。
     if rag_rows:
         write_jsonl(rag_rows, rag_output, append=append_rag)
     if llm_rows:
@@ -568,6 +572,7 @@ def run_rag_and_llm_only(
         "run_llm_only": run_llm_only,
         "allowed_fact_ids_count": (len(allowed_fact_ids) if allowed_fact_ids is not None else None),
         "requests_per_minute": requests_per_minute,
+        "checkpoint_every": checkpoint_every,
         "retry_until_success": retry_until_success,
         "retry_cooldown_seconds": retry_cooldown_seconds,
         "rate_limit_mode": "token_bucket" if token_bucket is not None else "fixed_interval",

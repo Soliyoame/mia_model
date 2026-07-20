@@ -136,10 +136,14 @@ def build_budget_curves(
     eligible_sources: set[str] | None = None,
     variants: tuple[str, ...] = DEFAULT_VARIANTS,
     query_budgets: tuple[int, ...] = (2, 4, 6, 8),
+    n_bootstrap: int = 2000,
+    seed: int = 42,
 ) -> dict[str, Any]:
     by_source = _group_complete_pairs(pair_rows, eligible_sources)
     if not query_budgets or any(calls <= 0 or calls % 2 for calls in query_budgets):
         raise ValueError("Query budgets must be positive even integers")
+    if "full_pvs" not in variants:
+        raise ValueError("Budget curves require full_pvs as the paired reference")
     max_pair_budget = max(query_budgets) // 2
     common_sources = {
         source_key for source_key, pairs in by_source.items() if len(pairs) >= max_pair_budget
@@ -147,9 +151,9 @@ def build_budget_curves(
     curves: dict[str, Any] = {}
     for calls in query_budgets:
         pair_budget = calls // 2
-        variant_metrics: dict[str, Any] = {}
+        variant_rows: dict[str, list[dict[str, Any]]] = {}
         for variant in variants:
-            rows = [
+            variant_rows[variant] = [
                 {
                     "source_key": source_key,
                     "group": str(by_source[source_key][0].get("group")),
@@ -157,11 +161,33 @@ def build_budget_curves(
                 }
                 for source_key in sorted(common_sources)
             ]
+        baseline = variant_rows["full_pvs"]
+        variant_metrics: dict[str, Any] = {}
+        for variant in variants:
+            rows = variant_rows[variant]
             variant_metrics[variant] = {
                 "variant_id": variant,
                 "query_budget": calls,
                 "source_count": len(rows),
                 "metrics": summarize_membership_scores(rows, score_key="score"),
+                "auc_ci95": bootstrap_auc_ci(
+                    rows,
+                    score_key="score",
+                    n_bootstrap=n_bootstrap,
+                    seed=seed,
+                ),
+                "paired_delta_full_pvs_minus_variant": (
+                    None
+                    if variant == "full_pvs"
+                    else paired_bootstrap_metric_delta(
+                        baseline,
+                        rows,
+                        left_score_key="score",
+                        right_score_key="score",
+                        n_bootstrap=n_bootstrap,
+                        seed=seed,
+                    )
+                ),
             }
         curves[str(calls)] = {
             "query_budget": calls,
@@ -170,6 +196,8 @@ def build_budget_curves(
             "variants": variant_metrics,
         }
     return {
+        "bootstrap": n_bootstrap,
+        "seed": seed,
         "common_source_count": len(common_sources),
         "common_source_whitelist_hash": sha256_obj(sorted(common_sources)),
         "excluded_for_max_budget": len(by_source) - len(common_sources),
@@ -278,6 +306,8 @@ def main() -> int:
             eligible_sources=eligible_sources,
             variants=variants_to_run,
             query_budgets=query_budgets,
+            n_bootstrap=args.bootstrap,
+            seed=args.seed,
         ),
         "pending_query_controls": [
             "random_same_type_counterfactual",

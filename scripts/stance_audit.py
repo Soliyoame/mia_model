@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
-from src.utils.io import ensure_dir, read_jsonl, resolve_path, write_json, write_jsonl  # noqa: E402
+from src.utils.io import ensure_dir, read_json, read_jsonl, resolve_path, write_json, write_jsonl  # noqa: E402
 from src.utils.run_context import model_scoped_dir, victim_model_slug  # noqa: E402
 
 
@@ -98,6 +98,45 @@ def evaluate_annotations(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def blind_annotation_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """移除解析器预测，避免人工标注受到锚定影响。"""
+    return [
+        {key: value for key, value in row.items() if key != "stance"}
+        for row in rows
+    ]
+
+
+def attach_parser_predictions(
+    rows: list[dict[str, Any]],
+    predictions: dict[tuple[str, str], str],
+) -> list[dict[str, Any]]:
+    """按数据集和 query_id 回填冻结的解析器预测。"""
+    joined: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for row in rows:
+        key = (str(row.get("dataset")), str(row.get("query_id")))
+        stance = predictions.get(key)
+        if stance is None:
+            missing.append(f"{key[0]}::{key[1]}")
+            continue
+        joined.append({**row, "stance": stance})
+    if missing:
+        raise ValueError(f"Missing parser predictions for {len(missing)} rows: {missing[:5]}")
+    return joined
+
+
+def parser_prediction_hash(rows: list[dict[str, Any]]) -> str:
+    """哈希样本对应的解析器预测，确保标注前后使用同一版本。"""
+    return sha256_obj(sorted(
+        (
+            str(row.get("dataset")),
+            str(row.get("query_id")),
+            str(row.get("stance")),
+        )
+        for row in rows
+    ))
+
+
 def _load_joined_rows(dataset: str, model: str) -> list[dict[str, Any]]:
     parsed_path = model_scoped_dir("outputs/parsed_stance", dataset, model=model) / f"{dataset}_parsed_stance.jsonl"
     response_path = model_scoped_dir("outputs/rag_responses", dataset, model=model) / f"{dataset}_rag_responses.jsonl"
@@ -128,6 +167,18 @@ def _load_joined_rows(dataset: str, model: str) -> list[dict[str, Any]]:
     return joined
 
 
+def _load_parser_predictions(datasets: tuple[str, ...], model: str) -> dict[tuple[str, str], str]:
+    predictions: dict[tuple[str, str], str] = {}
+    for dataset in datasets:
+        parsed_path = model_scoped_dir("outputs/parsed_stance", dataset, model=model) / f"{dataset}_parsed_stance.jsonl"
+        if not parsed_path.exists():
+            raise FileNotFoundError(f"Required parsed artifact is missing for {dataset}/{model}")
+        for row in read_jsonl(parsed_path):
+            if str(row.get("mode")) == "rag" and row.get("query_id"):
+                predictions[(dataset, str(row["query_id"]))] = str(row.get("stance"))
+    return predictions
+
+
 def _datasets(value: str) -> tuple[str, ...]:
     return ("edgar", "enron") if value == "both" else (value,)
 
@@ -144,12 +195,23 @@ def main() -> int:
     base = _output_base(args.dataset, model)
     if args.annotations:
         annotation_path = Path(args.annotations)
-        result = evaluate_annotations(list(read_jsonl(annotation_path)))
+        annotation_rows = list(read_jsonl(annotation_path))
+        datasets = tuple(sorted({str(row.get("dataset")) for row in annotation_rows}))
+        predictions = _load_parser_predictions(datasets, model)
+        evaluated_rows = attach_parser_predictions(annotation_rows, predictions)
+        prediction_hash = parser_prediction_hash(evaluated_rows)
+        manifest_path = annotation_path.with_suffix(".manifest.json")
+        if manifest_path.exists():
+            expected_hash = str(read_json(manifest_path).get("parser_prediction_hash") or "")
+            if expected_hash and prediction_hash != expected_hash:
+                raise ValueError("Parser predictions changed after the annotation sample was frozen")
+        result = evaluate_annotations(evaluated_rows)
         result.update({
             "dataset": args.dataset,
             "model": model,
             "annotation_path": str(annotation_path.resolve()),
             "annotation_hash": sha256_file(annotation_path),
+            "parser_prediction_hash": prediction_hash,
             "minimum_labeled": args.minimum_labeled,
             "minimum_labeled_met": result["labeled_rows"] >= args.minimum_labeled,
         })
@@ -162,7 +224,9 @@ def main() -> int:
     candidates: list[dict[str, Any]] = []
     for dataset in _datasets(args.dataset):
         candidates.extend(_load_joined_rows(dataset, model))
-    rows = stratified_sample(candidates, args.sample_size, args.seed)
+    sampled_rows = stratified_sample(candidates, args.sample_size, args.seed)
+    prediction_hash = parser_prediction_hash(sampled_rows)
+    rows = blind_annotation_rows(sampled_rows)
     output = Path(args.output) if args.output else base / f"{args.dataset}_stance_audit_annotations.jsonl"
     ensure_dir(output.parent)
     write_jsonl(rows, output)
@@ -179,8 +243,10 @@ def main() -> int:
             for row in rows
         )),
         "sample_whitelist_hash": sha256_obj(sorted(str(row.get("query_id")) for row in rows)),
+        "blinded_parser_prediction": True,
+        "parser_prediction_hash": prediction_hash,
         "annotation_labels": list(ANNOTATION_LABELS),
-        "instructions": "Read query and response; fill human_stance with exactly one annotation_labels value. Do not edit parser stance.",
+        "instructions": "Read query and response; fill human_stance with exactly one annotation_labels value. Parser predictions are intentionally hidden.",
         "output_path": str(output.resolve()),
         "output_hash": sha256_file(output),
     }

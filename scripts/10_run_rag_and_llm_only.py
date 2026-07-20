@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=200,
+        help="每累计多少条响应写盘一次；必须为正整数，默认 200",
+    )
+    parser.add_argument(
         "--llm-only",
         action="store_true",
         help="显式启用可选的 LLM-only 归因对照；默认仅运行 RAG",
@@ -80,6 +86,8 @@ def main() -> int:
     args = parse_args()
     if args.skip_rag and not args.llm_only:
         raise ValueError("--skip-rag requires --llm-only")
+    if args.checkpoint_every < 1:
+        raise ValueError("--checkpoint-every must be a positive integer")
     config = load_yaml(args.config)
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
@@ -172,6 +180,7 @@ def main() -> int:
         # 把实际用到的 victim profile 一并写进配置快照,方便结果追溯。
         config_snapshot={**config, "victim_profile_used": profile},
         variant_id=variant_id,
+        checkpoint_every=args.checkpoint_every,
     )
     logger.info("Step 10 finished: %s", manifest)
     return 0

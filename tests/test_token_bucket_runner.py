@@ -22,7 +22,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 import unittest
 from unittest.mock import patch
 import uuid
@@ -139,6 +139,63 @@ class TokenBucketTest(unittest.TestCase):
 
 
 class ConcurrentRunnerTest(unittest.TestCase):
+    def test_checkpoint_every_one_persists_each_llm_only_response(self) -> None:
+        with temporary_dir() as work:
+            qp, bp = _make_inputs(work, 3)
+            rag_out = work / "rag_should_not_exist.jsonl"
+            llm_out = work / "llm_checkpointed.jsonl"
+            write_batches: list[int] = []
+
+            from src.rag import runner
+
+            real_write_jsonl = runner.write_jsonl
+
+            def recording_write_jsonl(
+                rows: list[dict[str, Any]],
+                path: str | Path,
+                *,
+                append: bool = False,
+            ) -> None:
+                if Path(path) == llm_out:
+                    write_batches.append(len(rows))
+                return real_write_jsonl(rows, path, append=append)
+
+            with patch("src.rag.runner.write_jsonl", side_effect=recording_write_jsonl):
+                run_rag_and_llm_only(
+                    dataset="edgar",
+                    queries_path=qp,
+                    benchmark_path=bp,
+                    index_dir=work / "idx",
+                    rag_output_path=rag_out,
+                    llm_output_path=llm_out,
+                    client=_DetClient(),
+                    resume=False,
+                    force=True,
+                    run_rag=False,
+                    run_llm_only=True,
+                    checkpoint_every=1,
+                )
+
+            self.assertEqual(write_batches, [1, 1, 1])
+            self.assertEqual(len(list(read_jsonl(llm_out))), 3)
+
+    def test_checkpoint_every_must_be_positive(self) -> None:
+        with temporary_dir() as work:
+            qp, bp = _make_inputs(work, 1)
+            with self.assertRaisesRegex(ValueError, "checkpoint_every"):
+                run_rag_and_llm_only(
+                    dataset="edgar",
+                    queries_path=qp,
+                    benchmark_path=bp,
+                    index_dir=work / "idx",
+                    rag_output_path=work / "rag.jsonl",
+                    llm_output_path=work / "llm.jsonl",
+                    client=_DetClient(),
+                    run_rag=False,
+                    run_llm_only=True,
+                    checkpoint_every=0,
+                )
+
     def test_llm_only_collection_does_not_load_retriever_or_touch_rag_output(self) -> None:
         with temporary_dir() as work:
             qp, bp = _make_inputs(work, 2)

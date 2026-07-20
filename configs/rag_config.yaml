@@ -53,7 +53,7 @@ generation:
   # 短指数退避耗尽后,API/网络错误不丢弃:长冷却后重试同一请求,直到成功。
   retry_until_success: true
   retry_cooldown_seconds: 300     # 每轮短重试耗尽后冷却 5 分钟
-  request_interval_seconds: 15    # 【仅在 requests_per_minute=0 时生效】每两次请求固定间隔（旧限速方式）
+  request_interval_seconds: 20    # 【仅在 requests_per_minute=0 时生效】每两次请求固定间隔（旧限速方式）
   # === 抗卡顿限速（令牌桶 + 并发）===
   # requests_per_minute > 0 时启用【全局令牌桶】：全局速率恒 ≤ 此 RPM（绝不超端点限流），
   # 但配合 max_workers>1，某条 call 卡住时别的线程仍能发满 RPM —— 把管道填满、抗端点间歇卡顿。

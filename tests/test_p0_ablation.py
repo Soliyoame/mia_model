@@ -44,12 +44,16 @@ class P0AblationTests(unittest.TestCase):
             pair("nonmember", "True_Non_Member", 0, 0.0, 0.0),
             pair("nonmember", "True_Non_Member", 1, 0.0, 0.0),
         ]
-        result = build_budget_curves(rows, query_budgets=(2, 4))
+        result = build_budget_curves(rows, query_budgets=(2, 4), n_bootstrap=20)
         curves = result["curves"]
         self.assertEqual(result["common_source_count"], 2)
         self.assertEqual(curves["2"]["source_count"], 2)
         self.assertEqual(curves["4"]["source_count"], 2)
         self.assertIn("qplus_only", curves["2"]["variants"])
+        self.assertEqual(curves["2"]["variants"]["full_pvs"]["auc_ci95"]["bootstrap"], 20)
+        delta = curves["2"]["variants"]["qplus_only"]["paired_delta_full_pvs_minus_variant"]
+        self.assertEqual(delta["common_sources"], 2)
+        self.assertIn("AUC", delta["ci95"])
 
     def test_full_pvs_uses_equal_chunk_weights(self) -> None:
         rows = [
