@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +34,7 @@ import numpy as np
 
 from .embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model
 from ..utils.hash import sha256_file, sha256_obj, sha256_text
-from ..utils.io import ensure_dir, read_jsonl, write_json, write_jsonl
+from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
@@ -116,12 +118,43 @@ def _write_index(index_path: Path, vectors: np.ndarray) -> str:
         return "json_vector_fallback"
 
 
+def _bm25_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+", (text or "").casefold())
+
+
+def _write_bm25_index(index_path: Path, docstore: list[dict[str, Any]]) -> str:
+    """Write a deterministic inverted BM25 index without external services."""
+
+    postings: dict[str, list[list[int]]] = defaultdict(list)
+    doc_lengths: list[int] = []
+    for doc_index, row in enumerate(docstore):
+        counts = Counter(_bm25_tokens(str(row.get("text") or "")))
+        doc_lengths.append(sum(counts.values()))
+        for term, frequency in sorted(counts.items()):
+            postings[term].append([doc_index, int(frequency)])
+    payload = {
+        "backend": "bm25",
+        "version": "bm25_v1",
+        "k1": 1.5,
+        "b": 0.75,
+        "num_docs": len(docstore),
+        "avg_doc_length": sum(doc_lengths) / max(1, len(doc_lengths)),
+        "doc_lengths": doc_lengths,
+        "postings": dict(sorted(postings.items())),
+    }
+    tmp_path = index_path.parent / (index_path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(index_path)
+    return "bm25_inverted_index_v1"
+
+
 def build_rag_index(
     dataset: str,
     kb_member_path: str | Path,
     output_dir: str | Path,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_backend: str = "auto",
+    embedding_local_files_only: bool = False,
     embedding_dim: int = 384,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
@@ -129,6 +162,7 @@ def build_rag_index(
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
     allowed_group: str = "KB_Member",
+    retriever_backend: str = "dense",
 ) -> dict[str, Any]:
     """构建 RAG index（默认只允许 KB_Member；L2 shadow 模式可指定 Reserve）。
 
@@ -160,13 +194,61 @@ def build_rag_index(
     """
     # 确保输出目录存在(不存在则创建)。
     out_dir = ensure_dir(output_dir)
-    index_path = out_dir / "faiss.index"
+    backend_name = str(retriever_backend or "dense").strip().lower()
+    if backend_name in {"minilm", "vector", "faiss"}:
+        backend_name = "dense"
+    if backend_name not in {"dense", "bm25"}:
+        raise ValueError(f"Unknown retriever_backend: {retriever_backend!r}")
+    index_path = out_dir / ("faiss.index" if backend_name == "dense" else "bm25.index.json")
     docstore_path = out_dir / "docstore.jsonl"
     manifest_path = out_dir / "index_manifest.json"
-    # 断点续跑：开启 resume、未强制 force，且三个产物文件都在，就直接跳过不重建。
+    kb_hash = sha256_file(kb_member_path)
+    # 断点续跑只能复用协议完全一致的索引；否则必须显式 --force 重建。
     if resume and not force and index_path.exists() and docstore_path.exists() and manifest_path.exists():
+        existing_manifest = read_json(manifest_path)
+        expected_protocol = {
+            "dataset": dataset,
+            "retriever_backend": backend_name,
+            "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+            "chunk_size": int(chunk_size),
+            "chunk_overlap": int(chunk_overlap),
+            "kb_hash": kb_hash,
+        }
+        mismatches = {
+            key: {"expected": expected, "actual": existing_manifest.get(key)}
+            for key, expected in expected_protocol.items()
+            if existing_manifest.get(key) != expected
+        }
+        actual_allowed = (
+            existing_manifest.get("security_boundary", {}).get("allowed_groups") or []
+        )
+        if actual_allowed != [allowed_group]:
+            mismatches["allowed_groups"] = {
+                "expected": [allowed_group],
+                "actual": actual_allowed,
+            }
+        for artifact_name, artifact_path, manifest_key in (
+            ("docstore", docstore_path, "docstore_hash"),
+            ("index", index_path, "index_hash"),
+        ):
+            expected_hash = str(existing_manifest.get(manifest_key) or "")
+            actual_hash = sha256_file(artifact_path)
+            if not expected_hash or actual_hash != expected_hash:
+                mismatches[f"{artifact_name}_hash"] = {
+                    "expected": expected_hash or None,
+                    "actual": actual_hash,
+                }
+        if mismatches:
+            raise RuntimeError(
+                f"Existing {dataset}/{backend_name} index protocol does not match the requested run: "
+                f"{mismatches}. Rebuild Step 03 with --force."
+            )
         LOGGER.info("Skipping existing RAG index for %s: %s", dataset, out_dir)
-        return {"dataset": dataset, "output_dir": str(out_dir), "skipped_existing": True}
+        return {
+            **existing_manifest,
+            "output_dir": str(out_dir),
+            "skipped_existing": True,
+        }
 
     rows = list(read_jsonl(kb_member_path))
     # 安全闸门：只要发现任何一条 group 不等于 allowed_group，立即报错。
@@ -204,27 +286,43 @@ def build_rag_index(
     if not docstore:
         raise RuntimeError(f"No chunks were generated for {dataset}: {kb_member_path}")
 
-    # 创建向量模型，并把每个块的文本批量编码成向量矩阵。
-    embedder = build_embedding_model(embedding_model, backend=embedding_backend, dim=embedding_dim)
-    vectors = embedder.encode([row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")])
-    # 写向量索引(faiss 或 json 兜底)，拿到实际使用的后端名。
-    backend = _write_index(index_path, vectors)
+    embedder_name: str | None = None
+    actual_embedding_dim: int | None = None
+    if backend_name == "dense":
+        embedder = build_embedding_model(
+            embedding_model,
+            backend=embedding_backend,
+            dim=embedding_dim,
+            local_files_only=bool(embedding_local_files_only),
+        )
+        vectors = embedder.encode([row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")])
+        storage_backend = _write_index(index_path, vectors)
+        embedder_name = embedder.name
+        actual_embedding_dim = int(vectors.shape[1])
+        retriever_id = str(embedding_model)
+    else:
+        storage_backend = _write_bm25_index(index_path, docstore)
+        retriever_id = "bm25"
     # 写 docstore(所有块的清单)。
     write_jsonl(docstore, docstore_path)
     # 记录创建时间(UTC，带时区)。
     created_at = datetime.now(timezone.utc).isoformat()
     manifest = {
         "dataset": dataset,
-        "embedding_model": embedder.name,
-        "requested_embedding_model": embedding_model,
-        "embedding_backend": backend,
-        "embedding_dim": int(vectors.shape[1]),
+        "retriever_backend": backend_name,
+        "retriever_id": retriever_id,
+        "index_filename": index_path.name,
+        "embedding_model": embedder_name,
+        "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+        "embedding_backend": storage_backend if backend_name == "dense" else None,
+        "embedding_local_files_only": bool(embedding_local_files_only) if backend_name == "dense" else None,
+        "embedding_dim": actual_embedding_dim,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
         "num_docs": len(rows),
         "num_chunks": len(docstore),
         # 对关键文件算 hash，写进 manifest，用于实验复现与完整性校验。
-        "kb_hash": sha256_file(kb_member_path),
+        "kb_hash": kb_hash,
         "docstore_hash": sha256_file(docstore_path),
         "index_hash": sha256_file(index_path),
         "created_at": created_at,
@@ -238,5 +336,5 @@ def build_rag_index(
         },
     }
     write_json(manifest, manifest_path)
-    LOGGER.info("Built RAG index for %s: docs=%s chunks=%s backend=%s", dataset, len(rows), len(docstore), backend)
+    LOGGER.info("Built RAG index for %s: docs=%s chunks=%s backend=%s", dataset, len(rows), len(docstore), backend_name)
     return manifest

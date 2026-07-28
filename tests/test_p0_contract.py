@@ -60,6 +60,10 @@ class P0MetricsTests(unittest.TestCase):
 
 
 class P0SourceUnitTests(unittest.TestCase):
+    def test_main_query_budget_is_three_pairs_and_six_calls(self) -> None:
+        self.assertEqual(P0_PROTOCOL["pairs_per_source"], 3)
+        self.assertEqual(P0_PROTOCOL["queries_per_source_per_cell"], 6)
+
     def test_baseline_scores_aggregate_by_source(self) -> None:
         rows = [
             {"baseline": "MBA", "doc_id": "d1", "source_key": "s1", "group": "KB_Member", "score": 0.2},
@@ -118,6 +122,11 @@ class P0CanonicalRunTests(unittest.TestCase):
             "victim_model": "victim-model",
             "victim_provider": "openai_compatible",
             "victim_endpoint": "https://example.invalid/v1",
+            "generator_id": "victim-model",
+            "generator_version": "victim-model-v1",
+            "retriever_backend": "dense",
+            "retriever_id": "sentence-transformers/all-MiniLM-L6-v2",
+            "index_manifest_hash": "index-hash",
             "scale": "formal",
             "split_seed": 42,
             "git": {"commit": "abc123", "dirty": False},
@@ -134,6 +143,7 @@ class P0CanonicalRunTests(unittest.TestCase):
                     "dataset": "toy",
                     "victim_model": "victim-model",
                     "run_role": "main",
+                    "retriever_backend": "dense",
                     "scale": "formal",
                     "seed": 42,
                 },
@@ -195,6 +205,11 @@ class P0CanonicalRunTests(unittest.TestCase):
             "victim_model": "victim-model",
             "victim_provider": "openai_compatible",
             "victim_endpoint": "https://example.invalid/v1",
+            "generator_id": "victim-model",
+            "generator_version": "victim-model-v1",
+            "retriever_backend": None,
+            "retriever_id": None,
+            "index_manifest_hash": None,
             "scale": "formal",
             "split_seed": 42,
             "git": {"commit": "abc123", "dirty": False},
@@ -211,6 +226,7 @@ class P0CanonicalRunTests(unittest.TestCase):
                     "dataset": "toy",
                     "victim_model": "victim-model",
                     "run_role": "matched_control",
+                    "retriever_backend": "none",
                     "scale": "formal",
                     "seed": 42,
                 },

@@ -35,7 +35,8 @@ from src.scoring.calibration import (
     calibrate_l2_shadow,
     calibrate_membership_scores,
 )
-from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json
+from src.utils.io import load_yaml, read_jsonl, resolve_path, write_json
+from src.utils.dataset_paths import resolve_dataset_dir
 from src.utils.logger import setup_logging
 from src.utils.run_context import append_index, current_run_id, local_timestamp, model_scoped_dir, run_dir
 
@@ -90,7 +91,7 @@ def main() -> int:
     # ---- 建 shadow + 跑 RAG + 算每个 shadow 的 cvg ----
     shadow_manifest = run_l2_shadows(
         dataset=ds,
-        reserve_path=resolve_path(paths["splits_dir"]) / ds / "reserve.jsonl",
+        reserve_path=resolve_dataset_dir(rag_cfg, "splits_dir", ds) / "reserve.jsonl",
         queries_path=resolve_path(paths["queries_dir"]) / f"{ds}_paired_queries.jsonl",
         benchmark_path=resolve_path(paths["benchmark_dir"]) / f"{ds}_attack_benchmark.jsonl",
         main_llm_responses_path=resolve_path(paths["llm_only_responses_dir"]) / f"{ds}_llm_only_responses.jsonl",

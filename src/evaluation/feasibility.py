@@ -30,7 +30,6 @@ from .metrics import roc_auc, summarize_membership_scores
 from ..scoring.calibration import (
     CALIBRATION_SOURCE_KEY,
     PERCENTILE_KEY,
-    PRIMARY_CALIBRATED_KEY,
     ZSCORE_KEY,
     calibrate_membership_scores,
 )
@@ -69,13 +68,17 @@ def _signal_decomposition(score_rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_group: dict[str, list[dict[str, Any]]] = {}
     for row in score_rows:
         by_group.setdefault(str(row.get("group")), []).append(row)
-    group_means = {
-        group: {
-            "count": len(rows),
-            **{key: (mean([float(r.get(key, 0.0)) for r in rows]) if rows else 0.0) for key in _SCORE_KEYS},
-        }
-        for group, rows in sorted(by_group.items())
-    }
+    group_means = {}
+    for group, rows in sorted(by_group.items()):
+        metrics: dict[str, float | None] = {}
+        for key in _SCORE_KEYS:
+            values = [row.get(key) for row in rows]
+            metrics[key] = (
+                mean(float(value) for value in values)
+                if values and all(value is not None for value in values)
+                else None
+            )
+        group_means[group] = {"count": len(rows), **metrics}
     return {"auc": aucs, "group_means": group_means}
 
 
@@ -210,7 +213,13 @@ def _calibration_comparison(eval_rows: list[dict[str, Any]]) -> dict[str, Any]:
     """
     def _pick(score_key: str) -> dict[str, Any]:
         s = summarize_membership_scores(eval_rows, score_key=score_key)
-        return {"AUC": s["AUC"], "Accuracy": s["Accuracy@best"], "TPR@1%FPR": s["TPR@1%FPR"], "TPR@5%FPR": s["TPR@5%FPR"]}
+        return {
+            "status": s.get("status", "available"),
+            "AUC": s["AUC"],
+            "Accuracy": s["Accuracy@best"],
+            "TPR@1%FPR": s["TPR@1%FPR"],
+            "TPR@5%FPR": s["TPR@5%FPR"],
+        }
 
     return {
         CALIBRATION_SOURCE_KEY: _pick(CALIBRATION_SOURCE_KEY),  # cvg_rag 原始检索信号(不扣先验)

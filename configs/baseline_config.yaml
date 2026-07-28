@@ -11,6 +11,12 @@ paths:
   facts_dir: outputs/facts
 
 baseline:
+  # v19 formal matrix selects methods for the current single Generator only.
+  formal_method_policy:
+    full_generator: qwen/qwen3.5-397b-a17b
+    full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI]
+    extension_methods: [IA, DCMI]
+
   # 把分数转成成员/非成员判定时用的阈值(用于固定阈值指标;AUC/Acc@best 不受其影响)。
   threshold: 0.3
   # 真实受害查询版 baseline(见 src/baselines/victim_harness.py)。

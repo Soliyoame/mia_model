@@ -46,19 +46,69 @@ RUN_STATUSES: tuple[str, ...] = (
 )
 
 P0_PROTOCOL: dict[str, Any] = {
-    "protocol_version": "p0-v16",
-    "method_version": "pcv-rag-only-source-v1",
+    "protocol_version": "pcv-mia-v19",
+    "method_version": "pcv-rag-only-source-v19",
     "threat_model_version": "strict-blackbox-v1",
     "metrics_version": "source-conformal-v1",
     "method": "rag_only_paired_counterfactual_verification",
-    "membership_unit": "source_document",
+    "membership_unit": "dataset_specific_source",
+    "membership_units": {
+        "edgar": "filing",
+        "enron": "complete_email",
+        "pubmed": "pmcid_article",
+    },
     "retrieval_unit": "chunk",
     "evaluation_unit": "source",
+    "pairs_per_source": 3,
+    "queries_per_source_per_cell": 6,
+    "retrievers": ["dense", "bm25"],
+    "dense_retriever_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "baseline_method_policy": {
+        "full_generator": "qwen/qwen3.5-397b-a17b",
+        "full_methods": ["RAG-MIA", "S2MIA", "MBA", "IA", "DCMI"],
+        "extension_methods": ["IA", "DCMI"],
+    },
+    "defense_representative_cells": [
+        {"dataset": dataset, "victim_model": "qwen/qwen3.5-397b-a17b", "retriever_backend": "dense"}
+        for dataset in ("edgar", "enron", "pubmed")
+    ],
     "threat_model": "candidate-known,response-only,non-adaptive,fixed-budget,strict-black-box",
     "main_score": "mean_source_pvs_rag",
     "main_metric": "source_level_auc",
     "calibration": "reserve_conformal",
 }
+
+
+def canonical_baseline_methods(victim_model: str) -> tuple[str, ...] | None:
+    """Return the preregistered baseline set for a canonical generator."""
+
+    policy = P0_PROTOCOL["baseline_method_policy"]
+    model = str(victim_model or "").strip().casefold()
+    known_generators = {
+        "qwen/qwen3.5-397b-a17b",
+        "gemini-2.0-flash",
+        "gpt-4.1-mini",
+        "meta-llama/llama-3.3-70b-instruct",
+    }
+    if model not in known_generators:
+        return None
+    key = "full_methods" if model == str(policy["full_generator"]).casefold() else "extension_methods"
+    return tuple(str(method) for method in policy[key])
+
+
+def canonical_defense_required(dataset: str, victim_model: str, retriever_backend: str) -> bool:
+    """Whether this main cell is one of the three preregistered defense cells."""
+
+    identity = (str(dataset), str(victim_model).casefold(), str(retriever_backend))
+    return any(
+        identity
+        == (
+            str(cell["dataset"]),
+            str(cell["victim_model"]).casefold(),
+            str(cell["retriever_backend"]),
+        )
+        for cell in P0_PROTOCOL["defense_representative_cells"]
+    )
 
 CANONICAL_SCALE = "formal"
 CANONICAL_SPLIT_SEED = 42
@@ -83,18 +133,24 @@ def local_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def model_slug(value: str | None) -> str:
+    """Convert a model identifier such as ``org/model`` into one safe directory name."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return "unspecified"
+    raw = raw.split("/")[-1]
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-")
+    return slug or "unspecified"
+
+
 def victim_model_slug() -> str:
     """受害者模型的文件夹安全 slug:读环境变量 PCV_VICTIM_MODEL;未设为 'unspecified'。
 
     形如 'qwen/qwen3.5-397b-a17b' 先去掉 org 前缀取最后一段,再把非法字符折叠成连字符,
     得到 'qwen3.5-397b-a17b'。模型相关产物据此按 {数据集}/{模型}/ 分目录,换模型不互相覆盖。
     """
-    raw = env_str("PCV_VICTIM_MODEL", "").strip()
-    if not raw:
-        return "unspecified"
-    raw = raw.split("/")[-1]  # 去掉 org/ 前缀
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-")
-    return slug or "unspecified"
+    return model_slug(env_str("PCV_VICTIM_MODEL", ""))
 
 
 def model_scoped_dir(stage_base: str | Path, dataset: str, *, model: str | None = None) -> Path:
@@ -105,17 +161,29 @@ def model_scoped_dir(stage_base: str | Path, dataset: str, *, model: str | None 
         dataset:    数据集名。
         model:      模型 slug;缺省用当前 victim_model_slug()。
     """
-    return resolve_path(stage_base) / dataset / (model or victim_model_slug())
+    return resolve_path(stage_base) / dataset / (
+        model_slug(model) if model is not None else victim_model_slug()
+    )
 
 
 def run_dir(dataset: str, run_id: str, *, model: str | None = None) -> Path:
     """返回并创建该次运行的归档目录 outputs/runs/{dataset}/{model}/{run_id}/。"""
-    return ensure_dir(resolve_path("outputs/runs") / dataset / (model or victim_model_slug()) / run_id)
+    return ensure_dir(
+        resolve_path("outputs/runs")
+        / dataset
+        / (model_slug(model) if model is not None else victim_model_slug())
+        / run_id
+    )
 
 
 def index_path(dataset: str, *, model: str | None = None) -> Path:
     """返回历次运行总表路径 outputs/runs/{dataset}/{model}/index.jsonl(不创建文件)。"""
-    return resolve_path("outputs/runs") / dataset / (model or victim_model_slug()) / "index.jsonl"
+    return (
+        resolve_path("outputs/runs")
+        / dataset
+        / (model_slug(model) if model is not None else victim_model_slug())
+        / "index.jsonl"
+    )
 
 
 def append_index(dataset: str, record: dict[str, Any], *, model: str | None = None) -> Path:
@@ -290,6 +358,7 @@ def preregistration_snapshot(
     dataset: str,
     victim_model: str,
     run_role: str,
+    retriever_backend: str | None = None,
 ) -> dict[str, Any]:
     """读取预注册 suite 单元并冻结配置 hash；找不到唯一匹配时显式报错。"""
     config_path = Path(path).resolve()
@@ -299,6 +368,10 @@ def preregistration_snapshot(
         if str(cell.get("dataset")) == dataset
         and str(cell.get("victim_model")) == victim_model
         and str(cell.get("run_role", "main")) == run_role
+        and (
+            retriever_backend is None
+            or str(cell.get("retriever_backend") or "none") == str(retriever_backend)
+        )
     ]
     if len(cells) != 1:
         return {
@@ -330,6 +403,11 @@ def build_experiment_identity(manifest: dict[str, Any], source_whitelist_hash: s
         "victim_model": manifest.get("victim_model"),
         "victim_provider": manifest.get("victim_provider"),
         "victim_endpoint": manifest.get("victim_endpoint"),
+        "generator_id": manifest.get("generator_id") or manifest.get("victim_model"),
+        "generator_version": manifest.get("generator_version"),
+        "retriever_backend": manifest.get("retriever_backend"),
+        "retriever_id": manifest.get("retriever_id"),
+        "index_manifest_hash": manifest.get("index_manifest_hash"),
         "benchmark_hash": (manifest.get("benchmark") or {}).get("benchmark_hash"),
         "config_hashes": {
             name: value.get("sha256") if isinstance(value, dict) else None
@@ -662,6 +740,10 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
     victim_model = str(manifest.get("victim_model") or "").strip()
     if not victim_model or victim_model == "unspecified":
         reasons.append("victim_model_missing")
+    if not str(manifest.get("generator_id") or "").strip():
+        reasons.append("generator_id_missing")
+    if not str(manifest.get("generator_version") or "").strip():
+        reasons.append("generator_version_missing")
     git = manifest.get("git") or {}
     if not git.get("commit"):
         reasons.append("git_commit_missing")
@@ -676,6 +758,12 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
     if run_role == "matched_control" and not bool(manifest.get("run_llm_only", False)):
         reasons.append("matched_control_requires_llm_only")
     if run_role == "main":
+        if str(manifest.get("retriever_backend") or "") not in {"dense", "bm25"}:
+            reasons.append("retriever_backend_missing_or_invalid")
+        if not str(manifest.get("retriever_id") or "").strip():
+            reasons.append("retriever_id_missing")
+        if not str(manifest.get("index_manifest_hash") or "").strip():
+            reasons.append("index_manifest_hash_missing")
         required_analyses = {
             "offline_ablation",
             "shortcut_controls",
@@ -686,11 +774,16 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         completed_analyses = set(manifest.get("canonical_analyses_completed") or [])
         if not required_analyses.issubset(completed_analyses):
             reasons.append("canonical_analyses_incomplete")
-    required_steps = (
-        {10}
-        if run_role == "matched_control"
-        else {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
-    )
+    if run_role == "matched_control":
+        required_steps = {10}
+    else:
+        required_steps = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15}
+        if canonical_defense_required(
+            str(manifest.get("dataset") or ""),
+            victim_model,
+            str(manifest.get("retriever_backend") or ""),
+        ):
+            required_steps.add(14)
     selected = {int(step) for step in manifest.get("steps_selected", [])}
     completed = {int(step) for step in manifest.get("steps_run", [])}
     if not required_steps.issubset(selected) or not required_steps.issubset(completed):
@@ -712,6 +805,7 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         reasons.append("input_provenance_incomplete")
     preregistration = manifest.get("preregistration") or {}
     prereg_cell = preregistration.get("cell") or {}
+    expected_retriever = str(prereg_cell.get("retriever_backend") or "")
     if (
         not preregistration.get("sha256")
         or preregistration.get("selection_rule") != CANONICAL_SELECTION_RULE
@@ -720,6 +814,11 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         or str(prereg_cell.get("run_role", "main")) != run_role
         or str(prereg_cell.get("scale")) != CANONICAL_SCALE
         or str(prereg_cell.get("seed")) != str(CANONICAL_SPLIT_SEED)
+        or (
+            run_role == "main"
+            and expected_retriever
+            and expected_retriever != str(manifest.get("retriever_backend") or "")
+        )
     ):
         reasons.append("preregistration_missing_or_mismatched")
     if run_role == "main":
@@ -790,6 +889,16 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
             or baseline_whitelist["mismatched_methods"]
         ):
             reasons.append("baseline_source_whitelist_mismatch")
+        expected_baselines = canonical_baseline_methods(victim_model)
+        actual_baselines = set(baseline_whitelist.get("methods") or {})
+        if expected_baselines is not None and actual_baselines != set(expected_baselines):
+            reasons.append("baseline_method_set_mismatch")
+        if canonical_defense_required(
+            str(manifest.get("dataset") or ""),
+            victim_model,
+            str(manifest.get("retriever_backend") or ""),
+        ) and not list((run_root / "defenses").rglob("*_defense_results.json")):
+            reasons.append("representative_defense_missing")
     expected_identity = build_experiment_identity(
         manifest, str(whitelist.get("source_whitelist_hash") or "")
     )
@@ -901,6 +1010,7 @@ def register_canonical_run(
         expected_dataset = str(expected.get("dataset") or "")
         expected_model = str(expected.get("victim_model") or "")
         expected_role = str(expected.get("run_role") or "main")
+        expected_retriever = str(expected.get("retriever_backend") or "none")
         found = False
         for candidate in cells.values():
             identity = candidate.get("experiment_identity") or {}
@@ -909,6 +1019,7 @@ def register_canonical_run(
                 and str(candidate.get("victim_model") or "") == expected_model
                 and str(identity.get("scale") or "") == str(expected.get("scale") or "")
                 and str(identity.get("split_seed")) == str(expected.get("seed"))
+                and str(identity.get("retriever_backend") or "none") == expected_retriever
                 and expected_role in (candidate.get("runs") or {})
             ):
                 found = True
@@ -927,6 +1038,8 @@ def resolve_suite_run(
     *,
     dataset: str,
     run_role: str = "main",
+    victim_model: str | None = None,
+    retriever_backend: str | None = None,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     """从显式 suite registry 解析唯一 run，拒绝 glob/latest 与失效清单。"""
     suite_path = resolve_path("outputs/releases") / suite_id / "suite_manifest.json"
@@ -939,12 +1052,18 @@ def resolve_suite_run(
     for cell in (suite.get("cells") or {}).values():
         if str(cell.get("dataset")) != dataset:
             continue
+        if victim_model is not None and str(cell.get("victim_model")) != str(victim_model):
+            continue
+        identity = cell.get("experiment_identity") or {}
+        if retriever_backend is not None and str(identity.get("retriever_backend") or "none") != str(retriever_backend):
+            continue
         run = (cell.get("runs") or {}).get(run_role)
         if run:
             matches.append(run)
     if len(matches) != 1:
         raise RuntimeError(
-            f"Expected one suite run for {dataset}/{run_role}, found {len(matches)}"
+            f"Expected one suite run for {dataset}/{victim_model or '*'}/{retriever_backend or '*'}/{run_role}, "
+            f"found {len(matches)}"
         )
     record = matches[0]
     manifest_path = Path(str(record.get("run_manifest_path") or ""))

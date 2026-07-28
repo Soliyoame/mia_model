@@ -33,6 +33,7 @@ from src.scoring.calibration import (
     calibrate_membership_scores,
 )
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json
+from src.utils.dataset_paths import resolve_dataset_dir
 from src.utils.logger import setup_logging
 from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, model_scoped_dir, run_dir
 
@@ -69,6 +70,7 @@ def main() -> int:
         pass
 
     args = parse_args()
+    data_config = load_yaml(resolve_path("configs/data_config.yaml"))
     setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/feasibility.log"), level="INFO")
     out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
     scores_dir = model_scoped_dir("outputs/scores", args.dataset)
@@ -78,7 +80,7 @@ def main() -> int:
         dataset=args.dataset,
         scores_path=scores_path,
         benchmark_path=resolve_path("datasets/benchmarks") / f"{args.dataset}_attack_benchmark.jsonl",
-        splits_dir=resolve_path("datasets/splits") / args.dataset,
+        splits_dir=resolve_dataset_dir(data_config, "splits_dir", args.dataset),
         output_path=out_dir / f"{args.dataset}_feasibility.json",  # 固定名 latest(兼容)
     )
 
@@ -91,7 +93,8 @@ def main() -> int:
     for group, m in sig["group_means"].items():
         print(
             f"    {group:16s} n={m['count']:3d}  "
-            f"cvg_rag={m['cvg_rag']:+.3f}  cvg_llm={m['cvg_llm']:+.3f}  cg_cvg={m['cg_cvg']:+.3f}"
+            f"cvg_rag={_fmt(m['cvg_rag'])}  cvg_llm={_fmt(m['cvg_llm'])}  "
+            f"cg_cvg={_fmt(m['cg_cvg'])}"
         )
 
     # [1.5] L1 群体校准对比(重点看 TPR@1%FPR,校准收益主要在低 FPR 区)

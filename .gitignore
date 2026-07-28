@@ -75,6 +75,7 @@ wandb/
 outputs/
 indexes/
 backups/
+/artifacts/
 
 # 第三方 baseline 官方整仓（参考源码，体积大不入库；自包含参考模块在 MBA/ S2MIA/ RAG_MIA/）
 src/baselines/IA/

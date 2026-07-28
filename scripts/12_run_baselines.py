@@ -37,11 +37,18 @@ from src.baselines.victim_harness import (
     run_one_baseline,
 )
 from src.evaluation.metrics import paired_bootstrap_metric_delta, summarize_membership_scores
-from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
+from src.llm.factory import (
+    build_victim_client,
+    load_llm_profiles,
+    resolve_effective_llm_profile,
+    resolve_llm_profile_name,
+)
 from src.rag.retriever import RagRetriever
 from src.rag.runner import TokenBucket
+from src.utils.dataset_paths import resolve_dataset_dir
+from src.utils.hash import sha256_file
 from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json, write_jsonl
-from src.utils.run_context import model_scoped_dir
+from src.utils.run_context import canonical_baseline_methods, model_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -103,7 +110,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "baseline_config.yaml"))
     # infra(索引/切分/profile/生成参数)来自 rag_config。
     parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
-    parser.add_argument("--methods", default="RAG-MIA,S2MIA,MBA,IA,DCMI",
+    parser.add_argument(
+        "--retriever-backend",
+        choices=["dense", "bm25"],
+        default=None,
+        help="一次只运行一个 Retriever；未指定时读取 rag_config.retrieval.backend。",
+    )
+    parser.add_argument("--methods", default=None,
                         help="逗号分隔,可选:" + ",".join(BASELINES))
     parser.add_argument("--max-targets", type=int, default=None, help="只跑前 N 个目标(两类均衡,省 API 试跑)")
     parser.add_argument("--request-interval", type=float, default=None, help="每次 victim 调用后睡眠秒数(限速)")
@@ -123,7 +136,7 @@ def main() -> int:
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
 
-    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    methods = [m.strip() for m in (args.methods or "").split(",") if m.strip()]
     unknown = [m for m in methods if m not in BASELINES]
     if unknown:
         raise ValueError(f"未知 baseline:{unknown};可选 {list(BASELINES)}")
@@ -132,6 +145,28 @@ def main() -> int:
     profiles = load_llm_profiles(rag_config)
     gen_cfg = rag_config.get("generation", {})
     victim_name = resolve_llm_profile_name("victim", cli_profile=args.victim_profile, config_profile=gen_cfg.get("victim_profile"))
+    effective_profile = resolve_effective_llm_profile(
+        profiles,
+        "victim",
+        profile_name=victim_name,
+    )
+    victim_model = str(effective_profile.get("model") or "")
+    method_selection = "cli_override"
+    if not methods:
+        policy_cfg = config.get("baseline", {}).get("formal_method_policy", {})
+        full_generator = str(policy_cfg.get("full_generator") or "").casefold()
+        policy_key = "full_methods" if victim_model.casefold() == full_generator else "extension_methods"
+        configured = policy_cfg.get(policy_key)
+        methods = [
+            str(method)
+            for method in (configured or canonical_baseline_methods(victim_model) or [])
+        ]
+        method_selection = "v19_generator_policy"
+    unknown = [method for method in methods if method not in BASELINES]
+    if not methods or unknown:
+        raise ValueError(
+            f"Invalid baseline method set {methods}; unknown={unknown}, allowed={list(BASELINES)}"
+        )
     victim, victim_profile = build_victim_client(profiles, profile_name=victim_name)
 
     need_attacker = any(BASELINES[m].needs_attacker for m in methods)
@@ -153,9 +188,16 @@ def main() -> int:
                 max_tokens=int(gen_cfg.get("max_tokens", 512)),
             )
 
-    index_dir = resolve_path(rag_config["paths"]["indexes_dir"]) / args.dataset
+    retriever_backend = args.retriever_backend or str(
+        rag_config.get("retrieval", {}).get("backend", "dense")
+    )
+    index_dir = (
+        resolve_path(rag_config["paths"]["indexes_dir"])
+        / args.dataset
+        / retriever_backend
+    )
     retriever = RagRetriever(index_dir)
-    splits_dir = resolve_path(rag_config["paths"]["splits_dir"]) / args.dataset
+    splits_dir = resolve_dataset_dir(rag_config, "splits_dir", args.dataset)
     targets = load_targets(splits_dir)
     if args.max_targets:
         targets = balanced_sample(targets, args.max_targets)
@@ -314,7 +356,12 @@ def main() -> int:
     write_json({"dataset": args.dataset, "budgets": [2, 4, 6, 8], "results": budget_rows}, budget_path)
     manifest = {
         "dataset": args.dataset,
+        "retriever_backend": retriever.retriever_backend,
+        "retriever_id": retriever.manifest.get("retriever_id"),
+        "index_manifest_hash": sha256_file(index_dir / "index_manifest.json"),
         "methods": methods,
+        "method_selection": method_selection,
+        "generator_id": victim_model,
         "targets": {"total": len(targets), "KB_Member": n_kb, "True_Non_Member": n_tn},
         "target_sources": len({str(t.get("source_key") or t.get("source_id") or t.get("doc_id")) for t in targets}),
         "evaluation_unit": "source",

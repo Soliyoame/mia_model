@@ -27,7 +27,8 @@ DATE_RE = re.compile(
 )
 # 金额:如 "$1,200.50"、"5 million dollars"、"100 USD"。
 MONEY_RE = re.compile(
-    r"(?:[$]\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|dollars|million|billion)\b)",
+    r"(?:(?:\b(?:US|C|A|HK|NZ)\$|[$€£¥])\s?\d[\d,]*(?:\.\d+)?|"
+    r"\b\d[\d,]*(?:\.\d+)?\s?(?:USD|dollars|million|billion)\b)",
     re.IGNORECASE,
 )
 # 百分比:如 "12%"、"3.5 percent"。
@@ -46,8 +47,9 @@ MEDICAL_VALUE_RE = re.compile(
 )
 # 合同条款关键词:如 "effective date"、"termination"、"governing law"。
 CONTRACT_TERM_RE = re.compile(
-    r"\b(?:effective date|termination|renewal|confidentiality|indemnification|governing law|"
-    r"non-disclosure|assignment|liability|warranty|payment term|license term)\b",
+    r"\b(?:effective date|expiration date|termination|renewal|confidentiality|indemnification|"
+    r"indemnity|governing law|choice of law|non-disclosure|assignment|delegation|liability|"
+    r"warranty|payment term|license term)\b",
     re.IGNORECASE,
 )
 # 模板/套话:如 "all rights reserved"、"for informational purposes only" 等免责声明类文字。

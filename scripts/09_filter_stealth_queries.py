@@ -60,12 +60,19 @@ def main() -> int:
         output_path=out_dir / f"{args.dataset}_paired_queries.jsonl",
         # 配置没给 embedding_model 时退回默认模型,用于计算查询与原文的语义相似度。
         embedding_model=str(stealth_cfg.get("embedding_model", DEFAULT_EMBEDDING_MODEL)),
+        embedding_local_files_only=bool(stealth_cfg.get("embedding_local_files_only", False)),
         min_naturalness=float(stealth_cfg.get("min_naturalness", 0.55)),
         max_context_probe=float(stealth_cfg.get("max_context_probe", 0.5)),
         max_prompt_injection=float(stealth_cfg.get("max_prompt_injection", 0.5)),
         # 相似度需落在区间内:太低=跑题,太高=几乎照抄原文,都不利于隐蔽攻击。
         min_similarity=float(stealth_cfg.get("min_similarity", 0.03)),
         max_similarity=float(stealth_cfg.get("max_similarity", 0.97)),
+        embedding_batch_size=int(stealth_cfg.get("embedding_batch_size", 256)),
+        pairs_per_source=(
+            int(stealth_cfg["pairs_per_source"])
+            if stealth_cfg.get("pairs_per_source") is not None
+            else None
+        ),
         resume=not args.no_resume,
         force=args.force,
     )

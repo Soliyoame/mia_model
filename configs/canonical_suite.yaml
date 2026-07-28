@@ -6,32 +6,247 @@ selection_rule: first_preregistered_run_passing_all_gates
 release_commit: null
 
 protocol:
-  method_version: pcv-rag-only-source-v1
+  method_version: pcv-rag-only-source-v19
   threat_model_version: strict-blackbox-v1
   metrics_version: source-conformal-v1
   scale: formal
   seed: 42
   main_score: pair mean within chunk, then equal chunk mean within source
   main_run_llm_only: false
+  datasets: [edgar, enron, pubmed]
+  generators: [qwen/qwen3.5-397b-a17b, gemini-2.0-flash, gpt-4.1-mini, meta-llama/llama-3.3-70b-instruct]
+  retrievers: [dense, bm25]
+  dense_retriever_model: sentence-transformers/all-MiniLM-L6-v2
+  pairs_per_source: 3
+  queries_per_source_per_cell: 6
+  execution: one_cell_at_a_time
+  baseline_method_policy:
+    full_generator: qwen/qwen3.5-397b-a17b
+    full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI]
+    extension_methods: [IA, DCMI]
+  defense_representative_cells:
+    - {dataset: edgar, victim_model: qwen/qwen3.5-397b-a17b, retriever_backend: dense}
+    - {dataset: enron, victim_model: qwen/qwen3.5-397b-a17b, retriever_backend: dense}
+    - {dataset: pubmed, victim_model: qwen/qwen3.5-397b-a17b, retriever_backend: dense}
 
 cells:
   - dataset: edgar
     run_role: main
     victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: dense
     scale: formal
     seed: 42
   - dataset: edgar
-    run_role: matched_control
+    run_role: main
     victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: bm25
     scale: formal
     seed: 42
   - dataset: enron
     run_role: main
     victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+
+  - dataset: edgar
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: gemini-2.0-flash
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+
+  - dataset: edgar
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: gpt-4.1-mini
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+
+  - dataset: edgar
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: dense
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: main
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: bm25
+    scale: formal
+    seed: 42
+
+  - dataset: edgar
+    run_role: matched_control
+    victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: none
     scale: formal
     seed: 42
   - dataset: enron
     run_role: matched_control
     victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: matched_control
+    victim_model: qwen/qwen3.5-397b-a17b
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: matched_control
+    victim_model: gemini-2.0-flash
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: matched_control
+    victim_model: gemini-2.0-flash
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: matched_control
+    victim_model: gemini-2.0-flash
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: matched_control
+    victim_model: gpt-4.1-mini
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: matched_control
+    victim_model: gpt-4.1-mini
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: matched_control
+    victim_model: gpt-4.1-mini
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: edgar
+    run_role: matched_control
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: enron
+    run_role: matched_control
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: none
+    scale: formal
+    seed: 42
+  - dataset: pubmed
+    run_role: matched_control
+    victim_model: meta-llama/llama-3.3-70b-instruct
+    retriever_backend: none
     scale: formal
     seed: 42

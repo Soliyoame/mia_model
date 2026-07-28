@@ -1,0 +1,24 @@
+protocol_version: pcv_mia_v19
+
+claim_pair_audit:
+  datasets: [edgar, enron, pubmed]
+  pairs_per_dataset: 200
+  annotators_per_pair: 2
+  minimum_double_pass_rate: 0.90
+  minimum_cohen_kappa: 0.80
+
+stance_parser_audit:
+  datasets: [edgar, enron, pubmed]
+  generators:
+    - qwen/qwen3.5-397b-a17b
+    - gemini-2.0-flash
+    - gpt-4.1-mini
+    - meta-llama/llama-3.3-70b-instruct
+  responses_per_dataset_generator: 100
+  expected_total_responses: 1200
+  minimum_macro_f1: 0.95
+
+canonical_release:
+  require_all_claim_pair_reports: true
+  require_all_stance_reports: true
+  require_no_duplicate_reports: true

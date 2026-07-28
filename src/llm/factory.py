@@ -37,11 +37,13 @@ ROLE_ENV_VARS = {
         "api_key": ("PCV_SIBLING_API_KEY",),
         "base_url": ("PCV_SIBLING_BASE_URL",),
         "model": ("PCV_SIBLING_MODEL",),
+        "model_version": ("PCV_SIBLING_MODEL_VERSION",),
     },
     "victim": {
         "api_key": ("PCV_VICTIM_API_KEY",),
         "base_url": ("PCV_VICTIM_BASE_URL",),
         "model": ("PCV_VICTIM_MODEL",),
+        "model_version": ("PCV_VICTIM_MODEL_VERSION",),
     },
 }
 
@@ -197,12 +199,34 @@ def _apply_role_env_overrides(role: str, profile: dict[str, Any]) -> dict[str, A
     if model:
         updated["model"] = model
 
+    # Version is provenance-only: it identifies the concrete served snapshot
+    # without changing the model argument sent to an OpenAI-compatible API.
+    model_version_names = [
+        _first_nonempty(updated.get("model_version_env")),
+        *role_env["model_version"],
+    ]
+    _, model_version = _first_env_value([name for name in model_version_names if name])
+    if model_version:
+        updated["model_version"] = model_version
+
     # api_key：注意这里存的是"变量名"而不是 key 本身;选出实际有值的那个变量名。
     api_key_env_names = [_first_nonempty(updated.get("api_key_env")), *role_env["api_key"]]
     selected_api_key_env, _ = _first_env_value([name for name in api_key_env_names if name])
     # 没有任何变量有值时,退而记录第一个候选变量名(供底层报"未设置该变量")。
     updated["api_key_env"] = selected_api_key_env or _first_nonempty(*api_key_env_names)
     return updated
+
+
+def resolve_effective_llm_profile(
+    profiles_config: dict[str, Any],
+    role: str,
+    *,
+    profile_name: str | None = None,
+) -> dict[str, Any]:
+    """Resolve one profile plus environment overrides without constructing an API client."""
+
+    _, profile = _get_profile(profiles_config, role, profile_name, None)
+    return _apply_role_env_overrides(role, profile)
 
 
 def _profile_extra_body(profile: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,53 @@
 # PCV-MIA
 
+## 当前唯一执行口径
+
+当前正式版本是 `v6.3 attack-first RC2`，主实验统一为每个 source
+`3 pair / 6 queries`。旧 v19、RC1 和 eligibility 原始扫描产物已清理；
+研究过程保留在 `研究记录/`，不要再按历史命令补跑。
+
+激活 `(mia_model)` 环境后统一使用 `python`。标准配置入口只有：
+
+- `configs/data_config.yaml`
+- `configs/pcv_attack_config.yaml`
+- `configs/rag_config.yaml`
+- `configs/llm_profiles.yaml`
+
+先验证当前三数据集正式产物：
+
+```powershell
+python -B scripts/verify_v6_3_budget6_formal_artifacts.py `
+  --output artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json
+```
+
+Enron 的 `all-MiniLM-L6-v2` FAISS 索引已经建好。需要重建时只运行：
+
+```powershell
+python -B scripts/03_build_rag_index.py `
+  --dataset enron `
+  --config configs/rag_config.yaml `
+  --retriever-backend dense `
+  --force
+```
+
+第一个单 cell pilot 已冻结在
+`artifacts/v6_3/pilots/enron_qwen3_5_397b_minilm_rc2/queries.jsonl`。
+确认 `configs/llm_profiles.yaml` 中当前只启用一个真实 Generator profile 后，
+再运行：
+
+```powershell
+python -B scripts/10_run_rag_and_llm_only.py `
+  --dataset enron `
+  --config configs/rag_config.yaml `
+  --victim-profile <当前唯一的 profile 名> `
+  --retriever-backend dense `
+  --queries-path artifacts/v6_3/pilots/enron_qwen3_5_397b_minilm_rc2/queries.jsonl
+```
+
+Retriever 和 Generator 都必须一次只跑一个。RAG index 只能包含
+`KB_Member`；`True_Non_Member`、`Reserve`、`Spoof_Seed` 和
+`Spoofed_Non_Member` 一律不能进入索引。
+
 PCV-MIA 是一个面向 RAG 知识库的成员推理攻击实验框架。方法全称是：
 
 ```text
@@ -27,6 +75,40 @@ KB isolation
 ```
 
 ## 当前状态
+
+### 2026-07-22：v19 顶会协议本地阶段完成
+
+v19 已冻结为三数据集、四 Generator、两 Retriever 的 source-level 正式协议。Generator 和 Retriever 都必须逐 cell 显式选择，不在 `llm_profiles.yaml` 或一条命令中隐式批量运行。
+
+| 维度 | v19 正式定义 |
+|---|---|
+| 数据集 | Edgar（filing）、Enron（完整邮件）、PubMed（PMCID 论文） |
+| Generator | Qwen3.5-397B、Gemini-2.0-Flash、GPT-4.1-mini、Llama-3.3-70B-Instruct |
+| Retriever | dense=`sentence-transformers/all-MiniLM-L6-v2`、BM25 |
+| source split | 每数据集 500 `KB_Member` + 500 `True_Non_Member` + 250 `Reserve` |
+| 查询预算 | 每 source 固定 3 个 Q+/Q− pair，即 6 次 victim 调用 |
+| 主矩阵 | 3 数据集 × 4 Generator × 2 Retriever = 24 main cells |
+| 归因对照 | 3 数据集 × 4 Generator = 12 matched LLM-only cells |
+
+早期 Step 01–09 的 4 pair/8 query 产物现仅作为历史证据保留。RC1 后的主协议已统一改为每 source 3 pair/6 条文本唯一 query；正式产物必须按当前配置重新生成。3-pair 主协议仍使用相同的本地 claim validator 硬门禁：
+
+- 原实体 span/边界正确，true/counterfactual claim 只改一个槽位。
+- 替换前后实体类型一致且值不同，并维持年份、时长单复数、地点冠词等子类语法。
+- claim 是完整英文陈述句，无明显截断、MIME/邮件头污染、异常括号或重复词。
+- Q+/Q− 把对应实体替换为 `{ENTITY}` 后完全一致；所有失败都保留 `validation_failure_reason`。
+
+上述门禁、source eligibility、stealth filter、正式 promotion、审计模板和 pilot
+预算均可本地完成。当前 attack-first RC2 正式产物的实际 API 调用为 0；最新验收为
+302/302 tests、260 个 Python 文件内存编译、15 个 YAML 解析和
+`git diff --check` 通过。三数据集完整性报告为
+`artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json`。
+
+新 formal RC100/Release200 的本地 AI 预审均为 0 high-risk。该结果允许进入小规模
+Reserve/机制 pilot，但不能表述为两位真人盲标或 Cohen’s κ；若论文要主张真人一致性，
+仍需另行收集真实标签。正式矩阵只在单 cell pilot 验证检索隔离、输出完整性和成本后
+逐个 Generator、逐个 Retriever 扩展。
+
+> 下方 2026-07-20 及更早内容保留为历史进度；与 v19 冲突时以本节、当前配置和 artifact manifest 为准。
 
 ### 2026-07-20：投稿级 canonical 完善进度
 
@@ -255,24 +337,26 @@ preprocess:
 split:
   seed: 42
   source_exclusive: true
-  scale: small
+  scale: formal
   small:
+    target_unit: records
     KB_Member: 100
     True_Non_Member: 100
     Spoof_Seed: 100
     Reserve: 100
     per_source_cap: 3
   formal:
-    KB_Member: 600
-    True_Non_Member: 600
+    target_unit: sources
+    KB_Member: 500
+    True_Non_Member: 500
     Spoof_Seed: 0
-    Reserve: 450
-    per_source_cap: 3
+    Reserve: 250
+    per_source_cap: null
 ```
 
 `source_exclusive: true` 表示同一原始文档的不同 chunk 不会跨 member 和 non-member 分组，避免成员推理实验中的数据污染（近邻泄漏）。
 
-`per_source_cap` 限制每篇**原始文档**对单个组最多贡献的 chunk 数（其余丢弃），用于按「独立文档数」而非 chunk 数控制规模：`source_exclusive` 下若不限制，少数几篇长文档的 chunk 就能填满一组，使"样本数"虚高而**有效独立样本数（= 原始文档数）**仍是个位数（旧 small 每组仅 2–3 篇文档，word_count 等表层特征会因此可分）。例：`formal` 的 `KB_Member: 600 / per_source_cap: 3 ≈ 200 篇独立文档`（edgar 一篇原始文档约切 62 个 chunk）。不写该字段即旧行为（单篇文档可填满整组，向后兼容）。`Spoof_Seed: 0` 表示不生成 Spoof 种子（当前未使用 Spoofed 对照组）。
+formal 协议的数量单位是 membership source，不是 chunk。source 被选中后保留它的全部 chunk，因此 `per_source_cap: null`；正式 split 只从标签无关的 query-eligible whitelist 中按 seed 42 抽样。`Spoof_Seed: 0` 表示主协议不生成 Spoof 种子。
 
 ### `configs/rag_config.yaml`
 
@@ -323,11 +407,17 @@ generation:
 
 ```yaml
 fact_extraction:
-  max_facts_per_doc: 2
+  max_facts_per_doc: 4
   max_entities_per_doc: 8
+  guarantee_min_facts: 1
   min_importance: 0.6
   min_replaceability: 0.6
   min_privacy_specificity: 0.5
+  dataset_overrides:
+    enron:
+      max_facts_per_doc: 8
+      max_entities_per_doc: 12
+      guarantee_min_facts: 8
 
 paired_claims:
   perturbation_levels: [light]
@@ -338,6 +428,9 @@ paired_queries:
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_local_files_only: true
+  embedding_batch_size: 64
+  pairs_per_source: 3
   min_naturalness: 0.55
   max_context_probe: 0.5
   max_prompt_injection: 0.5
@@ -407,6 +500,103 @@ pipeline:
 ```
 
 ## 快速运行
+
+### v6.3 precision cascade：精确 1,250 停止
+
+v6.3 的正式本地语义门禁只运行 GLiNER2-large；PubMed 额外使用 BioMed
+candidate-only veto。bulk 阶段不运行 GLiNER2-base、CPU spaCy、API 或 Retriever。
+
+上游 v3/v4 与 RC1 扫描只作为已冻结的 GLiNER-passed facts 和历史容量证据保留。
+当前正式 release 统一使用
+`v6_3_attack_first_rc2_budget6_release_v1` 和 3 pair/6 query：
+
+- Edgar、Enron、PubMed 的 whitelist 均恰好包含 1,250 个 source。
+- 每数据集均为 3,750 个完整 pair、7,500 条非空且文本唯一 query。
+- RC2 只重做确定性反事实、claim validator、source-absence、stealth 和固定预算选择；
+  不重新运行 GLiNER、API 或 Retriever。
+- 默认 [data_config.yaml](configs/data_config.yaml) 已指向 RC2 release input，避免复现
+  时静默回退到旧 RC1。
+
+Enron v4 排序计划和 GPU 扫描已经完成；旧 eligibility checkpoint 与一次性恢复入口
+已在仓库瘦身时清理。冻结的 calibration 证据继续保存在
+`artifacts/v6_3/semantic_calibration*`，正式 RC2 产物不依赖旧扫描目录。
+三数据集 budget-6 formal split 均为 500 KB_Member / 500 True_Non_Member /
+250 Reserve；每个数据集均已 promotion 为 1,250 source、3,750 pair、7,500 条
+source 内唯一 query。RC2 完整性报告位于
+`artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json`。
+
+RC 100 与 Release 200 审计模板位于：
+
+- `artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/`
+- `artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/`
+
+两轮均按 source/audit ID 排除旧 RC/Release，且新 Release 额外排除新 RC。
+本地预审分别为 RC 0 high-risk / 101 needs-review / 199 low-risk，Release
+0 high-risk / 219 needs-review / 381 low-risk；needs-review 主要来自开放语义实体、
+专名标点和 PubMed 标识符的人工抽查提示，不等于失败。A/B 文件仍为空白，未伪造
+人工标签；AI 预审只支持进入小规模机制 pilot，不能据此宣称真人 Cohen’s κ。
+
+budget-6 formal 的本地复现顺序如下：
+
+```powershell
+python -B scripts/build_v6_3_budget6_release_inputs.py --input-mode attack_first_rc2 --force
+foreach ($dataset in @("edgar", "enron", "pubmed")) {
+  python -B scripts/02_split_dataset.py --dataset $dataset --config configs/data_config.yaml --scale formal --force --no-resume
+  python -B scripts/05_build_attack_benchmark.py --dataset $dataset --data-config configs/data_config.yaml --force --no-resume
+  python -B scripts/promote_eligibility_plan.py --dataset $dataset --data-config configs/data_config.yaml --attack-config configs/pcv_attack_config.yaml --force
+}
+python -B scripts/verify_v6_3_budget6_formal_artifacts.py `
+  --output artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json
+```
+
+当前只允许先运行 Enron 的单 cell pilot；不要一次启动四个 Generator 或两个
+Retriever，也不要根据正式 member/non-member 测试 AUC 反向调 claim validator。
+
+当前 v6.3 只使用现有编号流水线和现有配置，不再新增入口。激活 `mia_model`
+环境后，Enron dense index 的唯一命令是：
+
+```powershell
+python -B scripts/03_build_rag_index.py `
+  --dataset enron `
+  --config configs/rag_config.yaml `
+  --retriever-backend dense `
+  --force
+```
+
+`configs/rag_config.yaml` 已统一指向 `artifacts/v6_3`。不要再使用
+`D:\python\anaconda\python.exe`，它是没有 FAISS 的 base 解释器；在
+`(mia_model)` 提示符下直接使用 `python`。
+
+### 当前无 API 正式准备
+
+如需有意重建 Step 01–09，三数据集必须逐个运行。以 Enron 为例：
+
+```powershell
+python -B scripts/02_split_dataset.py --dataset enron --config configs/data_config.yaml --scale formal --force
+python -B scripts/05_build_attack_benchmark.py --dataset enron --data-config configs/data_config.yaml --force
+python -B scripts/06_extract_facts.py --dataset enron --config configs/pcv_attack_config.yaml --force
+python -B scripts/07_generate_paired_claims.py --dataset enron --config configs/pcv_attack_config.yaml --force
+python -B scripts/08_generate_paired_queries.py --dataset enron --config configs/pcv_attack_config.yaml --force
+python -B scripts/09_filter_stealth_queries.py --dataset enron --config configs/pcv_attack_config.yaml --force
+```
+
+生成双人盲标模板、Enron dense index 和 API-free pilot 预算：
+
+```powershell
+python -B scripts/claim_pair_audit.py --dataset enron --claims artifacts/v6_3/paired_claims/enron_paired_claims.jsonl --sample-size 200 --seed 42 --output-dir artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal
+python -B scripts/03_build_rag_index.py --dataset enron --config configs/rag_config.yaml --retriever-backend dense --force
+python -B scripts/prepare_single_cell_pilot.py --dataset enron --config configs/rag_config.yaml --generator-id Qwen3.5-397B --retriever-id sentence-transformers/all-MiniLM-L6-v2
+```
+
+Edgar/PubMed 将 `--dataset` 和 eligibility 输出目录替换为对应配置路径。上述命令不调用 victim/sibling API；Step 10 及之后必须等真实双人盲标通过。
+
+离线完整性验收：
+
+```powershell
+python -B scripts/verify_v6_3_budget6_formal_artifacts.py --artifacts-dir artifacts/v6_3 --output artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json
+```
+
+### 通用流水线
 
 先看将要执行哪些命令：
 
@@ -693,7 +883,7 @@ outputs/llm_only_responses/{dataset}/{model}/{dataset}_llm_only_responses.manife
   `≤ RPM`（绝不超端点限流），但并发让某条 call 卡住时其他线程仍能发满 RPM——把管道填满。
   并发**不是**为了超过 RPM，而是为了在端点间歇卡顿时**仍能达到** RPM。`requests_per_minute: 0`
   则回退到 `request_interval_seconds` 固定间隔的旧行为。每条查询仍逐条单发，输出与串行**逐字节一致**。
-  可用 `scripts/_smoke_token_bucket.py` 在换 key/端点后验证实际吞吐。
+  首次只使用已经冻结的 150-query pilot 验证端点和吞吐，不要直接启动正式矩阵。
 
 - **API 失败不丢样本**（`retry_until_success` + `retry_cooldown_seconds`）：
   每个请求先按 `retries` / `retry_backoff_*` 做短指数退避；若仍是可恢复的 API/网络错误，
@@ -926,13 +1116,10 @@ python scripts/analyze_feasibility.py --dataset enron
 python scripts/run_l2_shadow.py --dataset enron --num-shadows 4
 ```
 
-### 泄漏诊断（临时工具）
+### 捷径与泄漏诊断
 
-```powershell
-python scripts/_diag_leakage.py --dataset enron
-```
-
-只读现有产物，做 bootstrap 置信区间 + KB/True_Non 两组的 LLM-only/RAG 行为分解 + entity_type/难度/文本统计对比，用于定位"信号是否来自成员性、还是预训练污染等混淆因素"。不调用 API。
+正式诊断统一由 `scripts/analyze_shortcut_controls.py`、机制分析和 matched
+LLM-only 对照完成，不再保留临时 `_diag_*` 脚本。
 
 ## 核心模块
 
@@ -1359,6 +1546,10 @@ python scripts/run_pipeline.py --dataset enron --only-steps 3,9-13,15 --force
 python -B -m unittest discover -s tests
 ```
 
+v19/RC2 最新本地验收结果为 302/302 tests 通过、260 个 Python 文件内存编译通过、
+15 个 YAML 解析通过；formal integrity 与 `git diff --check` 也通过。测试输出中的
+timeout/retry 文本来自 mock 路径，不是真实 API 调用。
+
 语法检查：
 
 ```powershell
@@ -1462,8 +1653,9 @@ baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」�
 
 ## 研究记录
 
-仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v18.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录默认不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
+仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v19.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录默认不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
 
+- `思路v19` 冻结三数据集、四 Generator、双 Retriever、source-level 固定八次查询、validator v2、双盲审计与 36-cell canonical 门禁。当前本地技术阶段已完成，真实人工门禁仍待回收。
 - `思路v18` 记录 2026-07-13 baseline 复现就绪审计、MBA 并发修复、IA/DCMI 失败放大原因，以及 PCV-MIA/全 baseline 的 API 长冷却无限重试决策。
 - `思路v17` 固定 LLM-only 默认关闭与 P1 完整性基础设施修复。
 - `思路v16` 是当前最新协议增量：P0 固定 RAG-only 主攻击、source-level 评估、conformal 校准与 canonical run/suite；P1 负责修通实验基础设施。若该文件未纳入仓库，请以当前 README 与代码中的 `P0_PROTOCOL` 为准。
@@ -1473,10 +1665,101 @@ baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」�
 - [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
 - [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
 - [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
-- 新旧说法冲突时，以 `思路v16` + 当前 README + 当前代码为准；旧版中的 context-gain 主分、chunk-level 主评估与历史数值仅作研究过程记录。
-- **当前阶段定位 = 可行性验证**（确认信号是否来自成员性，而非 prompt 不对称 / 文本捷径 / 同源泄漏 / 模型先验），非冲顶会的完整实验。
+- 新旧说法冲突时，以 `思路v19` + 当前 README + 当前代码/配置为准；旧版中的 context-gain 主分、chunk-level 主评估与历史数值仅作研究过程记录。
+- **当前阶段定位 = attack-first RC2 本地产物与 AI 预审已完成，准备 Enron 单 cell
+  机制 pilot**。pilot 通过后逐个 Generator、逐个 Retriever 扩展；若论文主张真实
+  双人一致性，仍须另外收集真人标签。
 - v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
 - `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。
 - `分类器.txt` 是关于 MIA 元分类器方向的调研笔记；其中提到的 `GradientBoostingClassifier` 等分类器属于后续设想，当前代码尚未引入，主方法仍是 CG-CVG 阈值判定。
 
-README 是面向运行和复现的操作文档，应与 `思路v9.txt` / `思路v10.txt` 和代码同步更新。
+README 是面向运行和复现的操作文档，应与 `思路v19.txt`、任务记录和当前代码/配置同步更新。
+
+## v6.3 RC1 四-pair容量诊断（历史，已 superseded）
+
+旧 RC100 发现重复的截断、邮件/表格污染和实体误型后，RC1 本地回放曾以
+4 pair/8 query 评估容量：
+
+| Dataset | RC1 eligible sources | 目标 | 状态 |
+|---|---:|---:|---|
+| Edgar | 952 | 1,250 | 不足 |
+| Enron | 694（含旧 terminal wave 可回收 9 个） | 1,250 | 不足 |
+| PubMed | 1,479 | 1,250 | 容量通过 |
+
+该诊断证明 4-pair 门槛会使 Enron 明显偏向事实丰富的超长邮件。旧 extension
+checkpoint 只保留作历史证据，不得再 resume；当前主协议以下一节的 3/6 为准。
+
+## v6.3 RC1 主预算调整：3 pair / 6 queries（2026-07-28）
+
+RC1 容量实验表明，Enron 大量完整邮件天然只有 2–3 个可通过硬门禁的独立事实。
+继续强制 4 pair 会明显偏向超长邮件，并增加 source selection bias。主实验因此统一
+改为每 source 3 个完整 Q+/Q− pair，即 6 条文本唯一 query；validator、实体类型、
+semantic resolver 和 stealth 阈值均不降低。4 pair/8 queries 保留为高预算消融，
+2 pair/4 queries 保留为低预算消融。
+
+当前纯本地重选结果如下；整个重选过程 GLiNER/API/Retriever 调用均为 0：
+
+| Dataset | 3-pair eligible | 目标 | 状态 |
+|---|---:|---:|---|
+| Edgar | 1,250 | 1,250 | cap=5 + 定向 cap=8 完成 |
+| Enron | 1,308 | 1,250 | 按 source 顺序精确保留 1,250 |
+| PubMed | 1,820 | 1,250 | 容量通过 |
+
+Enron budget-6 plan 的 retained boundary 为 source index 2,361，最终产物严格包含
+1,250 source、3,750 pair、7,500 query。whitelist hash 为
+`949a6fb41f9620f12dd40d701e5fe3ec53150eb8980762e677cd062c5f1e7e3c`。
+
+旧 Enron 4-pair extension checkpoint 已完成其容量诊断使命；由于当前配置已切换为
+3 pair，其旧产物和一次性入口已经清理，不得再 resume。
+
+Edgar 的定向 cap=8 计划已经完成；旧 checkpoint 和一次性恢复入口已经清理。
+
+计划 hash 为
+`8fc79a76cadac0e779d82b3e72a41bb5c057c5513421963ba34efc5ee8f9644d`；
+该入口 API/Retriever 调用固定为 0。加入此入口后的完整验证为 276/276 tests 通过。
+
+Edgar 定向补跑已完成：2 个 wave 后新增并保留 77 个 upgrade source，最终严格包含
+1,250 source、3,750 pair、7,500 条 source 内文本唯一 query；容量状态为
+`sufficient`。最终 whitelist hash 为
+`9229525cfa9d57953b02fd1d17c363e44238428f27df61e46e81366e35bff99a`，
+输出文件 hash、source/pair/query 数量、Q+/Q− 完整性和查询文本唯一性均已复核。
+Edgar 不再需要补跑。
+
+### attack-first RC2 budget-6 formal 重建结果
+
+- release protocol：`v6_3_attack_first_rc2_budget6_release_v1`。
+- release whitelist hash：
+  - Edgar：
+    `bd859976d9bce18c2d4ca287fccae135691ea180ce84d7d65d46c053ca8836dc`
+  - Enron：
+    `7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327`
+  - PubMed：
+    `6a145697be6e50f68755cd38a5a25820b5dbf759a5fafce4fa1acd709de36968`
+- formal benchmark rows：Edgar 80,181；Enron 6,434；PubMed 17,028。
+- promotion：每数据集 1,250 source / 3,750 facts / 3,750 claims /
+  7,500 queries；source-exclusive、Q+/Q− 完整、query ID/文本 source 内唯一、
+  引用与所有 output hash 均通过。
+- 新 RC100/Release200 已与旧轮次及彼此隔离；本地预审分别为
+  0/101/199 与 0/219/381（high-risk/needs-review/low-risk）。
+- 最新本地验收为 302/302 tests、260 个 Python 文件内存编译、15 个 YAML 解析、
+  formal integrity 和 `git diff --check` 全部通过。
+
+Enron all-MiniLM-L6-v2 dense index 已使用 `mia_model` 环境中的 FAISS 构建完成：
+500 个 `KB_Member` source、2,611 个文档块，禁止组重叠为 0；输入、docstore 和
+index hash 均匹配，存储后端为 `faiss.IndexFlatIP`。首个单 cell pilot 计划已经生成
+但尚未调用 API：
+
+```powershell
+python -B scripts\prepare_single_cell_pilot.py `
+  --dataset enron `
+  --config configs\rag_config.yaml `
+  --queries-path artifacts\v6_3\stealth_filtered_queries\enron_paired_queries.jsonl `
+  --output-dir artifacts\v6_3\pilots\enron_qwen3_5_397b_minilm_rc2 `
+  --pilot-id enron_qwen3_5_397b_minilm_rc2 `
+  --generator-id Qwen3.5-397B `
+  --retriever-id sentence-transformers/all-MiniLM-L6-v2
+```
+
+该计划含 10 member、10 true non-member、5 reserve，150 条查询；RAG 150 次、
+matched LLM-only 150 次，共 300 次潜在调用。价格在具体 endpoint/provider 未冻结
+前保持 `unavailable`，不能用猜测价格生成费用数字。

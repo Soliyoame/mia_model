@@ -2,29 +2,83 @@
 
 logging:
   level: INFO
-  file: datasets/logs/pcv_attack.log
+  file: artifacts/v6_3/logs/pcv_attack.log
 
 llm_profiles_path: configs/llm_profiles.yaml
 
 paths:
-  benchmark_dir: datasets/benchmarks
-  facts_dir: outputs/facts
-  paired_claims_dir: outputs/paired_claims
-  paired_queries_dir: outputs/paired_queries
-  stealth_filtered_queries_dir: outputs/stealth_filtered_queries
-  parsed_stance_dir: outputs/parsed_stance
-  scores_dir: outputs/scores
+  benchmark_dir: artifacts/v6_3/benchmarks
+  facts_dir: artifacts/v6_3/facts
+  paired_claims_dir: artifacts/v6_3/paired_claims
+  paired_queries_dir: artifacts/v6_3/paired_queries
+  stealth_filtered_queries_dir: artifacts/v6_3/stealth_filtered_queries
+  parsed_stance_dir: artifacts/v6_3/parsed_stance
+  scores_dir: artifacts/v6_3/scores
 
 fact_extraction:
-  max_facts_per_doc: 2
+  max_facts_per_doc: 4
   max_entities_per_doc: 8
   max_samples: null
+  ner:
+    enabled: false
+    backend: spacy
+    model: null
+    local_files_only: true
+    confidence_threshold: 0.75
+    batch_size: 32
+  semantic_resolver:
+    enabled: true
+    protocol: local_claim_pair_v6_3_precision_cascade
+    execution_mode: precision_cascade
+    primary_model_role: gliner2_large
+    biomedical_candidate_only: true
+    biomedical_window_chars: 512
+    model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+    local_files_only: true
+    device: cuda
+    spacy_device: cpu
+    biomedical_device: cuda
+    use_fp16: true
+    batch_size: 8
+    thresholds_frozen: true
+    thresholds_sha256: d180bdb02d5bcb5748cfac64b955ecc307b37022671c0200a35a50d0394edfa8
+    calibration_summary_path: artifacts/v6_3/semantic_calibration_precision_cascade_per_type/calibration_summary.json
+    min_target_confidence: 0.95
+    min_confidence_margin: 0.40
+    thresholds_by_entity_type:
+      CONTRACT_TERM:
+        min_target_confidence: 0.50
+        min_confidence_margin: 0.40
+      LOCATION:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.05
+      ORG:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PERSON:
+        min_target_confidence: 0.55
+        min_confidence_margin: 0.40
+      PRODUCT:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PROJECT_NAME:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.40
+    min_consensus_votes: 1
+    min_boundary_votes: 1
+    biomedical_veto_threshold: 0.90
+    overlap_threshold: 0.80
   # 以下三项现在是"优选阈值"(达标=primary 高质量事实;不达标降级为 fallback，不再整篇丢弃)。
   min_importance: 0.6
   min_replaceability: 0.6
   min_privacy_specificity: 0.5
   # 方案 D:每篇文档保底产出的事实数(只要有可成句实体)。保证评估覆盖率、消除"可抽取性=组别"的 selection bias。
   guarantee_min_facts: 1
+  dataset_overrides:
+    enron:
+      max_facts_per_doc: 8
+      max_entities_per_doc: 12
+      guarantee_min_facts: 8
 
 paired_claims:
   perturbation_levels: [light]
@@ -35,6 +89,9 @@ paired_queries:
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_local_files_only: true
+  embedding_batch_size: 64
+  pairs_per_source: 3
   min_naturalness: 0.55
   max_context_probe: 0.5
   max_prompt_injection: 0.5

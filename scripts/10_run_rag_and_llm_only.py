@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
     parser.add_argument("--victim-profile", default=None)
+    parser.add_argument("--retriever-backend", choices=["dense", "bm25"], default=None)
     parser.add_argument(
         "--variant-id",
         default="full_pvs",
@@ -100,6 +101,7 @@ def main() -> int:
         config_profile=gen_cfg.get("victim_profile"),
     )
     client, profile = build_victim_client(profiles, profile_name=profile_name)
+    retriever_backend = args.retriever_backend or str(config.get("retrieval", {}).get("backend", "dense"))
     variant_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(args.variant_id).strip()).strip("-")
     if not variant_id or variant_id != str(args.variant_id).strip():
         logger.error("非法 --variant-id: %r", args.variant_id)
@@ -154,7 +156,7 @@ def main() -> int:
         dataset=args.dataset,
         queries_path=queries_path,
         benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
-        index_dir=resolve_path(config["paths"]["indexes_dir"]) / args.dataset,
+        index_dir=resolve_path(config["paths"]["indexes_dir"]) / args.dataset / retriever_backend,
         rag_output_path=rag_output_path,
         llm_output_path=llm_output_path,
         client=client,
@@ -181,6 +183,13 @@ def main() -> int:
         config_snapshot={**config, "victim_profile_used": profile},
         variant_id=variant_id,
         checkpoint_every=args.checkpoint_every,
+        generator_id=str(profile.get("model") or profile_name),
+        generator_version=str(profile.get("model_version") or profile.get("model") or profile_name),
+        pairs_per_source=(
+            int(config.get("experiment_protocol", {}).get("pairs_per_source"))
+            if config.get("experiment_protocol", {}).get("pairs_per_source") is not None
+            else None
+        ),
     )
     logger.info("Step 10 finished: %s", manifest)
     return 0

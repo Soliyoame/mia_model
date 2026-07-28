@@ -38,7 +38,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.env import env_str
-from src.utils.io import load_yaml, resolve_path
+from src.llm.factory import (
+    load_llm_profiles,
+    resolve_effective_llm_profile,
+    resolve_llm_profile_name,
+)
+from src.utils.dataset_paths import resolve_dataset_dir
+from src.utils.io import load_yaml, read_json, resolve_path
 from src.utils.run_context import (
     CANONICAL_RUN_ROLES,
     P0_PROTOCOL,
@@ -59,7 +65,7 @@ from src.utils.run_context import (
     victim_model_slug,
     write_run_manifest,
 )
-from src.utils.hash import sha256_obj
+from src.utils.hash import sha256_file, sha256_obj
 
 
 StepArgsBuilder = Callable[[argparse.Namespace], list[str]]
@@ -150,7 +156,11 @@ def build_steps() -> list[PipelineStep]:
             "build_rag_index",
             "03_build_rag_index.py",
             "build RAG index",
-            lambda args: _dataset_args(args, *_config_arg(args.rag_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.rag_config),
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+            ),
         ),
         PipelineStep(
             4,
@@ -209,6 +219,7 @@ def build_steps() -> list[PipelineStep]:
                 *_config_arg(args.rag_config),
                 # 仅当指定 --victim-profile 时才透传(选用哪个受害者 LLM 画像来生成回答)。
                 *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
                 *(["--llm-only"] if args.llm_only else []),
                 *(["--skip-rag"] if args.run_role == "matched_control" else []),
             ),
@@ -229,7 +240,18 @@ def build_steps() -> list[PipelineStep]:
             "run_baselines",
             "12_run_baselines.py",
             "run baselines",
-            lambda args: _dataset_args(args, *_config_arg(args.baseline_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.baseline_config),
+                "--rag-config",
+                args.rag_config,
+                *(
+                    ["--retriever-backend", args.retriever_backend]
+                    if args.retriever_backend
+                    else []
+                ),
+                *(["--methods", args.baseline_methods] if args.baseline_methods else []),
+            ),
         ),
         PipelineStep(
             13,
@@ -314,6 +336,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-steps", default="", help="Comma/range list to skip, for example: 4,10.")
     parser.add_argument("--scale", choices=["small", "formal"], default=None, help="Forwarded to step 02.")
     parser.add_argument("--victim-profile", default=None, help="Forwarded to step 10.")
+    parser.add_argument(
+        "--retriever-backend",
+        choices=["dense", "bm25"],
+        default=None,
+        help="Run exactly one retriever cell; forwarded to steps 03, 10 and 12.",
+    )
+    parser.add_argument(
+        "--baseline-methods",
+        default=None,
+        help="Optional comma-separated Step 12 override; canonical gates enforce the v19 method set.",
+    )
     parser.add_argument("--run-role", choices=CANONICAL_RUN_ROLES, default="main")
     parser.add_argument(
         "--llm-only",
@@ -533,8 +566,15 @@ def _archive_run_products(
             "baseline": args.baseline_config,
             "defense": args.defense_config,
         }
-        split_dir = resolve_path("datasets/splits") / args.dataset
-        index_dir = resolve_path("indexes") / args.dataset
+        data_config = load_yaml(Path(args.data_config))
+        split_dir = resolve_dataset_dir(data_config, "splits_dir", args.dataset)
+        rag_config = load_yaml(Path(args.rag_config))
+        retriever_backend = args.retriever_backend or str(
+            rag_config.get("retrieval", {}).get("backend", "dense")
+        )
+        index_dir = resolve_path(rag_config["paths"]["indexes_dir"]) / args.dataset / retriever_backend
+        index_manifest_path = index_dir / "index_manifest.json"
+        index_manifest = read_json(index_manifest_path) if index_manifest_path.is_file() else {}
         provenance_paths = [
             resolve_path("datasets/benchmarks") / f"{args.dataset}_attack_benchmark.jsonl",
             resolve_path("datasets/benchmarks") / f"{args.dataset}_benchmark_manifest.json",
@@ -542,20 +582,32 @@ def _archive_run_products(
             split_dir / "kb_member.jsonl",
             split_dir / "true_non_member.jsonl",
             split_dir / "reserve.jsonl",
-            index_dir / "index_manifest.json",
+            index_manifest_path,
             index_dir / "docstore.jsonl",
-            index_dir / "faiss.index",
+            index_dir / str(index_manifest.get("index_filename") or "faiss.index"),
         ]
         config_snapshots = {name: file_snapshot(path) for name, path in config_paths.items()}
         input_provenance = [file_snapshot(path) for path in provenance_paths]
-        data_config = load_yaml(Path(args.data_config))
         split_seed = int(data_config.get("split", {}).get("seed", -1))
-        victim_model = env_str("PCV_VICTIM_MODEL", "") or "unspecified"
+        profiles = load_llm_profiles(rag_config)
+        profile_name = resolve_llm_profile_name(
+            "victim",
+            cli_profile=args.victim_profile,
+            config_profile=rag_config.get("generation", {}).get("victim_profile"),
+        )
+        effective_profile = resolve_effective_llm_profile(
+            profiles,
+            "victim",
+            profile_name=profile_name,
+        )
+        victim_model = str(effective_profile.get("model") or "unspecified")
+        generator_version = str(effective_profile.get("model_version") or victim_model)
         preregistration = preregistration_snapshot(
             args.canonical_config,
             dataset=args.dataset,
             victim_model=victim_model,
             run_role=args.run_role,
+            retriever_backend=(retriever_backend if args.run_role == "main" else "none"),
         )
         manifest: dict = {
             "run_id": run_id,
@@ -577,7 +629,16 @@ def _archive_run_products(
             "canonical_analysis_failed": canonical_analysis_failed,
             "victim_model": victim_model,
             "victim_provider": "openai_compatible",
-            "victim_endpoint": env_str("PCV_VICTIM_BASE_URL", ""),
+            "victim_endpoint": str(effective_profile.get("base_url") or ""),
+            "generator_id": victim_model,
+            "generator_version": generator_version,
+            "retriever_backend": retriever_backend if args.run_role == "main" else None,
+            "retriever_id": index_manifest.get("retriever_id") if args.run_role == "main" else None,
+            "index_manifest_hash": (
+                sha256_file(index_manifest_path)
+                if args.run_role == "main" and index_manifest_path.is_file()
+                else None
+            ),
             "run_llm_only": bool(args.llm_only),
             "benchmark": benchmark_snapshot(args.dataset),
             "git": git_snapshot(),
@@ -635,6 +696,23 @@ def main() -> int:
     experiment_config = load_yaml(Path(args.experiment_config))
     # 未显式指定数据集时，回退到实验配置里的默认数据集(再兜底为 "enron")。
     args.dataset = args.dataset or str(experiment_config.get("default_dataset", "enron"))
+    # profile 也必须落实为单个明确模型，并写入本进程环境供所有 model-scoped 子目录复用。
+    # 这只解析配置，不构造客户端、不触发 API。
+    rag_config = load_yaml(Path(args.rag_config))
+    profiles = load_llm_profiles(rag_config)
+    profile_name = resolve_llm_profile_name(
+        "victim",
+        cli_profile=args.victim_profile,
+        config_profile=rag_config.get("generation", {}).get("victim_profile"),
+    )
+    effective_profile = resolve_effective_llm_profile(
+        profiles,
+        "victim",
+        profile_name=profile_name,
+    )
+    effective_model = str(effective_profile.get("model") or "").strip()
+    if effective_model and not env_str("PCV_VICTIM_MODEL", ""):
+        os.environ["PCV_VICTIM_MODEL"] = effective_model
     if args.run_role == "matched_control" and not args.llm_only:
         print("error: matched_control requires --llm-only", file=sys.stderr)
         return 2

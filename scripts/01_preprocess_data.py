@@ -36,6 +36,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--datasets", nargs="*", help="Datasets to process. Defaults to all configured datasets.")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument(
+        "--processed-dir",
+        default=None,
+        help="Optional processed output directory override for an isolated protocol rebuild.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Optional log path override; useful when the shared preprocessing log is locked.",
+    )
     return parser.parse_args()
 
 
@@ -51,10 +61,10 @@ def main() -> int:
     set_seed_from_config(config)
     logger = setup_logging(
         "pcv_mia",
-        log_file=resolve_path(config.get("logging", {}).get("file", "datasets/logs/preprocess.log")),
+        log_file=resolve_path(args.log_file or config.get("logging", {}).get("file", "datasets/logs/preprocess.log")),
         level=config.get("logging", {}).get("level", "INFO"),
     )
-    processed_dir = ensure_dir(resolve_path(config["paths"]["processed_dir"]))
+    processed_dir = ensure_dir(resolve_path(args.processed_dir or config["paths"]["processed_dir"]))
     params = config.get("preprocess", {})
     # 未通过命令行指定时,处理配置中声明的全部数据集。
     dataset_names = args.datasets or list(config["datasets"].keys())
@@ -70,9 +80,11 @@ def main() -> int:
             max_chars=int(params.get("max_chars", 2000)),
             target_chars=int(params.get("target_chars", 1000)),
             limit=ds_cfg.get("limit"),
+            source_limit=ds_cfg.get("source_limit"),
             require_entity=bool(params.get("require_entity", True)),
             require_numeric=bool(params.get("require_numeric", False)),
             min_entities=int(params.get("min_entities", 2)),
+            membership_unit=ds_cfg.get("membership_unit"),
             resume=not args.no_resume,
             force=args.force,
         )

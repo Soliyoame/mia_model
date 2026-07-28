@@ -211,14 +211,25 @@ def _score_distribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         buckets[str(row.get("group", "unknown"))].append(row)
     out = {}
     for group, group_rows in buckets.items():
+        def optional_mean(key: str) -> float | None:
+            values = [row.get(key) for row in group_rows]
+            if not values or any(value is None for value in values):
+                return None
+            return mean(float(value) for value in values)
+
         # 对每个分组求各项分数的平均,均用当前 pcv_scorer 产出的真实字段
         # (cvg_rag / cvg_llm / cg_cvg / pcv_score)。原 cms_* / cg_cms 旧兜底经查全历史从未被
         # 任何版本产出过,是死兜底,已清除;pcv_score 缺失时退回 cg_cvg(真实字段)。
         out[group] = {
             "count": len(group_rows),
             "cvg_rag_avg": mean([float(row.get("cvg_rag", 0.0)) for row in group_rows]) if group_rows else 0.0,
-            "cvg_llm_avg": mean([float(row.get("cvg_llm", 0.0)) for row in group_rows]) if group_rows else 0.0,
-            "cg_cvg_avg": mean([float(row.get("cg_cvg", 0.0)) for row in group_rows]) if group_rows else 0.0,
+            "cvg_llm_avg": optional_mean("cvg_llm"),
+            "cg_cvg_avg": optional_mean("cg_cvg"),
+            "attribution_status": (
+                "available"
+                if group_rows and all(row.get("attribution_status") == "available" for row in group_rows)
+                else "unavailable"
+            ),
             "pcv_score_avg": mean([float(row.get("pcv_score", row.get("cg_cvg", 0.0))) for row in group_rows]) if group_rows else 0.0,
         }
     return out

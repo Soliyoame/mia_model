@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils.hash import sha256_file, sha256_obj
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
@@ -34,6 +34,8 @@ def build_pcv_attack_benchmark(
     include_spoofed_nonmember: bool = True,
     reserve_path: str | Path | None = None,
     include_reserve: bool = True,
+    split_manifest_path: str | Path | None = None,
+    split_protocol_snapshot: dict[str, Any] | None = None,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -62,14 +64,41 @@ def build_pcv_attack_benchmark(
     output = Path(output_path)
     hash_path = output.with_suffix(".sha256")
     manifest_path = output.with_name(f"{dataset}_benchmark_manifest.json")
+    expected_input_hashes = {
+        "KB_Member": sha256_file(kb_member_path),
+        "True_Non_Member": sha256_file(true_non_member_path),
+    }
+    if include_spoofed_nonmember and spoofed_non_member_path is not None:
+        expected_input_hashes["Spoofed_Non_Member"] = sha256_file(spoofed_non_member_path)
+    if include_reserve and reserve_path is not None:
+        expected_input_hashes["Reserve"] = sha256_file(reserve_path)
     if output.exists() and hash_path.exists() and manifest_path.exists() and resume and not force:
         # 续跑前先校验基准内容未被改动:实测哈希必须与落盘哈希一致。
         current_hash = sha256_file(output)
         saved_hash = hash_path.read_text(encoding="utf-8").strip()
         if current_hash != saved_hash:
             raise RuntimeError(f"Benchmark hash mismatch: {output}")
+        existing = read_json(manifest_path)
+        expected = {
+            "input_hashes": expected_input_hashes,
+            "config_hash": sha256_obj(config_snapshot or {}),
+            "split_manifest_hash": (
+                sha256_file(split_manifest_path) if split_manifest_path is not None else None
+            ),
+            "split_protocol": split_protocol_snapshot or {},
+        }
+        mismatches = {
+            key: {"expected": value, "actual": existing.get(key)}
+            for key, value in expected.items()
+            if existing.get(key) != value
+        }
+        if mismatches:
+            raise RuntimeError(
+                f"Existing benchmark does not match current split/config protocol: {mismatches}. "
+                "Rebuild Step 05 with --force."
+            )
         LOGGER.info("Skipping existing PCV-MIA benchmark for %s: %s", dataset, output)
-        return {"dataset": dataset, "output_path": str(output), "benchmark_hash": current_hash, "skipped_existing": True}
+        return {**existing, "output_path": str(output), "benchmark_hash": current_hash, "skipped_existing": True}
 
     # 三元组:(组名, 文件路径, 是否在知识库内)。
     groups: list[tuple[str, str | Path, bool]] = [
@@ -155,9 +184,13 @@ def build_pcv_attack_benchmark(
         },
         "benchmark_hash": digest,
         "output_path": str(output),
-        "input_hashes": {group: sha256_file(path) for group, path, _ in groups},
+        "input_hashes": expected_input_hashes,
         "config_hash": sha256_obj(config_snapshot or {}),
         "config_snapshot": config_snapshot or {},
+        "split_manifest_hash": (
+            sha256_file(split_manifest_path) if split_manifest_path is not None else None
+        ),
+        "split_protocol": split_protocol_snapshot or {},
         "created_at": created_at,
     }
     write_json(manifest, manifest_path)

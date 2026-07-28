@@ -78,6 +78,40 @@ class DataIsolationIntegrationTests(unittest.TestCase):
                     include_reserve=True, resume=False, force=True,
                 )
 
+    def test_benchmark_resume_is_bound_to_split_protocol_and_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kb = root / "kb.jsonl"
+            nonmember = root / "tn.jsonl"
+            reserve = root / "reserve.jsonl"
+            split_manifest = root / "split_manifest.json"
+            write_jsonl([{"doc_id": "k", "source_id": "ks", "text": "member", "text_hash": "kh"}], kb)
+            write_jsonl([{"doc_id": "n", "source_id": "ns", "text": "nonmember", "text_hash": "nh"}], nonmember)
+            write_jsonl([{"doc_id": "r", "source_id": "rs", "text": "reserve", "text_hash": "rh"}], reserve)
+            write_json({"target_unit": "sources", "seed": 42}, split_manifest)
+            kwargs = {
+                "dataset": "toy",
+                "kb_member_path": kb,
+                "true_non_member_path": nonmember,
+                "spoofed_non_member_path": None,
+                "output_path": root / "toy_attack_benchmark.jsonl",
+                "include_spoofed_nonmember": False,
+                "reserve_path": reserve,
+                "include_reserve": True,
+                "config_snapshot": {"protocol": "v19"},
+                "split_manifest_path": split_manifest,
+                "split_protocol_snapshot": {"target_unit": "sources", "seed": 42},
+            }
+            build_pcv_attack_benchmark(**kwargs, resume=False, force=True)
+            resumed = build_pcv_attack_benchmark(**kwargs, resume=True, force=False)
+            self.assertTrue(resumed["skipped_existing"])
+            with self.assertRaisesRegex(RuntimeError, "split/config protocol"):
+                build_pcv_attack_benchmark(
+                    **{**kwargs, "split_protocol_snapshot": {"target_unit": "records", "seed": 42}},
+                    resume=True,
+                    force=False,
+                )
+
 
 class ReportIntegrationTests(unittest.TestCase):
     def test_final_report_integrates_source_scores_and_auxiliary_results(self) -> None:

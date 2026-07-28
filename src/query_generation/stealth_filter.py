@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Iterator
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +26,155 @@ except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
 from ..rag.embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model, cosine_similarity
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..utils.hash import sha256_obj
+from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
 LOGGER = get_logger(__name__)
+
+
+def _select_text_unique_pairs(
+    ranked: list[tuple[tuple[float, float, float, str], str, list[dict[str, Any]]]],
+    required: int,
+) -> tuple[list[int], int]:
+    """Return the best-ranked compatible pair indices and duplicate count."""
+
+    query_sets: list[frozenset[str]] = []
+    duplicate_pairs = 0
+    for _, _, members in ranked:
+        queries = [str(member.get("query") or "") for member in members]
+        query_set = frozenset(queries)
+        if len(queries) != 2 or len(query_set) != 2 or not all(queries):
+            query_sets.append(frozenset())
+            duplicate_pairs += 1
+        else:
+            query_sets.append(query_set)
+
+    greedy: list[int] = []
+    used: set[str] = set()
+    for index, query_set in enumerate(query_sets):
+        if not query_set or used.intersection(query_set):
+            if query_set:
+                duplicate_pairs += 1
+            continue
+        greedy.append(index)
+        used.update(query_set)
+        if len(greedy) == required:
+            return greedy, duplicate_pairs
+
+    # Greedy normally succeeds.  If a high-ranked pair blocks two later pairs,
+    # search only to the required depth and return the first rank-optimal plan.
+    def search(start: int, chosen: list[int], occupied: set[str]) -> list[int] | None:
+        if len(chosen) == required:
+            return list(chosen)
+        if len(query_sets) - start < required - len(chosen):
+            return None
+        for index in range(start, len(query_sets)):
+            query_set = query_sets[index]
+            if not query_set or occupied.intersection(query_set):
+                continue
+            result = search(index + 1, [*chosen, index], occupied | set(query_set))
+            if result is not None:
+                return result
+        return None
+
+    exact = search(0, [], set())
+    return (exact if exact is not None else greedy), duplicate_pairs
+
+
+def select_fixed_pairs_per_source(
+    accepted_rows: list[dict[str, Any]],
+    rejected_rows: list[dict[str, Any]],
+    pairs_per_source: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Select a deterministic, response-independent pair budget per source."""
+
+    required = int(pairs_per_source)
+    if required < 1:
+        raise ValueError("pairs_per_source must be a positive integer")
+    by_source: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in accepted_rows:
+        source_key = str(row.get("source_key") or row.get("source_id") or "")
+        if not source_key:
+            raise ValueError(f"Fixed-budget query row is missing source_key: {row.get('query_id')}")
+        pair_key = f"{row.get('pair_id')}::{row.get('query_type') or 'default'}"
+        by_source.setdefault(source_key, {}).setdefault(pair_key, []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    rejected = list(rejected_rows)
+    insufficient_sources: dict[str, int] = {}
+    selected_pair_ids: list[str] = []
+    duplicate_query_text_pairs = 0
+    for source_key, source_pairs in sorted(by_source.items()):
+        ranked: list[tuple[tuple[float, float, float, str], str, list[dict[str, Any]]]] = []
+        for pair_key, members in source_pairs.items():
+            claim_types = sorted(str(member.get("claim_type")) for member in members)
+            if claim_types != ["counterfactual", "true"]:
+                for member in members:
+                    member["accepted"] = False
+                    member["reject_reason"] = "fixed_budget_incomplete_pair"
+                    rejected.append(member)
+                continue
+            quality = min(float(member.get("quality_weight") or 0.0) for member in members)
+            naturalness = min(float(member.get("naturalness_score") or 0.0) for member in members)
+            similarity = sum(float(member.get("query_doc_similarity") or 0.0) for member in members) / 2.0
+            ranked.append(((-quality, -naturalness, abs(similarity - 0.5), pair_key), pair_key, members))
+        ranked.sort(key=lambda item: item[0])
+        selected_indices, source_duplicate_pairs = _select_text_unique_pairs(ranked, required)
+        duplicate_query_text_pairs += source_duplicate_pairs
+        if len(selected_indices) < required:
+            insufficient_sources[source_key] = len(selected_indices)
+            reason = f"insufficient_unique_source_pairs:{len(selected_indices)}<{required}"
+            for _, _, members in ranked:
+                for member in members:
+                    member["accepted"] = False
+                    member["reject_reason"] = reason
+                    rejected.append(member)
+            continue
+        selected_rank_by_index = {
+            candidate_index: selected_rank
+            for selected_rank, candidate_index in enumerate(selected_indices, start=1)
+        }
+        selected_query_texts = {
+            str(member.get("query") or "")
+            for candidate_index in selected_indices
+            for member in ranked[candidate_index][2]
+        }
+        for candidate_index, (_, pair_key, members) in enumerate(ranked):
+            chosen = candidate_index in selected_rank_by_index
+            rank = selected_rank_by_index.get(candidate_index, candidate_index + 1)
+            for member in members:
+                member["accepted"] = chosen
+                member["fixed_budget_pairs_per_source"] = required
+                member["fixed_budget_pair_rank"] = rank
+                member["logical_victim_calls_per_source"] = required * 2
+                if chosen:
+                    member["reject_reason"] = None
+                    selected.append(member)
+                else:
+                    member_queries = {str(item.get("query") or "") for item in members}
+                    member["reject_reason"] = (
+                        "fixed_budget_duplicate_query_text"
+                        if member_queries & selected_query_texts
+                        else "fixed_budget_not_selected"
+                    )
+                    rejected.append(member)
+            if chosen:
+                selected_pair_ids.append(f"{source_key}::{pair_key}")
+
+    selected.sort(key=lambda row: (str(row.get("source_key")), int(row["fixed_budget_pair_rank"]), str(row.get("claim_type"))))
+    stats = {
+        "pairs_per_source": required,
+        "queries_per_source": required * 2,
+        "eligible_sources": len(by_source) - len(insufficient_sources),
+        "insufficient_sources": insufficient_sources,
+        "selected_pairs": len(selected_pair_ids),
+        "query_text_uniqueness_enforced": True,
+        "duplicate_query_text_pairs": duplicate_query_text_pairs,
+        "fixed_budget_plan_hash": sha256_obj(sorted(selected_pair_ids)),
+    }
+    return selected, rejected, stats
 
 # 危险词:出现这些就说明查询在直接打探知识库/上下文,极易暴露攻击意图。
 # 注意:此处只收"高特异性"的探测短语。像单独的 database / indexed 这类词在正常业务文本
@@ -103,6 +249,77 @@ def _score_query_with_embedder(query: str, conflict_text: str, embedder) -> dict
     }
 
 
+def _score_query_batch_with_embedder(
+    query_reference_pairs: list[tuple[str, str]],
+    embedder,
+) -> list[dict[str, Any]]:
+    """批量计算与逐条评分完全相同的 stealth 特征。"""
+
+    if not query_reference_pairs:
+        return []
+    flattened_texts = [
+        text
+        for query, reference in query_reference_pairs
+        for text in (query, reference)
+    ]
+    vectors = embedder.encode(flattened_texts)
+    expected_vectors = len(query_reference_pairs) * 2
+    if len(vectors) != expected_vectors:
+        raise ValueError(
+            "Embedding backend returned an unexpected number of vectors: "
+            f"expected={expected_vectors}, actual={len(vectors)}"
+        )
+
+    results: list[dict[str, Any]] = []
+    for index, (query, _) in enumerate(query_reference_pairs):
+        lower = query.lower()
+        results.append(
+            {
+                "naturalness_score": _naturalness_score(query),
+                "context_probe_score": 1.0 if CONTEXT_PROBE_RE.search(query) else 0.0,
+                "prompt_injection_score": 1.0 if INJECTION_RE.search(query) else 0.0,
+                "query_doc_similarity": cosine_similarity(vectors[index * 2], vectors[index * 2 + 1]),
+                "dangerous_hits": [
+                    pattern for pattern in DANGEROUS_PATTERNS if re.search(pattern, lower)
+                ],
+            }
+        )
+    return results
+
+
+def _iter_query_scores(
+    rows: Iterable[dict[str, Any]],
+    embedder,
+    batch_size: int,
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """按固定批次编码 query/reference，并保持原始行顺序。"""
+
+    if batch_size < 1:
+        raise ValueError("embedding_batch_size must be a positive integer")
+    row_iterator = iter(rows)
+    while batch_rows := list(islice(row_iterator, batch_size)):
+        pairs = [
+            (
+                str(row["query"]),
+                str(
+                    row.get("source_text")
+                    or row.get("true_claim")
+                    or row.get("claim")
+                    or row.get("conflict_text")
+                    or row.get("query")
+                    or ""
+                ),
+            )
+            for row in batch_rows
+        ]
+        for row, scores in zip(
+            batch_rows,
+            _score_query_batch_with_embedder(pairs, embedder),
+            strict=True,
+        ):
+            yield row, scores
+
+
 def _naturalness_score(query: str) -> float:
     """估计查询读起来有多"自然像人话"(0~1，越高越自然)。
 
@@ -134,11 +351,14 @@ def filter_stealth_queries(
     output_path: str | Path,
     rejected_path: str | Path | None = None,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_local_files_only: bool = False,
     min_naturalness: float = 0.55,
     max_context_probe: float = 0.5,
     max_prompt_injection: float = 0.5,
     min_similarity: float = 0.05,
     max_similarity: float = 0.95,
+    pairs_per_source: int | None = None,
+    embedding_batch_size: int = 256,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -172,24 +392,38 @@ def filter_stealth_queries(
     manifest_path = output.with_suffix(".manifest.json")
     # 断点续跑。
     if resume and not force and output.exists() and output.stat().st_size > 0 and manifest_path.exists():
+        existing = read_json(manifest_path)
+        fixed_budget = existing.get("fixed_budget") or {}
+        actual_pairs = fixed_budget.get("pairs_per_source") if fixed_budget.get("enabled") else None
+        if actual_pairs != pairs_per_source:
+            raise RuntimeError(
+                "Existing stealth queries do not match the requested fixed source budget: "
+                f"expected pairs_per_source={pairs_per_source}, actual={actual_pairs}. "
+                "Rebuild Step 09 with --force."
+            )
+        if pairs_per_source is not None and fixed_budget.get("query_text_uniqueness_enforced") is not True:
+            raise RuntimeError(
+                "Existing stealth queries do not enforce unique query text per source. "
+                "Rebuild Step 09 with --force."
+            )
         LOGGER.info("Skipping existing stealth filtered queries: %s", output)
-        return {"output_path": str(output), "skipped_existing": True}
+        return {**existing, "output_path": str(output), "skipped_existing": True}
 
     # 只加载一次向量模型,后面所有查询复用它。
-    embedder = build_embedding_model(embedding_model, backend="auto")
+    embedder = build_embedding_model(
+        embedding_model,
+        backend="auto",
+        local_files_only=bool(embedding_local_files_only),
+    )
     # 第一遍:逐条打分并做"单条自检",记录每条自身是否触发拒绝条件(此时还不下最终结论)。
     scored: list[dict[str, Any]] = []
-    for row in tqdm(read_jsonl(queries_path), desc="stealth filter", unit="query"):
+    score_iterator = _iter_query_scores(
+        read_jsonl(queries_path),
+        embedder,
+        int(embedding_batch_size),
+    )
+    for row, scores in tqdm(score_iterator, desc="stealth filter", unit="query"):
         # 选一个"参照文本"来算相似度:优先原文/真实声明,层层兜底。
-        reference_text = (
-            row.get("source_text")
-            or row.get("true_claim")
-            or row.get("claim")
-            or row.get("conflict_text")
-            or row.get("query")
-            or ""
-        )
-        scores = _score_query_with_embedder(row["query"], str(reference_text), embedder)
         # 单条自检:命中第一个条件即记下原因(短路,优先级从高到低)。
         self_reason = None
         if scores["dangerous_hits"]:
@@ -255,6 +489,17 @@ def filter_stealth_queries(
                 m["reject_reason"] = None
                 accepted_rows.append(m)
 
+    fixed_budget_stats: dict[str, Any] = {"enabled": False}
+    if pairs_per_source is not None:
+        accepted_rows, rejected_rows, fixed_budget_stats = select_fixed_pairs_per_source(
+            accepted_rows,
+            rejected_rows,
+            pairs_per_source,
+        )
+        fixed_budget_stats["enabled"] = True
+    accepted_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in accepted_rows})
+    rejected_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in rejected_rows})
+
     write_jsonl(accepted_rows, output)
     write_jsonl(rejected_rows, rejected)
     manifest = {
@@ -268,7 +513,14 @@ def filter_stealth_queries(
         "stealth_detection_rate": len(rejected_rows) / max(1, len(accepted_rows) + len(rejected_rows)),
         # 整对拒绝率(按 pair):有多少完整配对因隐蔽性问题被整对剔除。
         "pair_rejection_rate": rejected_pairs / max(1, accepted_pairs + rejected_pairs),
+        "fixed_budget": fixed_budget_stats,
+        "embedding_model": embedding_model,
+        "embedding_local_files_only": bool(embedding_local_files_only),
+        "embedding_batch_size": int(embedding_batch_size),
     }
     write_json(manifest, output.with_suffix(".manifest.json"))
     LOGGER.info("Stealth filter accepted=%s rejected=%s", len(accepted_rows), len(rejected_rows))
+    close_embedder = getattr(embedder, "close", None)
+    if callable(close_embedder):
+        close_embedder()
     return manifest

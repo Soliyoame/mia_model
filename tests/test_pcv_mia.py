@@ -25,14 +25,17 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from src.llm.factory import build_victim_client, resolve_llm_profile_name
+from src.llm.factory import build_victim_client, resolve_effective_llm_profile, resolve_llm_profile_name
 from src.paired_claims.claim_generator import generate_paired_claims_file
 from src.parsing.stance_parser import parse_stance_files
-from src.rag.embeddings import build_embedding_model
+from src.rag.embeddings import (
+    SentenceTransformerEmbeddingModel,
+    build_embedding_model,
+)
 from src.scoring.pcv_scorer import compute_pcv_scores
 from src.fact_extraction.fact_extractor import extract_facts_file
 from src.utils.env import env_str
-from src.utils.io import read_jsonl, write_jsonl, write_json
+from src.utils.io import read_jsonl, write_jsonl
 
 
 WORKSPACE_TMP = Path(__file__).resolve().parents[1] / ".pytest_tmp"
@@ -68,6 +71,23 @@ def temporary_env(values: dict[str, str], clear: bool = False) -> Iterator[None]
 
 
 class PcvMiaTests(unittest.TestCase):
+    def test_effective_profile_resolves_model_without_constructing_api_client(self) -> None:
+        profiles = {
+            "active": {"victim": "one"},
+            "victim": {
+                "profiles": {
+                    "one": {
+                        "provider": "openai_compatible",
+                        "model": "gpt-4.1-mini",
+                        "model_env": "PCV_VICTIM_MODEL",
+                    }
+                }
+            },
+        }
+        with patch("src.llm.factory.env_str", return_value=None):
+            resolved = resolve_effective_llm_profile(profiles, "victim")
+        self.assertEqual(resolved["model"], "gpt-4.1-mini")
+
     def test_env_str_reads_dotenv_without_overriding_process_env(self) -> None:
         """验证 env_str 会从 .env 读值,但进程里已存在的同名环境变量优先级更高、不被 .env 覆盖。"""
         with temporary_dir() as tmp:
@@ -124,6 +144,7 @@ class PcvMiaTests(unittest.TestCase):
                         "api_key_env": "PCV_VICTIM_API_KEY",
                         "base_url_env": "PCV_VICTIM_BASE_URL",
                         "model_env": "PCV_VICTIM_MODEL",
+                        "model_version_env": "PCV_VICTIM_MODEL_VERSION",
                         "base_url": "https://yaml.example/v1",
                         "model": "yaml-model",
                     }
@@ -135,6 +156,7 @@ class PcvMiaTests(unittest.TestCase):
                 "PCV_VICTIM_API_KEY": "test-key",
                 "PCV_VICTIM_BASE_URL": "https://env.example/v1",
                 "PCV_VICTIM_MODEL": "env-model",
+                "PCV_VICTIM_MODEL_VERSION": "env-model-2026-07-01",
             },
             clear=True,
         ):
@@ -143,6 +165,7 @@ class PcvMiaTests(unittest.TestCase):
         self.assertEqual(profile["api_key_env"], "PCV_VICTIM_API_KEY")
         self.assertEqual(profile["base_url"], "https://env.example/v1")
         self.assertEqual(profile["model"], "env-model")
+        self.assertEqual(profile["model_version"], "env-model-2026-07-01")
         # 构造出的 client 也应使用环境变量覆盖后的 base_url 与 model。
         self.assertEqual(client.base_url, "https://env.example/v1")
         self.assertEqual(client.model, "env-model")
@@ -181,6 +204,26 @@ class PcvMiaTests(unittest.TestCase):
             # 底层加载抛 RuntimeError,build_embedding_model 应原样把错误抛出来。
             with self.assertRaisesRegex(RuntimeError, "load failed"):
                 build_embedding_model("sentence-transformers/missing-model")
+
+    def test_embedding_close_moves_runtime_off_cuda_and_drops_reference(
+        self,
+    ) -> None:
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.devices: list[str] = []
+
+            def to(self, device: str) -> None:
+                self.devices.append(device)
+
+        embedding = SentenceTransformerEmbeddingModel.__new__(
+            SentenceTransformerEmbeddingModel
+        )
+        runtime = FakeRuntime()
+        embedding._model = runtime
+        with patch("torch.cuda.is_available", return_value=False):
+            embedding.close()
+        self.assertEqual(runtime.devices, ["cpu"])
+        self.assertIsNone(embedding._model)
 
     def test_paired_claim_replaces_one_same_type_entity(self) -> None:
         """验证配对反事实生成:只替换同类型(MONEY)的目标实体,真值 claim 不动、反事实 claim 含新值且不含原值。"""

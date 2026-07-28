@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--log-file", default=None)
     return parser.parse_args()
 
 
@@ -50,8 +51,14 @@ def main() -> int:
     args = parse_args()
     config = load_yaml(args.config)
     set_seed_from_config(config)
-    logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
-    fact_cfg = config.get("fact_extraction", {})
+    logger = setup_logging(
+        "pcv_mia",
+        log_file=resolve_path(args.log_file or config["logging"]["file"]),
+        level=config["logging"].get("level", "INFO"),
+    )
+    fact_cfg = dict(config.get("fact_extraction", {}))
+    dataset_overrides = fact_cfg.pop("dataset_overrides", {})
+    fact_cfg.update(dataset_overrides.get(args.dataset, {}))
     # 产出目录不存在时自动创建。
     out_dir = ensure_dir(resolve_path(config["paths"]["facts_dir"]))
     manifest = extract_facts_file(
@@ -66,6 +73,9 @@ def main() -> int:
         min_privacy_specificity=float(fact_cfg.get("min_privacy_specificity", 0.5)),
         # 方案 D:每篇文档保底产出几条事实(只要有可成句实体),保证评估覆盖率、消除 selection bias。
         guarantee_min_facts=int(fact_cfg.get("guarantee_min_facts", 1)),
+        ner_config=dict(fact_cfg.get("ner", {})),
+        semantic_resolver_config=dict(fact_cfg.get("semantic_resolver", {})),
+        dataset=args.dataset,
         resume=not args.no_resume,
         force=args.force,
     )

@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import ensure_dir, read_json, read_jsonl, resolve_path, write_json, write_jsonl  # noqa: E402
-from src.utils.run_context import model_scoped_dir, victim_model_slug  # noqa: E402
+from src.utils.run_context import model_scoped_dir, model_slug, victim_model_slug  # noqa: E402
 
 
 ANNOTATION_LABELS = (
@@ -30,12 +30,13 @@ ANNOTATION_LABELS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sample or evaluate stance parser audit rows")
-    parser.add_argument("--dataset", choices=["edgar", "enron", "both"], required=True)
+    parser.add_argument("--dataset", choices=["edgar", "enron", "pubmed", "both", "all"], required=True)
     parser.add_argument("--model", default=None)
-    parser.add_argument("--sample-size", type=int, default=200)
+    parser.add_argument("--sample-size", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--annotations", default=None)
-    parser.add_argument("--minimum-labeled", type=int, default=200)
+    parser.add_argument("--minimum-labeled", type=int, default=100)
+    parser.add_argument("--minimum-macro-f1", type=float, default=0.95)
     parser.add_argument("--output", default=None)
     return parser.parse_args()
 
@@ -180,12 +181,16 @@ def _load_parser_predictions(datasets: tuple[str, ...], model: str) -> dict[tupl
 
 
 def _datasets(value: str) -> tuple[str, ...]:
-    return ("edgar", "enron") if value == "both" else (value,)
+    if value == "both":
+        return ("edgar", "enron")
+    if value == "all":
+        return ("edgar", "enron", "pubmed")
+    return (value,)
 
 
 def _output_base(dataset: str, model: str) -> Path:
-    if dataset == "both":
-        return ensure_dir(resolve_path("outputs/diagnostics/stance_audit") / model)
+    if dataset in {"both", "all"}:
+        return ensure_dir(resolve_path("outputs/diagnostics/stance_audit") / model_slug(model))
     return model_scoped_dir("outputs/diagnostics", dataset, model=model)
 
 
@@ -214,7 +219,13 @@ def main() -> int:
             "parser_prediction_hash": prediction_hash,
             "minimum_labeled": args.minimum_labeled,
             "minimum_labeled_met": result["labeled_rows"] >= args.minimum_labeled,
+            "minimum_macro_f1": args.minimum_macro_f1,
         })
+        result["quality_gate_passed"] = bool(
+            result["minimum_labeled_met"]
+            and result.get("macro_f1") is not None
+            and float(result["macro_f1"]) >= args.minimum_macro_f1
+        )
         output = Path(args.output) if args.output else base / f"{args.dataset}_stance_audit_report.json"
         ensure_dir(output.parent)
         write_json(result, output)

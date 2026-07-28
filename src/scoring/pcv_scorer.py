@@ -317,12 +317,16 @@ def compute_pcv_scores(
             false_acceptance_penalty_value=false_acceptance_penalty_value,
         )
         # LLM-only 模式:同理用纯模型的两条记录。
-        llm = score_pair(
-            rows.get("llm_only:true") if llm_complete else None,
-            rows.get("llm_only:counterfactual") if llm_complete else None,
-            unknown_lambda=unknown_lambda,
-            refusal_penalty=refusal_penalty,
-            false_acceptance_penalty_value=false_acceptance_penalty_value,
+        llm = (
+            score_pair(
+                rows.get("llm_only:true"),
+                rows.get("llm_only:counterfactual"),
+                unknown_lambda=unknown_lambda,
+                refusal_penalty=refusal_penalty,
+                false_acceptance_penalty_value=false_acceptance_penalty_value,
+            )
+            if llm_complete
+            else None
         )
         fid = str(meta.get("fact_id"))
         out = {
@@ -330,19 +334,20 @@ def compute_pcv_scores(
             "complete_rag_pair": True,
             "complete_llm_pair": llm_complete,
             "status": "complete",
+            "attribution_status": "available" if llm_complete else "unavailable",
             "cvg_rag": rag["cvg"],
-            "cvg_llm": llm["cvg"],
+            "cvg_llm": llm["cvg"] if llm is not None else None,
             # 核心信号:检索带来的增益 = RAG 的 CVG 减去纯模型的 CVG。
-            "cg_cvg": rag["cvg"] - llm["cvg"],
+            "cg_cvg": rag["cvg"] - llm["cvg"] if llm is not None else None,
             # 这一对所属 fact 的质量权重与分层(方案 D)。
             "quality_weight": fact_weight.get(fid, 1.0),
             "selection_tier": fact_tier.get(fid, "primary"),
             "support_score_rag": rag["support_score"],
             "correction_score_rag": rag["correction_score"],
             "false_acceptance_penalty_rag": rag["false_acceptance_penalty"],
-            "support_score_llm": llm["support_score"],
-            "correction_score_llm": llm["correction_score"],
-            "false_acceptance_penalty_llm": llm["false_acceptance_penalty"],
+            "support_score_llm": llm["support_score"] if llm is not None else None,
+            "correction_score_llm": llm["correction_score"] if llm is not None else None,
+            "false_acceptance_penalty_llm": llm["false_acceptance_penalty"] if llm is not None else None,
             # 下面这些布尔字段用于后续"机制分析",记录关键事件是否发生。
             "support_true_rag": bool(rows.get("rag:true", {}).get("supports_true_claim")),
             "correct_counterfactual_rag": bool(rows.get("rag:counterfactual", {}).get("corrects_to_original_entity")),
@@ -360,15 +365,16 @@ def compute_pcv_scores(
     for audit_id, rows in sorted(by_audit.items()):
         # 不加权简单平均(旧口径,保留)。
         cvg_rag = mean([float(r["cvg_rag"]) for r in rows]) if rows else 0.0
-        cvg_llm = mean([float(r["cvg_llm"]) for r in rows]) if rows else 0.0
-        cg_list = [float(r["cg_cvg"]) for r in rows]
-        cg_cvg = mean(cg_list) if cg_list else 0.0
+        attribution_available = bool(rows) and all(r.get("attribution_status") == "available" for r in rows)
+        cvg_llm = mean([float(r["cvg_llm"]) for r in rows]) if attribution_available else None
+        cg_list = [float(r["cg_cvg"]) for r in rows] if attribution_available else []
+        cg_cvg = mean(cg_list) if cg_list else None
         # 旧质量加权 context-gain 口径，保留用于消融，不再作为 P0 主分。
         weights = [max(0.0, float(r.get("quality_weight", 1.0))) for r in rows]
         wsum = sum(weights)
         pcv_score_context_gain_weighted = (
             sum(w * c for w, c in zip(weights, cg_list)) / wsum
-        ) if wsum > 0 else cg_cvg
+        ) if attribution_available and wsum > 0 else None
         # 仅 primary 口径:只用高质量 fact;没有 primary 则退回全体简单平均。
         primary_cg = [c for r, c in zip(rows, cg_list) if str(r.get("selection_tier")) == "primary"]
         pcv_score_primary = mean(primary_cg) if primary_cg else cg_cvg
@@ -377,7 +383,11 @@ def compute_pcv_scores(
         #   correction_llm = LLM-only 对反事实的纠正程度,是"该样本是否已被 LLM 知道"的污染门控信号。
         #   cvg_debiased = sup_rag + (cor_rag - cor_llm):只扣有泄漏的 correction 项、不动干净的 support,
         #   比整体减 cg_cvg 去偏更准(详见消融)。cvg_rag 本身不变,这是旁加的新终分。
-        correction_llm = mean([float(r.get("correction_score_llm", 0.0)) for r in rows]) if rows else 0.0
+        correction_llm = (
+            mean([float(r["correction_score_llm"]) for r in rows])
+            if attribution_available
+            else None
+        )
         cvg_debiased = mean(
             [
                 float(r.get("support_score_rag", 0.0))
@@ -385,7 +395,7 @@ def compute_pcv_scores(
                 - float(r.get("correction_score_llm", 0.0))
                 for r in rows
             ]
-        ) if rows else 0.0
+        ) if attribution_available else None
         row = {
             "audit_id": audit_id,
             "doc_id": rows[0].get("doc_id"),
@@ -395,6 +405,7 @@ def compute_pcv_scores(
             "group": rows[0].get("group"),
             "num_pairs": len(rows),
             "num_primary_pairs": num_primary,
+            "attribution_status": "available" if attribution_available else "unavailable",
             "cvg_rag": cvg_rag,
             "cvg_llm": cvg_llm,
             "correction_llm": correction_llm,    # 门控信号:LLM-only 对反事实的纠正(污染/先验指标)
@@ -413,7 +424,11 @@ def compute_pcv_scores(
             "accept_false_count_rag": sum(1 for r in rows if r.get("accept_false_rag")),
             # 比例 = 次数 / 总对数;用 max(1, ...) 防止除以 0。
             "unknown_rate_rag": sum(1 for r in rows if r.get("unknown_rag")) / max(1, len(rows)),
-            "unknown_rate_llm": sum(1 for r in rows if r.get("unknown_llm")) / max(1, len(rows)),
+            "unknown_rate_llm": (
+                sum(1 for r in rows if r.get("unknown_llm")) / max(1, len(rows))
+                if attribution_available
+                else None
+            ),
         }
         # 对每个阈值记录 RAG-only 主分的历史固定阈值判断，仅供诊断。
         for threshold in thresholds:
@@ -491,10 +506,23 @@ def compute_pcv_scores(
             "pvs_rag": mean(float(r.get("pvs_rag", r.get("cvg_rag", 0.0))) for r in rows),
             "pcv_score": mean(float(r.get("pcv_score", r.get("cvg_rag", 0.0))) for r in rows),
             "cvg_rag": mean(float(r.get("cvg_rag", 0.0)) for r in rows),
-            "cvg_llm": mean(float(r.get("cvg_llm", 0.0)) for r in rows),
-            "cg_cvg": mean(float(r.get("cg_cvg", 0.0)) for r in rows),
-            "pcv_score_context_gain_weighted": mean(
-                float(r.get("pcv_score_context_gain_weighted", r.get("cg_cvg", 0.0))) for r in rows
+            "attribution_status": (
+                "available" if all(r.get("attribution_status") == "available" for r in rows) else "unavailable"
+            ),
+            "cvg_llm": (
+                mean(float(r["cvg_llm"]) for r in rows)
+                if all(r.get("attribution_status") == "available" for r in rows)
+                else None
+            ),
+            "cg_cvg": (
+                mean(float(r["cg_cvg"]) for r in rows)
+                if all(r.get("attribution_status") == "available" for r in rows)
+                else None
+            ),
+            "pcv_score_context_gain_weighted": (
+                mean(float(r["pcv_score_context_gain_weighted"]) for r in rows)
+                if all(r.get("attribution_status") == "available" for r in rows)
+                else None
             ),
         }
         for threshold in thresholds:
@@ -532,6 +560,10 @@ def compute_pcv_scores(
         },
         "main_score_key": "pcv_score",
         "main_score_definition": "source mean of RAG-only paired verification score",
+        "attribution_status": (
+            "available" if source_rows and all(row.get("attribution_status") == "available" for row in source_rows)
+            else "unavailable"
+        ),
         "weighted": bool(fact_weight),
         "facts_path": str(facts_path) if facts_path is not None else None,
         "unknown_lambda": unknown_lambda,

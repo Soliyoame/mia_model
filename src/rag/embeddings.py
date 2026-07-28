@@ -21,6 +21,7 @@ experiment semantics.
 
 from __future__ import annotations
 
+import gc
 import math
 from dataclasses import dataclass
 from typing import Protocol
@@ -99,6 +100,30 @@ class SentenceTransformerEmbeddingModel:
         vectors = self._model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
         # 统一转成 float32 的 numpy 数组(省内存，且 FAISS 索引要求 float32)。
         return np.asarray(vectors, dtype="float32")
+
+    def close(self) -> None:
+        """释放一次性 embedding runtime，避免与后续 CUDA 模型叠加。"""
+
+        model = getattr(self, "_model", None)
+        if model is None:
+            return
+        try:
+            # 先迁回 CPU，再断开最后一个强引用；这不会改变已经写出的向量。
+            model.to("cpu")
+        except Exception:
+            # CUDA 异步错误可能在迁移时才上报，资源清理不能遮蔽主流程结果。
+            pass
+        self._model = None
+        del model
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            # 纯 CPU 环境或异步 CUDA 状态下保持 best-effort。
+            pass
 
 
 def build_embedding_model(

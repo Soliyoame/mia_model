@@ -14,9 +14,8 @@ from src.evaluation.matched_control import build_matched_control_analysis  # noq
 from src.evaluation.paper_figures import render_paper_figures  # noqa: E402
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import ensure_dir, read_json, read_jsonl, resolve_path, write_json  # noqa: E402
-from src.utils.run_context import resolve_suite_run  # noqa: E402
+from src.utils.run_context import canonical_defense_required, resolve_suite_run  # noqa: E402
 
-DATASETS = ("edgar", "enron")
 QUERY_CONTROLS = (
     "random_same_type_counterfactual",
     "independent_unpaired_query",
@@ -42,21 +41,49 @@ def _unique(root: Path, filename: str) -> Path:
     return matches[0]
 
 
+def _optional_unique(root: Path, filename: str) -> Path | None:
+    matches = sorted(path for path in root.rglob(filename) if path.is_file())
+    if len(matches) > 1:
+        raise RuntimeError(f"Expected at most one {filename} under {root}, found {len(matches)}")
+    return matches[0] if matches else None
+
+
+def _optional_artifact(path: Path | None, root: Path) -> dict[str, Any]:
+    if path is None:
+        return {"status": "not_required_for_this_cell", "exists": False}
+    return {"status": "available", "exists": True, **_artifact(path, root)}
+
+
 def _paired_identity(manifest: dict[str, Any]) -> dict[str, Any]:
     identity = dict(manifest.get("experiment_identity") or {})
     identity.pop("run_role", None)
+    identity.pop("retriever_backend", None)
+    identity.pop("retriever_id", None)
+    identity.pop("index_manifest_hash", None)
     return identity
 
 
 def collect_dataset_release(
     suite_id: str,
     dataset: str,
+    victim_model: str,
+    retriever_backend: str,
     *,
     render_figures: bool,
 ) -> dict[str, Any]:
-    main_root, main_manifest, _ = resolve_suite_run(suite_id, dataset=dataset, run_role="main")
+    main_root, main_manifest, _ = resolve_suite_run(
+        suite_id,
+        dataset=dataset,
+        run_role="main",
+        victim_model=victim_model,
+        retriever_backend=retriever_backend,
+    )
     control_root, control_manifest, _ = resolve_suite_run(
-        suite_id, dataset=dataset, run_role="matched_control"
+        suite_id,
+        dataset=dataset,
+        run_role="matched_control",
+        victim_model=victim_model,
+        retriever_backend="none",
     )
     if _paired_identity(main_manifest) != _paired_identity(control_manifest):
         raise RuntimeError(f"Main/matched-control identity mismatch for {dataset}")
@@ -86,9 +113,11 @@ def collect_dataset_release(
     coverage_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_coverage.jsonl")
     baseline_path = _unique(main_root / "baselines", f"{dataset}_baseline_comparison.jsonl")
     mechanism_path = _unique(main_root / "mechanisms", f"{dataset}_mechanism_report.json")
-    defense_path = _unique(main_root / "defenses", f"{dataset}_defense_results.json")
+    defense_path = _optional_unique(main_root / "defenses", f"{dataset}_defense_results.json")
     ablation_path = _unique(main_root / "diagnostics", f"{dataset}_p0_ablation.json")
     shortcut_path = _unique(main_root / "diagnostics", f"{dataset}_shortcut_controls.json")
+    if canonical_defense_required(dataset, victim_model, retriever_backend) and defense_path is None:
+        raise RuntimeError(f"Representative defense artifact missing for {dataset}/{victim_model}/{retriever_backend}")
     report = read_json(report_path)
     expected_whitelist = str((main_manifest.get("experiment_identity") or {}).get("source_whitelist_hash") or "")
     control_response_manifest = read_json(control_llm_manifest_path)
@@ -127,7 +156,8 @@ def collect_dataset_release(
             ),
         }
 
-    release_dir = ensure_dir(resolve_path("outputs/releases") / suite_id / dataset)
+    cell_slug = f"{dataset}__{victim_model.split('/')[-1]}__{retriever_backend}".replace(" ", "-")
+    release_dir = ensure_dir(resolve_path("outputs/releases") / suite_id / "cells" / cell_slug)
     score_manifest = read_json(score_manifest_path)
     matched_analysis = build_matched_control_analysis(
         dataset=dataset,
@@ -169,6 +199,8 @@ def collect_dataset_release(
 
     return {
         "dataset": dataset,
+        "victim_model": victim_model,
+        "retriever_backend": retriever_backend,
         "source_whitelist_hash": expected_whitelist,
         "main_run": {
             "run_id": main_manifest.get("run_id"),
@@ -190,7 +222,7 @@ def collect_dataset_release(
             "source_coverage": _artifact(coverage_path, main_root),
             "baseline_comparison": _artifact(baseline_path, main_root),
             "mechanism": _artifact(mechanism_path, main_root),
-            "defense": _artifact(defense_path, main_root),
+            "defense": _optional_artifact(defense_path, main_root),
             "offline_ablation": _artifact(ablation_path, main_root),
             "shortcut_controls": _artifact(shortcut_path, main_root),
             "query_controls": query_controls,
@@ -215,14 +247,31 @@ def main() -> int:
     suite = read_json(suite_path)
     if suite.get("status") != "canonical" or suite.get("missing_cells"):
         raise RuntimeError("Canonical release requires all preregistered suite cells")
-    datasets = {
-        dataset: collect_dataset_release(
+    quality_gate_path = resolve_path("outputs/diagnostics/quality_gate_report.json")
+    if not quality_gate_path.is_file():
+        raise FileNotFoundError("Canonical release requires outputs/diagnostics/quality_gate_report.json")
+    quality_gate = read_json(quality_gate_path)
+    if not bool(quality_gate.get("quality_gate_passed")):
+        raise RuntimeError("Canonical release requires all human-audit quality gates to pass")
+    main_cells = [
+        cell for cell in suite.get("expected_cells", [])
+        if str(cell.get("run_role")) == "main"
+    ]
+    if len(main_cells) != 24:
+        raise RuntimeError(f"Canonical v19 release requires 24 main cells, found {len(main_cells)}")
+    cells: dict[str, Any] = {}
+    for cell in main_cells:
+        dataset = str(cell["dataset"])
+        victim_model = str(cell["victim_model"])
+        retriever_backend = str(cell["retriever_backend"])
+        cell_key = f"{dataset}::{victim_model}::{retriever_backend}"
+        cells[cell_key] = collect_dataset_release(
             args.suite_id,
             dataset,
+            victim_model,
+            retriever_backend,
             render_figures=not args.no_figures,
         )
-        for dataset in DATASETS
-    }
     manifest = {
         "suite_id": args.suite_id,
         "status": "canonical",
@@ -233,14 +282,21 @@ def main() -> int:
             "path": str(suite_path.resolve()),
             "sha256": sha256_file(suite_path),
         },
-        "datasets": datasets,
-        "dataset_binding_hash": sha256_obj({
-            dataset: {
+        "quality_gate": {
+            "path": str(quality_gate_path.resolve()),
+            "size": quality_gate_path.stat().st_size,
+            "sha256": sha256_file(quality_gate_path),
+            "audit_binding_hash": quality_gate.get("audit_binding_hash"),
+        },
+        "cells": cells,
+        "cell_count": len(cells),
+        "cell_binding_hash": sha256_obj({
+            cell_key: {
                 "main": value["main_run"]["run_id"],
                 "matched_control": value["matched_control_run"]["run_id"],
                 "source_whitelist_hash": value["source_whitelist_hash"],
             }
-            for dataset, value in datasets.items()
+            for cell_key, value in cells.items()
         }),
     }
     output = suite_path.parent / "canonical_release.json"

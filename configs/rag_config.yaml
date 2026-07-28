@@ -4,30 +4,44 @@
 # ---------------- 日志 ----------------
 logging:
   level: INFO                      # 日志详细程度：INFO=常规；排错可改 DEBUG
-  file: datasets/logs/rag.log      # RAG 阶段日志写到这个文件
+  file: artifacts/v6_3/logs/rag.log # v6.3 RAG 阶段独立日志
 
 # 大模型 profile 定义文件（接口风格、system prompt、默认模型名都在这里）。
 # 真实 key/base_url/model 仍由 .env 的 PCV_VICTIM_* / PCV_SIBLING_* 覆盖。
 llm_profiles_path: configs/llm_profiles.yaml
 
+experiment_protocol:
+  pairs_per_source: 3
+  logical_victim_calls_per_source_per_mode: 6
+  dense_retriever_model: sentence-transformers/all-MiniLM-L6-v2
+
 # ---------------- 输入/输出目录 ----------------
 paths:
-  query_controls_dir: outputs/query_controls
-  query_control_responses_dir: outputs/query_control_responses
-  splits_dir: datasets/splits                          # 读：第 02 步切好的各组数据
-  indexes_dir: indexes                                 # 写：第 03 步建好的 RAG 向量索引（只含 KB_Member）
-  benchmark_dir: datasets/benchmarks                   # 读/写：固化的 attack benchmark（带 hash）
-  queries_dir: outputs/stealth_filtered_queries        # 读：第 09 步过滤后的 Q+/Q- 查询
-  rag_responses_dir: outputs/rag_responses             # 写：第 10 步 RAG 模式（带检索）的回答
-  llm_only_responses_dir: outputs/llm_only_responses   # 写：第 10 步 LLM-only 模式（纯模型）的回答
-  facts_dir: outputs/facts                             # 读：第 06 步抽取的 facts（--primary-only 取 tier 用）
+  query_controls_dir: artifacts/v6_3/query_controls
+  query_control_responses_dir: artifacts/v6_3/query_control_responses
+  splits_dir: artifacts/v6_3/splits                     # 读：v6.3 source-level split
+  indexes_dir: artifacts/v6_3/indexes                    # 写：仅含 KB_Member，dense/BM25 分目录隔离
+  benchmark_dir: artifacts/v6_3/benchmarks               # 读：v6.3 固化 benchmark（带 hash）
+  queries_dir: artifacts/v6_3/stealth_filtered_queries   # 读：v6.3 第 09 步固定预算查询
+  rag_responses_dir: artifacts/v6_3/rag_responses        # 写：v6.3 RAG 回答
+  llm_only_responses_dir: artifacts/v6_3/llm_only_responses
+  facts_dir: artifacts/v6_3/facts
 
 # ---------------- 向量嵌入（把文本转成向量，用于检索）----------------
+dataset_paths:
+  edgar:
+    splits_dir: artifacts/v6_3/splits/edgar
+  enron:
+    splits_dir: artifacts/v6_3/splits/enron
+  pubmed:
+    splits_dir: artifacts/v6_3/splits/pubmed
+
 embedding:
   # 正式实验可改为 bge-small-en、all-MiniLM-L6-v2、bge-base-en、e5-base-v2、gte 等。
   model: sentence-transformers/all-MiniLM-L6-v2   # 当前用的嵌入模型（384 维小模型，CPU 可跑）
   backend: auto                                   # auto/sentence_transformers=用真实模型；
                                                   # 写 hashing 会直接报错（已禁用假 fallback）
+  local_files_only: true                          # 正式实验只使用已冻结的本地模型 snapshot
   dim: 384                                        # 向量维度，必须与上面模型的输出维度一致
 
 # ---------------- 分块（建索引时把文档再切成检索单元）----------------
@@ -37,6 +51,7 @@ chunking:
 
 # ---------------- 检索（回答问题前先从库里找相关块）----------------
 retrieval:
+  backend: dense          # dense 或 bm25；正式实验两者分别运行并使用隔离索引
   top_k: 5               # 每个问题检索最相关的 5 个块喂给模型
   query_rewriting: false # 是否先把问题改写再检索：false=直接用原问题检索（保持攻击查询原样）
 

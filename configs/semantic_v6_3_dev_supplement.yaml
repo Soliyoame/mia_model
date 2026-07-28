@@ -1,0 +1,94 @@
+protocol: local_v6_3_ai_assisted_semantic_dev_supplement
+label_scope: Development-only AI-assisted labels; not a release audit and not human blind annotation.
+cases:
+  - audit_id: supplement_product_microsoft_powerpoint_2007
+    dataset: pubmed
+    entity_type: PRODUCT
+    entity: Microsoft Office PowerPoint 2007
+    semantic_label: pass
+    text: Microsoft Office PowerPoint 2007 (Microsoft, USA) was used to trace the points on the X-ray film (Fig. 1 a), recorded the coordinate values of red points.
+    rationale: Exact branded software product and version.
+  - audit_id: supplement_product_logix_smart_covid_test
+    dataset: edgar
+    entity_type: PRODUCT
+    entity: Logix Smart COVID-19 test
+    semantic_label: pass
+    text: The Declaration of Conformity for the Logix Smart COVID-19 test confirms that it meets the Essential Requirements of the European Community.
+    rationale: Exact named diagnostic product.
+  - audit_id: supplement_product_brm_system
+    dataset: enron
+    entity_type: PRODUCT
+    entity: BRM System
+    semantic_label: pass
+    text: We've uploaded the Universe to the BRM System under the "BRM Info" tab.
+    rationale: Exact proper-named internal software system.
+  - audit_id: supplement_product_pep_system
+    dataset: enron
+    entity_type: PRODUCT
+    entity: PEP System
+    semantic_label: pass
+    text: Access the PEP System through the portal!
+    rationale: Exact proper-named operational system.
+  - audit_id: supplement_product_xcell_surelock
+    dataset: pubmed
+    entity_type: PRODUCT
+    entity: XCell SureLock Mini-Cell System
+    semantic_label: pass
+    text: Classical EV markers were presented by Western blot analyses using NuPAGE reagents and an XCell SureLock Mini-Cell System (Thermo Fisher Scientific, Waltham, MA, USA) according to manufacturer’s protocols.
+    rationale: Exact branded laboratory product.
+  - audit_id: supplement_product_bruker_capture
+    dataset: pubmed
+    entity_type: PRODUCT
+    entity: Bruker In-Vivo Xtreme Capture System
+    semantic_label: pass
+    text: Bioluminescence imaging was evaluated with a Bruker In-Vivo Xtreme Capture System, using Molecular Imaging Software.
+    rationale: Exact branded imaging product.
+  - audit_id: supplement_product_biorad_iq5_software
+    dataset: pubmed
+    entity_type: PRODUCT
+    entity: BioRad iQ5™ Optical System Software
+    semantic_label: pass
+    text: The trays were analysed using the BioRad iQ5™ Optical System Software (v 2.1).
+    rationale: Exact branded software product.
+  - audit_id: supplement_bad_attorney_work_product
+    dataset: enron
+    entity_type: PRODUCT
+    entity: Attorney Work Product
+    semantic_label: fail
+    text: Privileged and Confidential Communication; Attorney-Client Communication and Attorney Work Product Privileges Asserted.
+    rationale: Legal doctrine and document category, not a product.
+  - audit_id: supplement_bad_investigational_device
+    dataset: edgar
+    entity_type: PRODUCT
+    entity: Investigational Device
+    semantic_label: fail
+    text: The investigators sought and received an Investigational Device Exemption following communication from the FDA.
+    rationale: Partial legal-regulatory term, not a complete named product.
+  - audit_id: supplement_bad_internal_revenue_service
+    dataset: edgar
+    entity_type: PRODUCT
+    entity: Internal Revenue Service
+    semantic_label: fail
+    text: The Internal Revenue Service might challenge the tax basis step-ups and other tax benefits.
+    rationale: Government organization, not a product.
+  - audit_id: supplement_bad_transmission_system
+    dataset: enron
+    entity_type: PRODUCT
+    entity: Transmission System
+    semantic_label: fail
+    text: Attached is a copy of the 2001 Summer Assessment of Transmission System Performance Report.
+    rationale: Fragment of a report title and generic infrastructure phrase.
+  - audit_id: supplement_bad_international_prognostic_scoring_system
+    dataset: pubmed
+    entity_type: PRODUCT
+    entity: International Prognostic Scoring System
+    semantic_label: fail
+    text: Patients were stratified using the International Prognostic Scoring System.
+    rationale: Clinical scoring method, not a product.
+  - audit_id: supplement_bad_our_product
+    dataset: edgar
+    entity_type: PRODUCT
+    entity: Our Product
+    semantic_label: fail
+    text: Risks Related to the Discovery, Development and Commercialization of Our Product Candidates.
+    rationale: Generic common noun and heading fragment, not a named product.

@@ -103,8 +103,11 @@ def roc_auc(rows: list[dict[str, Any]], score_key: str = "pcv_score", positive_g
         AUC 值(0~1);若没有正样本或没有负样本则返回 None。
     """
     # 按分组把分数分成"正类(成员)"和"负类(非成员)"两堆。
-    positives = [float(row.get(score_key, 0.0)) for row in rows if row.get("group") == positive_group]
-    negatives = [float(row.get(score_key, 0.0)) for row in rows if row.get("group") != positive_group]
+    values = _complete_score_values(rows, score_key)
+    if values is None:
+        return None
+    positives = [value for row, value in zip(rows, values) if row.get("group") == positive_group]
+    negatives = [value for row, value in zip(rows, values) if row.get("group") != positive_group]
     # 缺任一类就算不了 AUC。
     if not positives or not negatives:
         return None
@@ -146,14 +149,28 @@ def rates_at_threshold(
     返回:
         含 Accuracy/TPR/FPR/各分组 FPR/检出率等的字典。
     """
+    values = _complete_score_values(rows, score_key)
+    if values is None:
+        return {
+            "status": "unavailable",
+            "score_key": score_key,
+            "threshold": threshold,
+            "Accuracy": None,
+            "TPR": None,
+            "FPR": None,
+            "FPR-True_Non_Member": None,
+            "FPR-Spoofed_Non_Member": None,
+            "Detection Rate": None,
+            "predicted_member_count": None,
+        }
     # 单趟遍历累计全部计数，避免对同一份 rows 多次扫描
     # （本函数会被 threshold_curve 调用 O(唯一分数) 次）。
     pos_total = tnm_total = spoof_total = 0   # 各类样本总数
     tp = tn_hits = spoof_hits = predicted = correct = 0  # 各类命中数、预测为成员数、判对数
-    for row in rows:
+    for row, score in zip(rows, values):
         group = str(row.get("group"))
         # 这条是否被判为成员(分数 ≥ 阈值)。
-        pred = float(row.get(score_key, 0.0)) >= threshold
+        pred = score >= threshold
         is_pos = group == positive_group
         # 统计各类样本总数。
         if is_pos:
@@ -200,8 +217,11 @@ def threshold_curve(rows: list[dict[str, Any]], score_key: str = "pcv_score") ->
     """
     # 候选阈值 = 数据中出现过的所有分数 ∪ 几个常用值,去重后升序。
     # 显式加入 ±∞，保证 ROC 一定包含 (FPR=0,TPR=0) 与 (FPR=1,TPR=1) 两个端点。
+    values = _complete_score_values(rows, score_key)
+    if values is None:
+        return []
     scores = sorted(
-        {float(row.get(score_key, 0.0)) for row in rows}
+        set(values)
         | {float("-inf"), 0.0, 0.2, 0.3, 0.4, 0.5, 1.0, float("inf")}
     )
     return [rates_at_threshold(rows, threshold, score_key=score_key) for threshold in scores]
@@ -234,6 +254,27 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     返回:
         含 AUC、固定阈值下各指标、TPR@1%/5%FPR、以及完整阈值曲线的字典。
     """
+    if _complete_score_values(rows, score_key) is None:
+        return {
+            "status": "unavailable",
+            "score_key": score_key,
+            "AUC": None,
+            "threshold": threshold,
+            "Accuracy": None,
+            "TPR": None,
+            "FPR": None,
+            "FPR-True_Non_Member": None,
+            "FPR-Spoofed_Non_Member": None,
+            "Detection Rate": None,
+            "predicted_member_count": None,
+            "Oracle Accuracy@best": None,
+            "Oracle TPR@1%FPR": None,
+            "Oracle TPR@5%FPR": None,
+            "Accuracy@best": None,
+            "TPR@1%FPR": None,
+            "TPR@5%FPR": None,
+            "threshold_curve": [],
+        }
     curve = threshold_curve(rows, score_key=score_key)
     fixed = rates_at_threshold(rows, threshold=threshold, score_key=score_key)
     # Accuracy@best:扫所有阈值能达到的最高准确率(=攻击正确判定成员/非成员的最高比率)。
@@ -242,6 +283,8 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     oracle_tpr_1 = tpr_at_fpr(curve, 0.01)
     oracle_tpr_5 = tpr_at_fpr(curve, 0.05)
     return {
+        "status": "available",
+        "score_key": score_key,
         "AUC": roc_auc(rows, score_key=score_key),
         **fixed,
         "Oracle Accuracy@best": best_acc,
@@ -253,6 +296,29 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
         "TPR@5%FPR": oracle_tpr_5,
         "threshold_curve": curve,
     }
+
+
+def _complete_score_values(
+    rows: list[dict[str, Any]],
+    score_key: str,
+) -> list[float] | None:
+    """Return finite scores, or None when any row lacks the requested metric."""
+
+    if not rows:
+        return None
+    values: list[float] = []
+    for row in rows:
+        value = row.get(score_key)
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(numeric):
+            return None
+        values.append(numeric)
+    return values
 
 
 def conformal_nonmember_p_value(

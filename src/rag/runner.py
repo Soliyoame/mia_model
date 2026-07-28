@@ -107,6 +107,70 @@ def compact_response_file(path: str | Path) -> dict[str, int]:
     return stats
 
 
+def validate_fixed_query_budget(
+    query_rows: list[dict[str, Any]],
+    pairs_per_source: int,
+    *,
+    expected_source_keys: set[str] | None = None,
+) -> dict[str, Any]:
+    """Fail closed unless every source has exactly N complete Q+/Q- pairs."""
+
+    required = int(pairs_per_source)
+    if required < 1:
+        raise ValueError("pairs_per_source must be a positive integer")
+    query_ids: set[str] = set()
+    by_source: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in query_rows:
+        query_id = str(row.get("query_id") or "")
+        if not query_id or query_id in query_ids:
+            raise RuntimeError(f"Fixed-budget plan has missing/duplicate query_id: {query_id!r}")
+        query_ids.add(query_id)
+        source_key = str(row.get("source_key") or row.get("source_id") or "")
+        if not source_key:
+            raise RuntimeError(f"Fixed-budget query is missing source_key: {query_id}")
+        pair_key = f"{row.get('pair_id')}::{row.get('query_type') or 'default'}"
+        by_source.setdefault(source_key, {}).setdefault(pair_key, []).append(row)
+
+    failures: list[str] = []
+    if not by_source:
+        failures.append("no_sources")
+    actual_source_keys = set(by_source)
+    if expected_source_keys is not None:
+        missing = sorted(expected_source_keys - actual_source_keys)
+        unexpected = sorted(actual_source_keys - expected_source_keys)
+        if missing:
+            failures.append(f"missing_sources={missing[:10]} (total={len(missing)})")
+        if unexpected:
+            failures.append(f"unexpected_sources={unexpected[:10]} (total={len(unexpected)})")
+    for source_key, pairs in sorted(by_source.items()):
+        if len(pairs) != required:
+            failures.append(f"{source_key}:pairs={len(pairs)}")
+            continue
+        query_texts = [str(member.get("query") or "") for members in pairs.values() for member in members]
+        if any(not query for query in query_texts):
+            failures.append(f"{source_key}:empty_query_text")
+        elif len(set(query_texts)) != required * 2:
+            failures.append(f"{source_key}:duplicate_query_text")
+        for pair_key, members in pairs.items():
+            claim_types = sorted(str(member.get("claim_type")) for member in members)
+            if claim_types != ["counterfactual", "true"]:
+                failures.append(f"{source_key}:{pair_key}:claim_types={claim_types}")
+    if failures:
+        preview = "; ".join(failures[:10])
+        raise RuntimeError(
+            f"Fixed query budget violation (required {required} pairs/{required * 2} queries per source): {preview}"
+        )
+    source_keys = sorted(actual_source_keys)
+    return {
+        "pairs_per_source": required,
+        "queries_per_source": required * 2,
+        "source_count": len(source_keys),
+        "planned_queries": len(query_ids),
+        "source_plan_hash": sha256_obj(source_keys),
+        "query_plan_hash": sha256_obj(sorted(query_ids)),
+    }
+
+
 class TokenBucket:
     """线程安全的全局令牌桶限速器（抗端点卡顿的核心）。
 
@@ -284,6 +348,9 @@ def run_rag_and_llm_only(
     requests_per_minute: float = 0.0,
     variant_id: str = "full_pvs",
     checkpoint_every: int = 200,
+    pairs_per_source: int | None = None,
+    generator_id: str | None = None,
+    generator_version: str | None = None,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -360,6 +427,10 @@ def run_rag_and_llm_only(
 
     # 把基准文件读成"audit_id → 整行"的字典，便于按 id 快速查目标文档。
     benchmark = {row["audit_id"]: row for row in read_jsonl(benchmark_path)}
+    benchmark_source_keys = {
+        str(row.get("source_key") or row.get("source_id") or row.get("audit_id"))
+        for row in benchmark.values()
+    }
     # 仅 RAG 路需要加载索引；matched LLM-only 对照不触碰检索器。
     retriever = RagRetriever(index_dir) if run_rag else None
     created_at = datetime.now(timezone.utc).isoformat()
@@ -387,7 +458,22 @@ def run_rag_and_llm_only(
         # primary-only 砍量：只保留 fact_id 在白名单内的 query（None=不过滤）。
         if allowed_fact_ids is not None and str(query_row.get("fact_id")) not in allowed_fact_ids:
             continue
+        if str(query_row.get("audit_id")) not in benchmark:
+            raise RuntimeError(
+                f"Accepted query references an audit_id outside the benchmark: "
+                f"{query_row.get('query_id')}"
+            )
         accepted_queries.append(query_row)
+    fixed_budget = (
+        validate_fixed_query_budget(
+            accepted_queries,
+            pairs_per_source,
+            expected_source_keys=benchmark_source_keys,
+        )
+        if pairs_per_source is not None
+        else {"enabled": False}
+    )
+    fixed_budget["enabled"] = pairs_per_source is not None
     pending: list[dict[str, Any]] = []
     for query_row in accepted_queries:
         qid = str(query_row["query_id"])
@@ -466,6 +552,10 @@ def run_rag_and_llm_only(
                 "generation_config": {"top_k": top_k, "temperature": temperature, "max_tokens": max_tokens},
                 "error": error,
                 "created_at": created_at,
+                "generator_id": generator_id,
+                "generator_version": generator_version,
+                "retriever_backend": getattr(retriever, "retriever_backend", None),
+                "retriever_id": getattr(retriever, "manifest", {}).get("retriever_id"),
             }
 
         # —— LLM-only 模式：该查询 LLM-only 还没成功、且未关闭该路时才跑 ——
@@ -491,6 +581,8 @@ def run_rag_and_llm_only(
                 dataset=dataset, temperature=temperature, max_tokens=max_tokens, created_at=created_at,
                 variant_id=variant,
             )
+            llm_row["generator_id"] = generator_id
+            llm_row["generator_version"] = generator_version
         return rag_row, llm_row, fails
 
     rag_rows: list[dict[str, Any]] = []
@@ -539,11 +631,30 @@ def run_rag_and_llm_only(
         "input_rows": 0, "unique_queries": 0, "duplicates_removed": 0, "succeeded": 0, "failed": 0,
     }
     planned = len({str(row["query_id"]) for row in accepted_queries})
+    index_manifest_path = Path(index_dir) / "index_manifest.json"
+    index_manifest_hash = None
+    if retriever is not None:
+        index_manifest_hash = (
+            sha256_file(index_manifest_path)
+            if index_manifest_path.is_file()
+            else sha256_obj(getattr(retriever, "manifest", {}))
+        )
 
     manifest = {
         "dataset": dataset,
         "variant_id": variant,
         "query_budget": planned,
+        "query_budget_per_source": fixed_budget.get("queries_per_source"),
+        "fixed_budget": fixed_budget,
+        "generator_id": generator_id,
+        "generator_version": generator_version,
+        "retriever_backend": (
+            getattr(retriever, "retriever_backend", None) if retriever is not None else None
+        ),
+        "retriever_id": (
+            getattr(retriever, "manifest", {}).get("retriever_id") if retriever is not None else None
+        ),
+        "index_manifest_hash": index_manifest_hash,
         "queries_path": str(queries_path),
         "queries_hash": sha256_file(queries_path),
         "source_whitelist_hash": sha256_obj(sorted({

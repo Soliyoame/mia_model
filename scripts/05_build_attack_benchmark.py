@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.prepare.benchmark_builder import build_pcv_attack_benchmark
+from src.utils.dataset_paths import resolve_dataset_dir
 from src.utils.env import env_bool
 from src.utils.io import ensure_dir, load_yaml, read_json, resolve_path
 from src.utils.logger import setup_logging
@@ -36,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-config", default=str(PROJECT_ROOT / "configs" / "data_config.yaml"))
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--log-file", default=None)
     return parser.parse_args()
 
 
@@ -48,11 +50,31 @@ def main() -> int:
     args = parse_args()
     config = load_yaml(args.data_config)
     set_seed_from_config(config)
-    logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
-    split_dir = resolve_path(config["paths"]["splits_dir"]) / args.dataset
+    logger = setup_logging(
+        "pcv_mia",
+        log_file=resolve_path(args.log_file or config["logging"]["file"]),
+        level=config["logging"].get("level", "INFO"),
+    )
+    split_dir = resolve_dataset_dir(config, "splits_dir", args.dataset)
     spoofed_dir = resolve_path("datasets/spoofed") / args.dataset
-    out_dir = ensure_dir(resolve_path("datasets/benchmarks"))
+    out_dir = ensure_dir(resolve_path(config.get("paths", {}).get("benchmark_dir", "datasets/benchmarks")))
     split_manifest = read_json(split_dir / "split_manifest.json")
+    split_protocol = {
+        key: split_manifest.get(key)
+        for key in (
+            "membership_unit",
+            "split_scale",
+            "target_unit",
+            "target_counts",
+            "source_counts",
+            "hash_summary",
+            "source_exclusive",
+            "min_entities_per_source",
+            "source_eligibility",
+            "claim_eligibility",
+            "seed",
+        )
+    }
     # 是否并入仿造非成员对照组,与第 4 步同一个开关保持一致。
     include_spoofed = env_bool("PCV_ENABLE_SPOOFED_NONMEMBER", default=False)
     # 是否并入 Reserve 校准组(L1 群体校准的零分布来源),默认开启;评估时会被排除。
@@ -69,6 +91,8 @@ def main() -> int:
         config_snapshot=config,
         # 透传切分时的随机种子,把基准和它依赖的切分关联起来,便于追溯。
         split_seed=split_manifest.get("seed"),
+        split_manifest_path=split_dir / "split_manifest.json",
+        split_protocol_snapshot=split_protocol,
         resume=not args.no_resume,
         force=args.force,
     )
