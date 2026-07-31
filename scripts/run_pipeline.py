@@ -43,13 +43,15 @@ from src.llm.factory import (
     resolve_effective_llm_profile,
     resolve_llm_profile_name,
 )
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
 from src.utils.dataset_paths import resolve_dataset_dir
-from src.utils.io import load_yaml, read_json, resolve_path
+from src.utils.io import load_yaml, read_json, resolve_path, write_json
 from src.utils.run_context import (
     CANONICAL_RUN_ROLES,
     P0_PROTOCOL,
     archive_provenance_files,
-    archive_run,
+    archive_experiment_run,
     archived_query_source_whitelist,
     archived_source_whitelist,
     artifact_inventory,
@@ -58,12 +60,11 @@ from src.utils.run_context import (
     canonical_eligibility,
     file_snapshot,
     git_snapshot,
+    model_slug,
     new_run_id,
     preregistration_snapshot,
     read_scale,
-    run_dir,
-    victim_model_slug,
-    write_run_manifest,
+    experiment_scoped_dir,
 )
 from src.utils.hash import sha256_file, sha256_obj
 
@@ -121,6 +122,11 @@ def _dataset_args(args: argparse.Namespace, *extra: str) -> list[str]:
         完整的子进程参数列表。
     """
     return ["--dataset", args.dataset, *extra, *_common_flags(args)]
+
+
+def _generator_family_args(args: argparse.Namespace) -> list[str]:
+    family = getattr(args, "generator_family", None)
+    return ["--generator-family", family] if family else []
 
 
 def build_steps() -> list[PipelineStep]:
@@ -220,6 +226,11 @@ def build_steps() -> list[PipelineStep]:
                 # 仅当指定 --victim-profile 时才透传(选用哪个受害者 LLM 画像来生成回答)。
                 *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
                 *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *(
+                    ["--generator-family", getattr(args, "generator_family", None)]
+                    if getattr(args, "generator_family", None)
+                    else []
+                ),
                 *(["--llm-only"] if args.llm_only else []),
                 *(["--skip-rag"] if args.run_role == "matched_control" else []),
             ),
@@ -232,6 +243,10 @@ def build_steps() -> list[PipelineStep]:
             lambda args: _dataset_args(
                 args,
                 *_config_arg(args.pcv_config),
+                "--rag-config",
+                args.rag_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
                 *(["--skip-llm-only"] if args.run_role == "main" else []),
             ),
         ),
@@ -251,6 +266,7 @@ def build_steps() -> list[PipelineStep]:
                     else []
                 ),
                 *(["--methods", args.baseline_methods] if args.baseline_methods else []),
+                *_generator_family_args(args),
             ),
         ),
         PipelineStep(
@@ -258,14 +274,29 @@ def build_steps() -> list[PipelineStep]:
             "mechanism_analysis",
             "13_mechanism_analysis.py",
             "run mechanism analysis",
-            lambda args: _dataset_args(args),
+            lambda args: _dataset_args(
+                args,
+                "--rag-config",
+                args.rag_config,
+                "--attack-config",
+                args.pcv_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
+            ),
         ),
         PipelineStep(
             14,
             "run_defenses",
             "14_run_defenses.py",
             "run defenses",
-            lambda args: _dataset_args(args, *_config_arg(args.defense_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.defense_config),
+                "--rag-config",
+                args.rag_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
+            ),
         ),
         PipelineStep(
             15,
@@ -274,6 +305,12 @@ def build_steps() -> list[PipelineStep]:
             "generate final report",
             lambda args: _dataset_args(
                 args,
+                "--rag-config",
+                args.rag_config,
+                "--attack-config",
+                args.pcv_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
                 # 仅当指定 --threshold 时才透传(报告里判定成员/非成员所用的打分阈值)。
                 *(["--threshold", str(args.threshold)] if args.threshold is not None else []),
             ),
@@ -329,7 +366,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run PCV-MIA pipeline stages with one command.")
     parser.add_argument("--dataset", default=None, help="Dataset name. Defaults to configs/experiment_config.yaml.")
     parser.add_argument("--experiment-config", default=str(PROJECT_ROOT / "configs" / "experiment_config.yaml"))
-    parser.add_argument("--canonical-config", default=str(PROJECT_ROOT / "configs" / "canonical_suite.yaml"))
+    parser.add_argument("--canonical-config", default=str(PROJECT_ROOT / "configs" / "canonical_suite_v20_llama.yaml"))
     parser.add_argument("--from-step", type=int, default=1, choices=range(1, 16), metavar="N")
     parser.add_argument("--to-step", type=int, default=15, choices=range(1, 16), metavar="N")
     parser.add_argument("--only-steps", default="", help="Comma/range list, for example: 2-9,11,15.")
@@ -338,9 +375,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--victim-profile", default=None, help="Forwarded to step 10.")
     parser.add_argument(
         "--retriever-backend",
-        choices=["dense", "bm25"],
+        choices=["dense", "bm25", "hybrid"],
         default=None,
         help="Run exactly one retriever cell; forwarded to steps 03, 10 and 12.",
+    )
+    parser.add_argument(
+        "--generator-family",
+        choices=["gemini", "qwen", "gpt", "llama"],
+        default=None,
+        help="Generator family slot; concrete model must already be frozen in the registry.",
     )
     parser.add_argument(
         "--baseline-methods",
@@ -421,6 +464,15 @@ def selected_steps(args: argparse.Namespace, experiment_config: dict) -> list[Pi
     for step in steps:
         if args.run_role == "matched_control" and step.number != 10:
             continue
+        if (
+            args.run_role == "main"
+            and not only
+            and str(args.retriever_backend or "dense") != "dense"
+            and step.number in {12, 13, 14}
+        ):
+            # Baseline、完整机制与 defense 是预注册的 BGE representative cells。
+            # 非 dense 主 cell 默认只跑主方法与报告；显式 --only-steps 仍可运行探索性分析。
+            continue
         # 是否落在 --from-step ~ --to-step 区间内。
         in_range = args.from_step <= step.number <= args.to_step
         # 未指定 --only-steps 时默认全选;指定后只保留白名单内的步骤。
@@ -453,7 +505,15 @@ def command_for_step(step: PipelineStep, args: argparse.Namespace) -> list[str]:
 
 def canonical_analysis_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
     """构造显式 canonical 后处理命令；在线对照沿用普通 resume 语义。"""
-    model = victim_model_slug()
+    concrete_model = str(getattr(args, "concrete_model", "") or "").strip()
+    if not concrete_model:
+        identity, _ = resolve_generator_from_pipeline_config(
+            load_yaml(Path(args.rag_config)),
+            family=getattr(args, "generator_family", None),
+            profile_name=getattr(args, "victim_profile", None),
+        )
+        concrete_model = identity.concrete_model
+    model = model_slug(concrete_model)
     force = ["--force"] if args.force else []
     common = ["--dataset", args.dataset]
     commands: list[tuple[str, list[str]]] = [
@@ -508,6 +568,12 @@ def canonical_analysis_commands(args: argparse.Namespace) -> list[tuple[str, lis
                     "--config", args.rag_config,
                     "--variant-id", variant,
                     *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                    *(
+                        ["--retriever-backend", args.retriever_backend]
+                        if args.retriever_backend
+                        else []
+                    ),
+                    *_generator_family_args(args),
                     *force,
                 ],
             ),
@@ -569,15 +635,79 @@ def _archive_run_products(
         data_config = load_yaml(Path(args.data_config))
         split_dir = resolve_dataset_dir(data_config, "splits_dir", args.dataset)
         rag_config = load_yaml(Path(args.rag_config))
+        pcv_config = load_yaml(Path(args.pcv_config))
+        baseline_config = load_yaml(Path(args.baseline_config))
+        defense_config = load_yaml(Path(args.defense_config))
         retriever_backend = args.retriever_backend or str(
             rag_config.get("retrieval", {}).get("backend", "dense")
         )
-        index_dir = resolve_path(rag_config["paths"]["indexes_dir"]) / args.dataset / retriever_backend
+        generator_identity, effective_profile = resolve_generator_from_pipeline_config(
+            rag_config,
+            family=args.generator_family,
+            profile_name=args.victim_profile,
+        )
+        retriever_id = (
+            retriever_id_from_config(rag_config, retriever_backend)
+            if args.run_role == "main"
+            else "none"
+        )
+        index_backend = "dense" if retriever_backend == "hybrid" else retriever_backend
+        index_dir = retriever_index_dir(
+            rag_config,
+            args.dataset,
+            index_backend,
+        )
         index_manifest_path = index_dir / "index_manifest.json"
         index_manifest = read_json(index_manifest_path) if index_manifest_path.is_file() else {}
+        resolved_retriever_manifest = index_manifest
+        resolved_index_manifest_hash = (
+            sha256_file(index_manifest_path)
+            if index_manifest_path.is_file()
+            else None
+        )
+        if args.run_role == "main" and retriever_backend == "hybrid":
+            response_manifest_path = (
+                experiment_scoped_dir(
+                    rag_config["paths"]["rag_responses_dir"],
+                    args.dataset,
+                    generator_family=generator_identity.generator_family,
+                    concrete_model=generator_identity.concrete_model,
+                    retriever_id=retriever_id,
+                )
+                / f"{args.dataset}_rag_responses.manifest.json"
+            )
+            if response_manifest_path.is_file():
+                response_manifest = read_json(response_manifest_path)
+                resolved_index_manifest_hash = response_manifest.get(
+                    "index_manifest_hash"
+                )
+                resolved_retriever_manifest = (
+                    response_manifest.get("retriever_manifest") or {}
+                )
+        benchmark_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_attack_benchmark.jsonl"
+        )
+        benchmark_manifest_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_benchmark_manifest.json"
+        )
+        benchmark_hash_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_attack_benchmark.sha256"
+        )
+        actual_benchmark_hash = (
+            sha256_file(benchmark_path) if benchmark_path.is_file() else ""
+        )
+        expected_benchmark_hash = (
+            benchmark_hash_path.read_text(encoding="utf-8").strip().split()[0]
+            if benchmark_hash_path.is_file()
+            else ""
+        )
         provenance_paths = [
-            resolve_path("datasets/benchmarks") / f"{args.dataset}_attack_benchmark.jsonl",
-            resolve_path("datasets/benchmarks") / f"{args.dataset}_benchmark_manifest.json",
+            benchmark_path,
+            benchmark_manifest_path,
+            benchmark_hash_path,
             split_dir / "split_manifest.json",
             split_dir / "kb_member.jsonl",
             split_dir / "true_non_member.jsonl",
@@ -586,22 +716,25 @@ def _archive_run_products(
             index_dir / "docstore.jsonl",
             index_dir / str(index_manifest.get("index_filename") or "faiss.index"),
         ]
+        if retriever_backend == "hybrid":
+            bm25_dir = retriever_index_dir(rag_config, args.dataset, "bm25")
+            bm25_manifest = (
+                read_json(bm25_dir / "index_manifest.json")
+                if (bm25_dir / "index_manifest.json").is_file()
+                else {}
+            )
+            provenance_paths.extend([
+                bm25_dir / "index_manifest.json",
+                bm25_dir / "docstore.jsonl",
+                bm25_dir / str(
+                    bm25_manifest.get("index_filename") or "bm25.index.json"
+                ),
+            ])
         config_snapshots = {name: file_snapshot(path) for name, path in config_paths.items()}
         input_provenance = [file_snapshot(path) for path in provenance_paths]
         split_seed = int(data_config.get("split", {}).get("seed", -1))
-        profiles = load_llm_profiles(rag_config)
-        profile_name = resolve_llm_profile_name(
-            "victim",
-            cli_profile=args.victim_profile,
-            config_profile=rag_config.get("generation", {}).get("victim_profile"),
-        )
-        effective_profile = resolve_effective_llm_profile(
-            profiles,
-            "victim",
-            profile_name=profile_name,
-        )
-        victim_model = str(effective_profile.get("model") or "unspecified")
-        generator_version = str(effective_profile.get("model_version") or victim_model)
+        victim_model = generator_identity.concrete_model
+        generator_version = generator_identity.generator_version
         preregistration = preregistration_snapshot(
             args.canonical_config,
             dataset=args.dataset,
@@ -631,16 +764,31 @@ def _archive_run_products(
             "victim_provider": "openai_compatible",
             "victim_endpoint": str(effective_profile.get("base_url") or ""),
             "generator_id": victim_model,
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
             "generator_version": generator_version,
             "retriever_backend": retriever_backend if args.run_role == "main" else None,
-            "retriever_id": index_manifest.get("retriever_id") if args.run_role == "main" else None,
+            "retriever_id": retriever_id if args.run_role == "main" else None,
+            "retriever_manifest": (
+                resolved_retriever_manifest if args.run_role == "main" else None
+            ),
             "index_manifest_hash": (
-                sha256_file(index_manifest_path)
-                if args.run_role == "main" and index_manifest_path.is_file()
-                else None
+                resolved_index_manifest_hash if args.run_role == "main" else None
+            ),
+            "query_hash": sha256_file(
+                resolve_path(rag_config["paths"]["queries_dir"])
+                / f"{args.dataset}_paired_queries.jsonl"
             ),
             "run_llm_only": bool(args.llm_only),
-            "benchmark": benchmark_snapshot(args.dataset),
+            "benchmark": {
+                "benchmark_path": str(benchmark_path),
+                "benchmark_hash": actual_benchmark_hash,
+                "expected_hash": expected_benchmark_hash,
+                "hash_matches": bool(
+                    expected_benchmark_hash
+                    and actual_benchmark_hash == expected_benchmark_hash
+                ),
+            },
             "git": git_snapshot(),
             "effective_args": dict(vars(args)),
             "configs": config_snapshots,
@@ -648,18 +796,74 @@ def _archive_run_products(
             "input_provenance": input_provenance,
             "command": "python " + " ".join(sys.argv),
         }
-        model = victim_model_slug()
-        stages = (
-            ["facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "llm_only_responses"]
-            if args.run_role == "matched_control"
-            else [
-                "facts", "paired_claims", "paired_queries", "stealth_filtered_queries", "diagnostics",
-                "query_controls", "rag_responses", "parsed_stance", "scores", "baselines", "defenses",
-                "mechanisms", "reports", "query_control_responses", "query_control_scores",
-            ]
+        cell_scope = {
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
+            "retriever_id": retriever_id,
+        }
+        flat_stage_dirs = {
+            "facts": pcv_config["paths"]["facts_dir"],
+            "paired_claims": pcv_config["paths"]["paired_claims_dir"],
+            "paired_queries": pcv_config["paths"]["paired_queries_dir"],
+            "stealth_filtered_queries": pcv_config["paths"]["stealth_filtered_queries_dir"],
+        }
+        cell_stage_dirs = {
+            "llm_only_responses": experiment_scoped_dir(
+                rag_config["paths"]["llm_only_responses_dir"],
+                args.dataset,
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id="none",
+            ),
+        }
+        if args.run_role == "main":
+            cell_stage_dirs.update({
+                "rag_responses": experiment_scoped_dir(
+                    rag_config["paths"]["rag_responses_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "parsed_stance": experiment_scoped_dir(
+                    pcv_config["paths"]["parsed_stance_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "scores": experiment_scoped_dir(
+                    pcv_config["paths"]["scores_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "baselines": experiment_scoped_dir(
+                    baseline_config["paths"]["baselines_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "defenses": experiment_scoped_dir(
+                    defense_config["paths"]["defenses_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "mechanisms": experiment_scoped_dir(
+                    "artifacts/v20/mechanisms",
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "reports": experiment_scoped_dir(
+                    rag_config["paths"]["reports_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+            })
+        root, archive = archive_experiment_run(
+            args.dataset,
+            run_id,
+            generator_family=generator_identity.generator_family,
+            concrete_model=generator_identity.concrete_model,
+            retriever_id=retriever_id,
+            runs_base=rag_config["paths"]["runs_dir"],
+            flat_stage_dirs=flat_stage_dirs,
+            cell_stage_dirs=cell_stage_dirs,
         )
-        archive = archive_run(args.dataset, run_id, model=model, stages=stages)
-        root = run_dir(args.dataset, run_id, model=model)
         archive["provenance_files"] = archive_provenance_files(
             root, [*config_snapshots.values(), *input_provenance]
         )
@@ -676,10 +880,10 @@ def _archive_run_products(
             manifest, str(whitelist.get("source_whitelist_hash") or "")
         )
         manifest["canonical_eligibility"] = canonical_eligibility(manifest, root)
-        write_run_manifest(args.dataset, run_id, manifest, model=model)
+        write_json(manifest, root / "run_manifest.json")
         megabytes = archive["bytes"] / (1024 * 1024)
         print(
-            f"[归档] outputs/runs/{args.dataset}/{model}/{run_id}/"
+            f"[归档] {root}"
             f"  ({archive['files']} 文件, {megabytes:.1f} MB)"
         )
     except Exception as exc:  # noqa: BLE001 - 归档失败不应连累流水线主流程
@@ -699,6 +903,13 @@ def main() -> int:
     # profile 也必须落实为单个明确模型，并写入本进程环境供所有 model-scoped 子目录复用。
     # 这只解析配置，不构造客户端、不触发 API。
     rag_config = load_yaml(Path(args.rag_config))
+    generator_identity, effective_profile = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+        profile_name=args.victim_profile,
+    )
+    args.generator_family = generator_identity.generator_family
+    args.concrete_model = generator_identity.concrete_model
     profiles = load_llm_profiles(rag_config)
     profile_name = resolve_llm_profile_name(
         "victim",
@@ -713,6 +924,7 @@ def main() -> int:
     effective_model = str(effective_profile.get("model") or "").strip()
     if effective_model and not env_str("PCV_VICTIM_MODEL", ""):
         os.environ["PCV_VICTIM_MODEL"] = effective_model
+    os.environ["PCV_GENERATOR_FAMILY"] = generator_identity.generator_family
     if args.run_role == "matched_control" and not args.llm_only:
         print("error: matched_control requires --llm-only", file=sys.stderr)
         return 2
@@ -765,8 +977,15 @@ def main() -> int:
     analyses_completed: list[str] = []
     failed_analysis: str | None = None
     if args.canonical_analyses:
-        if args.run_role != "main" or args.llm_only:
-            print("error: --canonical-analyses is only valid for the RAG-only main run", file=sys.stderr)
+        if (
+            args.run_role != "main"
+            or args.llm_only
+            or str(args.retriever_backend or "dense") != "dense"
+        ):
+            print(
+                "error: --canonical-analyses is only valid for the dense RAG-only main run",
+                file=sys.stderr,
+            )
             failed_analysis = "invalid_run_role"
         else:
             for name, command in canonical_analysis_commands(args):

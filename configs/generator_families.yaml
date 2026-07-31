@@ -1,0 +1,43 @@
+# Generator 家族注册表。正式调用前必须把对应家族从 pending 改为 frozen，
+# 并补齐所有 freeze_fields；模型选择不得参考 PCV AUC 或任何攻击中间结果。
+registry_version: generator-family-registry-v2
+selection_policy:
+  allowed_factors:
+    - api_availability
+    - context_length
+    - output_format_compatibility
+    - cost_and_rate_limits
+    - family_membership
+  forbidden_factors:
+    - pcv_auc
+    - attack_effectiveness
+    - intermediate_attack_results
+
+generator_families:
+  gemini:
+    status: pending
+    role: extension
+    first_formal_call_at: null
+    previous_candidate: gemini-2.0-flash
+    change_reason: "2026-07-30 首次正式调用前因 API 不可用解冻；未产生 v20 正式响应，未参考攻击结果。"
+
+  qwen:
+    status: pending
+    role: extension
+
+  gpt:
+    status: pending
+    role: extension
+
+  llama:
+    status: frozen
+    role: primary
+    provider: openai_compatible
+    endpoint_id: env:PCV_VICTIM_BASE_URL
+    concrete_model: meta/llama-3.1-70b-instruct
+    model_version: meta/llama-3.1-70b-instruct
+    model_snapshot: provider-managed:meta/llama-3.1-70b-instruct
+    context_length: 131072
+    temperature_supported: true
+    first_formal_call_at: null
+    selection_reason: "替代不可用的 Gemini 主模型；依据 API 可用性、128K 上下文与 OpenAI-compatible 输出兼容性选择，未参考攻击结果。"

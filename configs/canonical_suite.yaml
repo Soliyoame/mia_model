@@ -1,7 +1,9 @@
 # PCV-MIA 投稿主实验预注册。正式结果只能从本文件声明的实验单元中选择，
 # 且选择规则与指标高低无关：取第一个通过全部 canonical 门禁的完整 run。
 suite_id: pcv-mia-paper-v1
-status: preregistered
+status: superseded
+superseded_by: configs/canonical_suite_v20_llama.yaml
+canonical_release_eligible: false
 selection_rule: first_preregistered_run_passing_all_gates
 release_commit: null
 

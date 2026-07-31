@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..llm.response_validation import response_record_is_success
 from .env import env_str
 from .hash import sha256_file, sha256_obj
 from .io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json, write_jsonl
@@ -46,10 +47,19 @@ RUN_STATUSES: tuple[str, ...] = (
 )
 
 P0_PROTOCOL: dict[str, Any] = {
-    "protocol_version": "pcv-mia-v19",
-    "method_version": "pcv-rag-only-source-v19",
+    "protocol_version": "pcv-mia-v20",
+    "method_version": "pcv-rag-only-source-v20",
     "threat_model_version": "strict-blackbox-v1",
-    "metrics_version": "source-conformal-v1",
+    "metrics_version": "source-conformal-bootstrap-v2",
+    "dataset_status": "pre_response_frozen_canonical",
+    "reserve_role": "retriever_dev_and_conformal",
+    "conformal_source_count": 245,
+    "conformal_alphas": [0.01, 0.05],
+    "execution": "source_block_interleaved",
+    "calibration_scope": "post_retriever_frozen_nonmember_calibration",
+    "retriever_selection_used_reserve_recall": True,
+    "retriever_selection_used_attack_scores": False,
+    "pilot_reserve_excluded_from_calibration": True,
     "method": "rag_only_paired_counterfactual_verification",
     "membership_unit": "dataset_specific_source",
     "membership_units": {
@@ -61,15 +71,19 @@ P0_PROTOCOL: dict[str, Any] = {
     "evaluation_unit": "source",
     "pairs_per_source": 3,
     "queries_per_source_per_cell": 6,
-    "retrievers": ["dense", "bm25"],
-    "dense_retriever_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "retrievers": ["dense", "bm25", "hybrid"],
+    "dense_retriever_model": "BAAI/bge-base-en-v1.5",
+    "reranker_model": "BAAI/bge-reranker-base",
+    "generator_families": ["gemini", "qwen", "gpt", "llama"],
+    "primary_generator_family": "llama",
+    "primary_generator_model": "meta/llama-3.1-70b-instruct",
     "baseline_method_policy": {
-        "full_generator": "qwen/qwen3.5-397b-a17b",
+        "full_generator": "meta/llama-3.1-70b-instruct",
         "full_methods": ["RAG-MIA", "S2MIA", "MBA", "IA", "DCMI"],
-        "extension_methods": ["IA", "DCMI"],
+        "extension_methods": [],
     },
     "defense_representative_cells": [
-        {"dataset": dataset, "victim_model": "qwen/qwen3.5-397b-a17b", "retriever_backend": "dense"}
+        {"dataset": dataset, "victim_model": "meta/llama-3.1-70b-instruct", "retriever_backend": "dense"}
         for dataset in ("edgar", "enron", "pubmed")
     ],
     "threat_model": "candidate-known,response-only,non-adaptive,fixed-budget,strict-black-box",
@@ -84,13 +98,8 @@ def canonical_baseline_methods(victim_model: str) -> tuple[str, ...] | None:
 
     policy = P0_PROTOCOL["baseline_method_policy"]
     model = str(victim_model or "").strip().casefold()
-    known_generators = {
-        "qwen/qwen3.5-397b-a17b",
-        "gemini-2.0-flash",
-        "gpt-4.1-mini",
-        "meta-llama/llama-3.3-70b-instruct",
-    }
-    if model not in known_generators:
+    family_tokens = ("gemini", "qwen", "gpt", "llama")
+    if not any(token in model for token in family_tokens):
         return None
     key = "full_methods" if model == str(policy["full_generator"]).casefold() else "extension_methods"
     return tuple(str(method) for method in policy[key])
@@ -163,6 +172,59 @@ def model_scoped_dir(stage_base: str | Path, dataset: str, *, model: str | None 
     """
     return resolve_path(stage_base) / dataset / (
         model_slug(model) if model is not None else victim_model_slug()
+    )
+
+
+def experiment_scoped_dir(
+    stage_base: str | Path,
+    dataset: str,
+    *,
+    generator_family: str,
+    concrete_model: str,
+    retriever_id: str,
+) -> Path:
+    """v20 正式产物目录：dataset/family/model/retriever。"""
+
+    family = re.sub(
+        r"[^A-Za-z0-9._-]+",
+        "-",
+        str(generator_family or "").strip().casefold(),
+    ).strip("-")
+    if family not in {"gemini", "qwen", "gpt", "llama"}:
+        raise ValueError(f"Invalid generator family: {generator_family!r}")
+    if not str(concrete_model or "").strip():
+        raise ValueError("concrete_model is required")
+    if not str(retriever_id or "").strip():
+        raise ValueError("retriever_id is required")
+    return (
+        resolve_path(stage_base)
+        / dataset
+        / family
+        / model_slug(concrete_model)
+        / model_slug(retriever_id)
+    )
+
+
+def experiment_run_dir(
+    runs_base: str | Path,
+    dataset: str,
+    run_id: str,
+    *,
+    generator_family: str,
+    concrete_model: str,
+    retriever_id: str,
+) -> Path:
+    """v20 run 目录：dataset/family/model/retriever/run_id。"""
+
+    return ensure_dir(
+        experiment_scoped_dir(
+            runs_base,
+            dataset,
+            generator_family=generator_family,
+            concrete_model=concrete_model,
+            retriever_id=retriever_id,
+        )
+        / run_id
     )
 
 
@@ -344,6 +406,62 @@ def archive_run(dataset: str, run_id: str, *, model: str | None = None, stages: 
     }
 
 
+def archive_experiment_run(
+    dataset: str,
+    run_id: str,
+    *,
+    generator_family: str,
+    concrete_model: str,
+    retriever_id: str,
+    runs_base: str | Path,
+    flat_stage_dirs: dict[str, str | Path],
+    cell_stage_dirs: dict[str, str | Path],
+) -> tuple[Path, dict[str, Any]]:
+    """把 v20 单个实验 cell 归档到完整 family/model/retriever 身份目录。"""
+
+    dest_root = experiment_run_dir(
+        runs_base,
+        dataset,
+        run_id,
+        generator_family=generator_family,
+        concrete_model=concrete_model,
+        retriever_id=retriever_id,
+    )
+    total_files = 0
+    total_bytes = 0
+    by_stage: dict[str, int] = {}
+    for name, base_path in flat_stage_dirs.items():
+        source = resolve_path(base_path)
+        if not source.is_dir():
+            continue
+        count, size = _copy_dataset_artifacts(
+            dataset,
+            source,
+            dest_root / name,
+        )
+        if count:
+            by_stage[name] = count
+            total_files += count
+            total_bytes += size
+    for name, source_path in cell_stage_dirs.items():
+        source = Path(source_path)
+        if not source.is_dir():
+            continue
+        count, size = _copy_tree(source, dest_root / name)
+        if count:
+            by_stage[name] = count
+            total_files += count
+            total_bytes += size
+    inventory = artifact_inventory(dest_root)
+    return dest_root, {
+        "files": total_files,
+        "bytes": total_bytes,
+        "by_stage": by_stage,
+        "inventory": inventory,
+        "inventory_hash": sha256_obj(inventory),
+    }
+
+
 def file_snapshot(path: str | Path) -> dict[str, Any]:
     """冻结单个文件的绝对路径、大小与 SHA-256；缺失文件显式标记。"""
     p = Path(path).resolve()
@@ -397,6 +515,9 @@ def build_experiment_identity(manifest: dict[str, Any], source_whitelist_hash: s
     protocol = manifest.get("protocol") or {}
     return {
         "dataset": manifest.get("dataset"),
+        "generator_family": manifest.get("generator_family"),
+        "concrete_model": manifest.get("concrete_model")
+        or manifest.get("victim_model"),
         "run_role": manifest.get("run_role", "main"),
         "split_seed": manifest.get("split_seed"),
         "scale": manifest.get("scale"),
@@ -408,6 +529,11 @@ def build_experiment_identity(manifest: dict[str, Any], source_whitelist_hash: s
         "retriever_backend": manifest.get("retriever_backend"),
         "retriever_id": manifest.get("retriever_id"),
         "index_manifest_hash": manifest.get("index_manifest_hash"),
+        "schedule_hash": manifest.get("schedule_hash"),
+        "reserve_roles_hash": manifest.get("reserve_roles_hash"),
+        "query_hash": manifest.get("query_hash")
+        or manifest.get("queries_hash")
+        or (manifest.get("query_plan") or {}).get("sha256"),
         "benchmark_hash": (manifest.get("benchmark") or {}).get("benchmark_hash"),
         "config_hashes": {
             name: value.get("sha256") if isinstance(value, dict) else None
@@ -505,16 +631,31 @@ def benchmark_snapshot(dataset: str) -> dict[str, Any]:
     }
 
 
-def _response_stage_integrity(stage_root: Path, expected_ids: set[str]) -> dict[str, Any]:
+def _response_stage_integrity(
+    stage_root: Path,
+    expected_ids: set[str],
+    *,
+    expected_model_id: str | None = None,
+) -> dict[str, Any]:
     """核对一个响应阶段的 query 唯一性、有效性与计划覆盖。"""
     rows = [row for path in stage_root.rglob("*.jsonl") for row in read_jsonl(path)] if stage_root.exists() else []
     ids = [str(row.get("query_id") or "") for row in rows]
     valid_ids = {
         str(row.get("query_id"))
         for row in rows
-        if row.get("query_id") and not row.get("error") and str(row.get("response") or "").strip()
+        if response_record_is_success(
+            row,
+            expected_model_id=expected_model_id,
+        )
     }
-    invalid = sum(1 for row in rows if row.get("error") or not str(row.get("response") or "").strip())
+    invalid = sum(
+        1
+        for row in rows
+        if not response_record_is_success(
+            row,
+            expected_model_id=expected_model_id,
+        )
+    )
     duplicates = len(ids) - len(set(ids))
     return {
         "rows": len(rows),
@@ -659,6 +800,7 @@ def archived_integrity_summary(
     root: str | Path,
     *,
     run_role: str = "main",
+    expected_model_id: str | None = None,
 ) -> dict[str, Any]:
     """统计 canonical 所需的查询、双路响应、baseline 与 source coverage 完整性。"""
     run_root = Path(root)
@@ -698,8 +840,16 @@ def archived_integrity_summary(
     return {
         "planned_queries": len(expected_ids),
         "query_duplicates": len(query_ids) - len(expected_ids),
-        "rag": _response_stage_integrity(run_root / "rag_responses", expected_ids),
-        "llm_only": _response_stage_integrity(run_root / "llm_only_responses", expected_ids),
+        "rag": _response_stage_integrity(
+            run_root / "rag_responses",
+            expected_ids,
+            expected_model_id=expected_model_id,
+        ),
+        "llm_only": _response_stage_integrity(
+            run_root / "llm_only_responses",
+            expected_ids,
+            expected_model_id=expected_model_id,
+        ),
         "baseline_failures": baseline_failures,
         "coverage_rows": len(coverage_rows),
         "incomplete_sources": incomplete_sources,
@@ -742,8 +892,18 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         reasons.append("victim_model_missing")
     if not str(manifest.get("generator_id") or "").strip():
         reasons.append("generator_id_missing")
+    if not str(manifest.get("generator_family") or "").strip():
+        reasons.append("generator_family_missing")
+    if not str(manifest.get("concrete_model") or "").strip():
+        reasons.append("concrete_model_missing")
     if not str(manifest.get("generator_version") or "").strip():
         reasons.append("generator_version_missing")
+    if not (
+        str(manifest.get("query_hash") or "").strip()
+        or str(manifest.get("queries_hash") or "").strip()
+        or str((manifest.get("query_plan") or {}).get("sha256") or "").strip()
+    ):
+        reasons.append("query_hash_missing")
     git = manifest.get("git") or {}
     if not git.get("commit"):
         reasons.append("git_commit_missing")
@@ -758,12 +918,34 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
     if run_role == "matched_control" and not bool(manifest.get("run_llm_only", False)):
         reasons.append("matched_control_requires_llm_only")
     if run_role == "main":
-        if str(manifest.get("retriever_backend") or "") not in {"dense", "bm25"}:
+        protocol = manifest.get("protocol") or {}
+        if protocol.get("metrics_version") != "source-conformal-bootstrap-v2":
+            reasons.append("metrics_version_mismatch")
+        if protocol.get("dataset_status") != "pre_response_frozen_canonical":
+            reasons.append("dataset_status_not_frozen")
+        if protocol.get("execution") != "source_block_interleaved":
+            reasons.append("execution_not_source_block_interleaved")
+        if not str(manifest.get("schedule_hash") or "").strip():
+            reasons.append("execution_schedule_hash_missing")
+        if not str(manifest.get("reserve_roles_hash") or "").strip():
+            reasons.append("reserve_roles_hash_missing")
+        if str(manifest.get("retriever_backend") or "") not in {"dense", "bm25", "hybrid"}:
             reasons.append("retriever_backend_missing_or_invalid")
         if not str(manifest.get("retriever_id") or "").strip():
             reasons.append("retriever_id_missing")
         if not str(manifest.get("index_manifest_hash") or "").strip():
             reasons.append("index_manifest_hash_missing")
+        retriever_manifest = manifest.get("retriever_manifest") or {}
+        retriever_id = str(manifest.get("retriever_id") or "")
+        if "minilm" in retriever_id.casefold():
+            reasons.append("retired_minilm_retriever")
+        if str(manifest.get("retriever_backend") or "") in {"dense", "hybrid"}:
+            revision = (
+                retriever_manifest.get("embedding_revision")
+                or retriever_manifest.get("dense_embedding_revision")
+            )
+            if not str(revision or "").strip():
+                reasons.append("retriever_snapshot_missing")
         required_analyses = {
             "offline_ablation",
             "shortcut_controls",
@@ -777,7 +959,9 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
     if run_role == "matched_control":
         required_steps = {10}
     else:
-        required_steps = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15}
+        required_steps = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 15}
+        if str(manifest.get("retriever_backend") or "") == "dense":
+            required_steps.update({12, 13, 14})
         if canonical_defense_required(
             str(manifest.get("dataset") or ""),
             victim_model,
@@ -846,7 +1030,15 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
             if not archived.is_file() or sha256_file(archived) != str(row.get("sha256") or ""):
                 reasons.append("provenance_archive_hash_mismatch")
                 break
-    integrity = archived_integrity_summary(run_root, run_role=run_role)
+    integrity = archived_integrity_summary(
+        run_root,
+        run_role=run_role,
+        expected_model_id=str(
+            manifest.get("generator_id")
+            or manifest.get("concrete_model")
+            or ""
+        ).strip(),
+    )
     if not integrity["planned_queries"] or integrity["query_duplicates"]:
         reasons.append("query_plan_missing_or_duplicate")
     required_response_modes = ["llm_only"] if run_role == "matched_control" else ["rag"]
@@ -872,7 +1064,10 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         ):
             reasons.append("matched_control_provenance_invalid")
     else:
-        if integrity["baseline_failures"]:
+        baseline_required = (
+            str(manifest.get("retriever_backend") or "") == "dense"
+        )
+        if baseline_required and integrity["baseline_failures"]:
             reasons.append("baseline_failures")
         if not integrity["coverage_rows"] or integrity["incomplete_sources"]:
             reasons.append("source_coverage_incomplete")
@@ -883,22 +1078,48 @@ def canonical_eligibility(manifest: dict[str, Any], root: str | Path) -> dict[st
         ):
             reasons.append("source_whitelist_invalid")
         baseline_whitelist = integrity["baseline_whitelist"]
-        if (
-            baseline_whitelist["comparison_files"] != 1
-            or not baseline_whitelist["source_score_files"]
-            or baseline_whitelist["mismatched_methods"]
-        ):
-            reasons.append("baseline_source_whitelist_mismatch")
-        expected_baselines = canonical_baseline_methods(victim_model)
-        actual_baselines = set(baseline_whitelist.get("methods") or {})
-        if expected_baselines is not None and actual_baselines != set(expected_baselines):
-            reasons.append("baseline_method_set_mismatch")
-        if canonical_defense_required(
+        if baseline_required:
+            if (
+                baseline_whitelist["comparison_files"] != 1
+                or not baseline_whitelist["source_score_files"]
+                or baseline_whitelist["mismatched_methods"]
+            ):
+                reasons.append("baseline_source_whitelist_mismatch")
+            expected_baselines = canonical_baseline_methods(victim_model)
+            actual_baselines = set(baseline_whitelist.get("methods") or {})
+            if expected_baselines is not None and actual_baselines != set(expected_baselines):
+                reasons.append("baseline_method_set_mismatch")
+        defense_required = canonical_defense_required(
             str(manifest.get("dataset") or ""),
             victim_model,
             str(manifest.get("retriever_backend") or ""),
-        ) and not list((run_root / "defenses").rglob("*_defense_results.json")):
+        )
+        defense_paths = list(
+            (run_root / "defenses").rglob("*_defense_results.json")
+        )
+        if defense_required and not defense_paths:
             reasons.append("representative_defense_missing")
+        if defense_required and len(defense_paths) == 1:
+            defense_report = read_json(defense_paths[0])
+            policies = list(defense_report.get("defenses") or [])
+            expected_policies = {
+                "answer_without_correction",
+                "target_entity_redaction",
+            }
+            actual_policies = {
+                str(row.get("defense")) for row in policies
+            }
+            if actual_policies != expected_policies or any(
+                not row.get("implemented")
+                or row.get("status") != "complete"
+                or not row.get("privacy")
+                or not row.get("utility")
+                or row.get("generic_qa_utility_claimed") is not False
+                for row in policies
+            ):
+                reasons.append("placeholder_or_incomplete_defense")
+        elif defense_required and len(defense_paths) > 1:
+            reasons.append("multiple_defense_reports")
     expected_identity = build_experiment_identity(
         manifest, str(whitelist.get("source_whitelist_hash") or "")
     )
@@ -1098,6 +1319,23 @@ def git_snapshot() -> dict[str, Any]:
     branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     status = _run(["git", "status", "--porcelain"])
     return {"commit": commit, "branch": branch, "dirty": bool(status)}
+
+
+def require_clean_release_commit(
+    snapshot: dict[str, Any] | None = None,
+) -> str:
+    """Return the immutable code commit or reject an unsafe API launch state."""
+
+    state = dict(snapshot or git_snapshot())
+    commit = str(state.get("commit") or "").strip()
+    if not commit:
+        raise RuntimeError("Canonical API launch requires a frozen git commit.")
+    if bool(state.get("dirty")):
+        raise RuntimeError(
+            "Canonical API launch requires a clean worktree; commit the frozen "
+            "protocol before making any victim-model call."
+        )
+    return commit
 
 
 def read_scale() -> str:

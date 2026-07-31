@@ -76,6 +76,10 @@ outputs/
 indexes/
 backups/
 /artifacts/
+# Legacy 运行二进制/响应仅本地保留；审计 manifest 仍进入版本控制。
+/legacy/**/indexes/
+/legacy/**/rag_responses/
+/legacy/pre_response_regroup_20260731/
 
 # 第三方 baseline 官方整仓（参考源码，体积大不入库；自包含参考模块在 MBA/ S2MIA/ RAG_MIA/）
 src/baselines/IA/

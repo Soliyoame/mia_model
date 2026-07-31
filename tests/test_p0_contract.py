@@ -35,13 +35,16 @@ class P0MetricsTests(unittest.TestCase):
         self.assertGreater(upper, 0.0)
         self.assertLess(upper, 0.03)
 
-    def test_low_fpr_curve_has_zero_fpr_endpoint(self) -> None:
+    def test_low_fpr_curve_uses_supported_v20_endpoints(self) -> None:
         rows = [
             {"group": "KB_Member", "pcv_score": 1.0},
             {"group": "True_Non_Member", "pcv_score": 0.0},
         ]
         metrics = summarize_membership_scores(rows)
+        self.assertNotIn("Oracle TPR@0.1%FPR", metrics)
         self.assertIsNotNone(metrics["Oracle TPR@1%FPR"])
+        self.assertIsNotNone(metrics["Oracle TPR@5%FPR"])
+        self.assertEqual(metrics["Attack Advantage"], 1.0)
         self.assertTrue(any(point["FPR"] == 0.0 for point in metrics["threshold_curve"]))
 
     def test_conformal_ties_are_conservative_and_reserve_is_not_test_data(self) -> None:
@@ -96,7 +99,13 @@ class P0CanonicalRunTests(unittest.TestCase):
         write_jsonl([{"source_key": "s1", "group": "KB_Member", "evaluation_eligible": True}],
                     root / "scores" / "toy_pcv_scores_source_coverage.jsonl")
         write_jsonl([{"query_id": "q1", "accepted": True}], root / "stealth_filtered_queries" / "toy.jsonl")
-        response = {"query_id": "q1", "response": "Consistent", "error": None}
+        response = {
+            "query_id": "q1",
+            "response": "Consistent",
+            "error": None,
+            "generator_id": "victim-model",
+            "provider_model_id": "victim-model",
+        }
         write_jsonl([response], root / "rag_responses" / "toy.jsonl")
         write_jsonl([response], root / "llm_only_responses" / "toy.jsonl")
         whitelist_hash = sha256_obj(["s1"])
@@ -120,13 +129,23 @@ class P0CanonicalRunTests(unittest.TestCase):
             "status": "candidate",
             "source": "pipeline (run_pipeline.py)",
             "victim_model": "victim-model",
+            "generator_family": "gemini",
+            "concrete_model": "victim-model",
             "victim_provider": "openai_compatible",
             "victim_endpoint": "https://example.invalid/v1",
             "generator_id": "victim-model",
             "generator_version": "victim-model-v1",
             "retriever_backend": "dense",
-            "retriever_id": "sentence-transformers/all-MiniLM-L6-v2",
+            "retriever_id": "BAAI/bge-base-en-v1.5",
+            "retriever_manifest": {
+                "retriever_backend": "dense",
+                "retriever_id": "BAAI/bge-base-en-v1.5",
+                "embedding_revision": "test-snapshot",
+            },
             "index_manifest_hash": "index-hash",
+            "query_hash": "query-hash",
+            "schedule_hash": "schedule-hash",
+            "reserve_roles_hash": "reserve-roles-hash",
             "scale": "formal",
             "split_seed": 42,
             "git": {"commit": "abc123", "dirty": False},
@@ -185,6 +204,8 @@ class P0CanonicalRunTests(unittest.TestCase):
             "query_id": "q1",
             "response": "Consistent",
             "error": None,
+            "generator_id": "victim-model",
+            "provider_model_id": "victim-model",
         }], root / "llm_only_responses" / "toy_llm_only_responses.jsonl")
         whitelist_hash = sha256_obj(["s1"])
         write_json({
@@ -203,6 +224,8 @@ class P0CanonicalRunTests(unittest.TestCase):
             "status": "candidate",
             "source": "pipeline (run_pipeline.py)",
             "victim_model": "victim-model",
+            "generator_family": "gemini",
+            "concrete_model": "victim-model",
             "victim_provider": "openai_compatible",
             "victim_endpoint": "https://example.invalid/v1",
             "generator_id": "victim-model",
@@ -210,6 +233,7 @@ class P0CanonicalRunTests(unittest.TestCase):
             "retriever_backend": None,
             "retriever_id": None,
             "index_manifest_hash": None,
+            "query_hash": "query-hash",
             "scale": "formal",
             "split_seed": 42,
             "git": {"commit": "abc123", "dirty": False},
@@ -267,6 +291,22 @@ class P0CanonicalRunTests(unittest.TestCase):
             manifest["archive"]["inventory"] = inventory
             manifest["archive"]["inventory_hash"] = sha256_obj(inventory)
             self.assertTrue(canonical_eligibility(manifest, root)["eligible"])
+
+    def test_canonical_gate_rejects_missing_actual_provider_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = self._eligible_fixture(root)
+            write_jsonl([{
+                "query_id": "q1",
+                "response": "Consistent",
+                "error": None,
+            }], root / "rag_responses" / "toy.jsonl")
+            inventory = artifact_inventory(root)
+            manifest["archive"]["inventory"] = inventory
+            manifest["archive"]["inventory_hash"] = sha256_obj(inventory)
+            result = canonical_eligibility(manifest, root)
+            self.assertFalse(result["eligible"])
+            self.assertIn("rag_responses_incomplete", result["reasons"])
 
     def test_main_candidate_rejects_llm_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

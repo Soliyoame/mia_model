@@ -248,17 +248,13 @@ def main() -> int:
     if suite.get("status") != "canonical" or suite.get("missing_cells"):
         raise RuntimeError("Canonical release requires all preregistered suite cells")
     quality_gate_path = resolve_path("outputs/diagnostics/quality_gate_report.json")
-    if not quality_gate_path.is_file():
-        raise FileNotFoundError("Canonical release requires outputs/diagnostics/quality_gate_report.json")
-    quality_gate = read_json(quality_gate_path)
-    if not bool(quality_gate.get("quality_gate_passed")):
-        raise RuntimeError("Canonical release requires all human-audit quality gates to pass")
+    quality_gate = read_json(quality_gate_path) if quality_gate_path.is_file() else {}
     main_cells = [
         cell for cell in suite.get("expected_cells", [])
         if str(cell.get("run_role")) == "main"
     ]
-    if len(main_cells) != 24:
-        raise RuntimeError(f"Canonical v19 release requires 24 main cells, found {len(main_cells)}")
+    if len(main_cells) != 9:
+        raise RuntimeError(f"Canonical v20 release requires 9 RAG main cells, found {len(main_cells)}")
     cells: dict[str, Any] = {}
     for cell in main_cells:
         dataset = str(cell["dataset"])
@@ -282,12 +278,20 @@ def main() -> int:
             "path": str(suite_path.resolve()),
             "sha256": sha256_file(suite_path),
         },
-        "quality_gate": {
-            "path": str(quality_gate_path.resolve()),
-            "size": quality_gate_path.stat().st_size,
-            "sha256": sha256_file(quality_gate_path),
-            "audit_binding_hash": quality_gate.get("audit_binding_hash"),
-        },
+        "quality_gate": (
+            {
+                "status": "historical_template_not_canonical_requirement",
+                "path": str(quality_gate_path.resolve()),
+                "size": quality_gate_path.stat().st_size,
+                "sha256": sha256_file(quality_gate_path),
+                "audit_binding_hash": quality_gate.get("audit_binding_hash"),
+            }
+            if quality_gate_path.is_file()
+            else {
+                "status": "not_required",
+                "reason": "v20 uses automated validator and stance parse-rate gates",
+            }
+        ),
         "cells": cells,
         "cell_count": len(cells),
         "cell_binding_hash": sha256_obj({

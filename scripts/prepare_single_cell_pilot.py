@@ -154,10 +154,10 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional exact pilot output directory.",
     )
-    parser.add_argument("--pilot-id", default="pilot_qwen3_5_397b_dense")
-    parser.add_argument("--generator-id", default="Qwen3.5-397B")
+    parser.add_argument("--pilot-id", default="llama-3.1-70b-instruct-pilot")
+    parser.add_argument("--generator-id", default="meta/llama-3.1-70b-instruct")
     parser.add_argument(
-        "--retriever-id", default="sentence-transformers/all-MiniLM-L6-v2"
+        "--retriever-id", default="BAAI/bge-base-en-v1.5"
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--member-sources", type=int, default=10)
@@ -199,9 +199,15 @@ def main() -> int:
     query_ids = [str(row["query_id"]) for row in selected_rows]
     query_texts = [str(row["query"]) for row in selected_rows]
     source_total = sum(source_counts.values())
-    rag_calls = len(selected_rows)
-    llm_only_calls = len(selected_rows)
-    total_calls = rag_calls + llm_only_calls
+    system_calls = {
+        "bge_dense": len(selected_rows),
+        "bm25": len(selected_rows),
+        "hybrid_reranker": len(selected_rows),
+        "matched_llm_only": len(selected_rows),
+        "oracle_context": len(selected_rows),
+        "random_distractor": len(selected_rows),
+    }
+    total_calls = sum(system_calls.values())
     max_output_tokens = int(config.get("generation", {}).get("max_tokens", 512))
 
     output_dir = ensure_dir(
@@ -246,11 +252,7 @@ def main() -> int:
         "query_text_uniqueness_enforced": True,
         "per_source_query_text_uniqueness_enforced": True,
         "global_query_text_uniqueness_enforced": True,
-        "calls": {
-            "rag": rag_calls,
-            "matched_llm_only": llm_only_calls,
-            "total": total_calls,
-        },
+        "calls": {**system_calls, "total": total_calls},
         "formal_cell_reference": formal_cell_reference(pairs_per_source),
         "token_budget": {
             "max_output_tokens_per_call": max_output_tokens,
@@ -263,13 +265,16 @@ def main() -> int:
             "output_usd_per_million_tokens": args.output_price_usd_per_million_tokens,
             "output_only_hard_cap_usd": output_only_hard_cap_usd,
             "total_cost_formula": (
-                "(rag_input_tokens + llm_only_input_tokens) * input_price / 1e6 "
+                "sum(system_input_tokens) * input_price / 1e6 "
                 "+ output_tokens * output_price / 1e6"
             ),
             "unavailable_reason": (
                 None
                 if pricing_available
-                else "The Qwen3.5-397B endpoint/provider token prices are not frozen."
+                else (
+                    f"The endpoint/provider token prices for {args.generator_id} "
+                    "are not frozen."
+                )
             ),
         },
         "selected_source_keys": selected_source_keys,

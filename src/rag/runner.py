@@ -28,11 +28,17 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
-from .retriever import RagRetriever
+from .retriever import RagRetriever, RetrievedChunk
+from .context_controls import GroundTruthContextController
+from ..llm.response_validation import (
+    generator_response_error,
+    response_record_is_success,
+)
 from ..llm.victim_client import VictimClient
 from ..utils.hash import sha256_file, sha256_obj
-from ..utils.io import read_jsonl, write_json, write_jsonl, write_jsonl_atomic
+from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl, write_jsonl_atomic
 from ..utils.logger import get_logger
+from ..utils.run_context import git_snapshot
 
 
 LOGGER = get_logger(__name__)
@@ -55,8 +61,6 @@ def is_retryable_generator_error(exc: Exception) -> bool:
         "unexpected_eof",
         "eof occurred",
         "temporarily unavailable",
-        "http 403",
-        "authorization failed",
         "http 408",
         "http 425",
         "http 429",
@@ -67,13 +71,16 @@ def is_retryable_generator_error(exc: Exception) -> bool:
         "http 520",
         "http 522",
         "http 524",
+        '"code": 429',
+        "rate limit",
+        "resource_exhausted",
     )
     return any(marker in message for marker in markers)
 
 
 def response_is_success(row: dict[str, Any]) -> bool:
-    """只有无错误且回答非空的记录才是有效模型响应。"""
-    return bool(row.get("query_id") and not row.get("error") and str(row.get("response") or "").strip())
+    """统一检查错误文本、显式 error 和 provider 实际模型身份。"""
+    return response_record_is_success(row)
 
 
 def compact_response_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -351,6 +358,20 @@ def run_rag_and_llm_only(
     pairs_per_source: int | None = None,
     generator_id: str | None = None,
     generator_version: str | None = None,
+    generator_family: str | None = None,
+    concrete_model: str | None = None,
+    code_commit: str | None = None,
+    retriever_override: Any | None = None,
+    context_control: str = "retrieved",
+    retriever_identity_override: str | None = None,
+    ground_truth_source_store_path: str | Path | None = None,
+    schedule_path: str | Path | None = None,
+    schedule_hash: str | None = None,
+    schedule_cell: str | None = None,
+    schedule_block_id: str | None = None,
+    rate_limiter_override: Any | None = None,
+    schedule_ordinals_override: dict[str, int] | None = None,
+    schedule_block_query_ids_override: set[str] | None = None,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -406,8 +427,102 @@ def run_rag_and_llm_only(
     variant = str(variant_id or "").strip()
     if not variant:
         raise ValueError("variant_id must be non-empty")
+    normalized_context_control = str(context_control or "retrieved").casefold()
+    if normalized_context_control not in {"retrieved", "oracle", "random"}:
+        raise ValueError(f"Unknown context_control: {context_control!r}")
+    if normalized_context_control != "retrieved" and ground_truth_source_store_path is None:
+        raise ValueError(
+            "Oracle/Random controls require ground_truth_source_store_path"
+        )
+    if schedule_path is not None:
+        actual_schedule_hash = sha256_file(schedule_path)
+        if schedule_hash and actual_schedule_hash != schedule_hash:
+            raise RuntimeError("Execution schedule hash mismatch")
+        schedule_hash = actual_schedule_hash
     rag_output = Path(rag_output_path)
     llm_output = Path(llm_output_path)
+    # API 调用前加载 Retriever，并冻结 resume 所需的完整实验身份。
+    retriever = None
+    if run_rag:
+        retriever = retriever_override or RagRetriever(index_dir)
+    context_controller = None
+    if run_rag and normalized_context_control != "retrieved":
+        base_retriever = getattr(retriever, "dense", retriever)
+        context_controller = GroundTruthContextController(
+            source_store_path=ground_truth_source_store_path,
+            dense_retriever=base_retriever,
+        )
+    index_manifest_path = Path(index_dir) / "index_manifest.json"
+    index_manifest_hash = None
+    if retriever is not None:
+        index_manifest_hash = getattr(retriever, "index_manifest_hash", None)
+        if not index_manifest_hash:
+            index_manifest_hash = (
+                sha256_file(index_manifest_path)
+                if index_manifest_path.is_file()
+                else sha256_obj(getattr(retriever, "manifest", {}))
+            )
+    effective_model = str(concrete_model or generator_id or "").strip()
+    resume_identity = {
+        "dataset": dataset,
+        "generator_family": str(generator_family or "").strip().casefold(),
+        "concrete_model": effective_model,
+        "generator_version": str(generator_version or "").strip(),
+        "retriever_id": (
+            str(
+                retriever_identity_override
+                or getattr(retriever, "manifest", {}).get("retriever_id")
+                or ""
+            )
+            if retriever is not None
+            else "none"
+        ),
+        "retriever_manifest": (
+            getattr(retriever, "manifest", {}) if retriever is not None else None
+        ),
+        "index_manifest_hash": index_manifest_hash,
+        "query_hash": sha256_file(queries_path),
+        "benchmark_hash": sha256_file(benchmark_path),
+        "code_commit": str(
+            code_commit
+            or (
+                git_snapshot().get("commit")
+                if generator_family and effective_model
+                else ""
+            )
+            or ""
+        ),
+        "ground_truth_source_store_hash": (
+            sha256_file(ground_truth_source_store_path)
+            if ground_truth_source_store_path is not None
+            else None
+        ),
+        "schedule_hash": str(schedule_hash or ""),
+        "schedule_cell": str(schedule_cell or ""),
+    }
+    identity_targets: list[tuple[Path, Path]] = []
+    if run_rag:
+        identity_targets.append(
+            (rag_output.with_suffix(".identity.json"), rag_output)
+        )
+    if run_llm_only:
+        identity_targets.append(
+            (llm_output.with_suffix(".identity.json"), llm_output)
+        )
+    for identity_path, response_path in identity_targets:
+        if identity_path.exists():
+            existing_identity = read_json(identity_path)
+            if existing_identity != resume_identity:
+                raise RuntimeError(
+                    f"Experiment identity mismatch for {identity_path}: "
+                    f"expected={resume_identity}, actual={existing_identity}"
+                )
+        elif response_path.exists():
+            raise RuntimeError(
+                f"Refusing identity-free overwrite/resume for existing response file: {response_path}"
+            )
+        ensure_dir(identity_path.parent)
+        write_json(resume_identity, identity_path)
     # done_rag / done_llm：已经成功跑完的查询 id 集合(用于跳过)。
     done_rag = set()
     done_llm = set()
@@ -424,6 +539,40 @@ def run_rag_and_llm_only(
         done_llm = _successful_query_ids(llm_output) if run_llm_only else set()
         append_rag = run_rag and rag_output.exists()
         append_llm = run_llm_only and llm_output.exists()
+    existing_fingerprints: set[str] = set()
+    for response_path, enabled in (
+        (rag_output, run_rag),
+        (llm_output, run_llm_only),
+    ):
+        if enabled and response_path.is_file():
+            existing_fingerprints.update(
+                str(row["system_fingerprint"])
+                for row in read_jsonl(response_path)
+                if response_is_success(row) and row.get("system_fingerprint")
+            )
+    if len(existing_fingerprints) > 1:
+        raise RuntimeError(
+            f"Provider system fingerprint drift in existing suite: "
+            f"{sorted(existing_fingerprints)}"
+        )
+    fingerprint_state = {
+        "value": next(iter(existing_fingerprints), None)
+    }
+    fingerprint_lock = threading.Lock()
+
+    def validate_fingerprint(metadata: dict[str, Any]) -> None:
+        value = metadata.get("system_fingerprint")
+        if value is None:
+            return
+        fingerprint = str(value)
+        with fingerprint_lock:
+            if fingerprint_state["value"] is None:
+                fingerprint_state["value"] = fingerprint
+            elif fingerprint_state["value"] != fingerprint:
+                raise RuntimeError(
+                    "Provider system fingerprint drift: "
+                    f"{fingerprint_state['value']} -> {fingerprint}"
+                )
 
     # 把基准文件读成"audit_id → 整行"的字典，便于按 id 快速查目标文档。
     benchmark = {row["audit_id"]: row for row in read_jsonl(benchmark_path)}
@@ -431,8 +580,7 @@ def run_rag_and_llm_only(
         str(row.get("source_key") or row.get("source_id") or row.get("audit_id"))
         for row in benchmark.values()
     }
-    # 仅 RAG 路需要加载索引；matched LLM-only 对照不触碰检索器。
-    retriever = RagRetriever(index_dir) if run_rag else None
+    # matched LLM-only 对照不触碰检索器。
     created_at = datetime.now(timezone.utc).isoformat()
 
     # 限速方式二选一：
@@ -440,7 +588,15 @@ def run_rag_and_llm_only(
     #     全局速率恒 ≤ RPM；配合 max_workers>1，某条 call 卡住时别的线程仍能发满 RPM。
     #     此时不再用 per-call 固定 sleep(令牌桶已负责匀速)。
     #   · requests_per_minute <= 0 (默认) → 沿用旧行为：每条 call 后固定 sleep request_interval_seconds。
-    token_bucket = TokenBucket(requests_per_minute) if requests_per_minute and requests_per_minute > 0 else None
+    token_bucket = (
+        rate_limiter_override
+        if rate_limiter_override is not None
+        else (
+            TokenBucket(requests_per_minute)
+            if requests_per_minute and requests_per_minute > 0
+            else None
+        )
+    )
     # 用令牌桶时关掉 post-call 固定 sleep(避免双重限速把速率压到 RPM 以下)。
     post_sleep = 0.0 if token_bucket is not None else request_interval_seconds
 
@@ -464,16 +620,61 @@ def run_rag_and_llm_only(
                 f"{query_row.get('query_id')}"
             )
         accepted_queries.append(query_row)
+    full_accepted_query_count = len(accepted_queries)
+    if schedule_path is not None:
+        if not schedule_cell:
+            raise ValueError("schedule_cell is required when schedule_path is set")
+        ordinals: dict[str, int] = dict(schedule_ordinals_override or {})
+        selected_block_query_ids: set[str] = set(
+            schedule_block_query_ids_override or set()
+        )
+        if schedule_ordinals_override is None:
+            for schedule_row in read_jsonl(schedule_path):
+                if (
+                    str(schedule_row.get("dataset")) == dataset
+                    and str(schedule_row.get("cell")) == str(schedule_cell)
+                ):
+                    query_id = str(schedule_row.get("query_id") or "")
+                    if query_id in ordinals:
+                        raise RuntimeError(
+                            f"Duplicate schedule identity for "
+                            f"{dataset}/{schedule_cell}/{query_id}"
+                        )
+                    ordinals[query_id] = int(schedule_row["ordinal"])
+                    if (
+                        schedule_block_id is not None
+                        and str(schedule_row.get("block_id")) == schedule_block_id
+                    ):
+                        selected_block_query_ids.add(query_id)
+        accepted_ids = {str(row["query_id"]) for row in accepted_queries}
+        if set(ordinals) != accepted_ids:
+            raise RuntimeError(
+                f"Schedule/query identity mismatch for {dataset}/{schedule_cell}"
+            )
+        accepted_queries = [
+            {**row, "schedule_ordinal": ordinals[str(row["query_id"])]}
+            for row in accepted_queries
+            if schedule_block_id is None
+            or str(row["query_id"]) in selected_block_query_ids
+        ]
+        if schedule_block_id is not None and len(accepted_queries) != 6:
+            raise RuntimeError(
+                f"Schedule block {schedule_block_id} must contain six queries "
+                f"for {dataset}/{schedule_cell}"
+            )
+        accepted_queries.sort(key=lambda row: int(row["schedule_ordinal"]))
     fixed_budget = (
         validate_fixed_query_budget(
             accepted_queries,
             pairs_per_source,
             expected_source_keys=benchmark_source_keys,
         )
-        if pairs_per_source is not None
+        if pairs_per_source is not None and schedule_block_id is None
         else {"enabled": False}
     )
     fixed_budget["enabled"] = pairs_per_source is not None
+    if schedule_block_id is not None:
+        fixed_budget["deferred_to_full_schedule_finalize"] = True
     pending: list[dict[str, Any]] = []
     for query_row in accepted_queries:
         qid = str(query_row["query_id"])
@@ -498,6 +699,13 @@ def run_rag_and_llm_only(
         # 按 audit_id 找到这条查询对应的样本，进而拿到"目标文档 id"。
         sample = benchmark.get(str(query_row["audit_id"]), {})
         target_doc_id = str(sample.get("doc_id", ""))
+        target_source_key = str(
+            sample.get("source_key")
+            or query_row.get("source_key")
+            or sample.get("source_id")
+            or query_row.get("source_id")
+            or target_doc_id
+        )
         rag_row: dict[str, Any] | None = None
         llm_row: dict[str, Any] | None = None
         fails = 0
@@ -505,11 +713,30 @@ def run_rag_and_llm_only(
         # —— RAG 模式：只有这条查询的 RAG 还没成功时才跑 ——
         if run_rag and query_id not in done_rag:
             assert retriever is not None
-            retrieved = retriever.retrieve(query, top_k=top_k)
+            if normalized_context_control == "retrieved":
+                retrieved = retriever.retrieve(query, top_k=top_k)
+            else:
+                assert context_controller is not None
+                oracle_chunks = context_controller.oracle(query, target_source_key)
+                if normalized_context_control == "oracle":
+                    retrieved = oracle_chunks
+                else:
+                    retrieved = context_controller.random_matched(
+                        query_id=query_id,
+                        target_source_key=target_source_key,
+                        oracle_chunks=oracle_chunks,
+                    )
             retrieved_doc_ids = [item.doc_id for item in retrieved]
+            retrieved_chunk_ids = [item.chunk_id for item in retrieved]
+            retrieved_source_keys = [
+                item.metadata.get("source_key") for item in retrieved
+            ]
             retrieval_scores = [item.score for item in retrieved]
+            retrieval_stage_scores = [
+                item.metadata.get("retrieval_stage_scores") for item in retrieved
+            ]
             contexts = [item.text for item in retrieved]
-            response, error = _call_generator(
+            response, error, response_metadata = _call_generator(
                 client,
                 build_rag_prompt(query, contexts),
                 temperature=temperature,
@@ -521,7 +748,12 @@ def run_rag_and_llm_only(
                 retry_until_success=retry_until_success,
                 retry_cooldown_seconds=retry_cooldown_seconds,
                 before_attempt=rate_gate,
+                return_metadata=True,
+                expected_model_id=generator_id,
+                require_provider_model_id=bool(generator_id),
             )
+            if error is None:
+                validate_fingerprint(response_metadata)
             # 每次请求后按配置歇一会儿(限速)；用令牌桶时 post_sleep=0(桶已限速)。
             _sleep_between_requests(post_sleep)
             if error:
@@ -546,21 +778,37 @@ def run_rag_and_llm_only(
                 "entity_type": query_row.get("entity_type"),
                 "response": response,
                 "retrieved_doc_ids": retrieved_doc_ids,
+                "retrieved_chunk_ids": retrieved_chunk_ids,
+                "retrieved_source_keys": retrieved_source_keys,
                 "retrieval_scores": retrieval_scores,
+                "retrieval_stage_scores": retrieval_stage_scores,
                 # 记录"目标文档是否被检索到"，是分析检索是否命中的重要指标。
                 "target_doc_retrieved": bool(target_doc_id and target_doc_id in retrieved_doc_ids),
+                "target_source_retrieved": bool(
+                    target_source_key
+                    and target_source_key in set(retrieved_source_keys)
+                ),
+                "schedule_ordinal": query_row.get("schedule_ordinal"),
+                "schedule_hash": schedule_hash,
                 "generation_config": {"top_k": top_k, "temperature": temperature, "max_tokens": max_tokens},
                 "error": error,
                 "created_at": created_at,
+                **response_metadata,
+                "generator_family": generator_family,
+                "concrete_model": effective_model,
                 "generator_id": generator_id,
                 "generator_version": generator_version,
                 "retriever_backend": getattr(retriever, "retriever_backend", None),
-                "retriever_id": getattr(retriever, "manifest", {}).get("retriever_id"),
+                "retriever_id": (
+                    retriever_identity_override
+                    or getattr(retriever, "manifest", {}).get("retriever_id")
+                ),
+                "context_control": normalized_context_control,
             }
 
         # —— LLM-only 模式：该查询 LLM-only 还没成功、且未关闭该路时才跑 ——
         if run_llm_only and query_id not in done_llm:
-            response, error = _call_generator(
+            response, error, response_metadata = _call_generator(
                 client,
                 build_llm_only_prompt(query),
                 temperature=temperature,
@@ -572,7 +820,12 @@ def run_rag_and_llm_only(
                 retry_until_success=retry_until_success,
                 retry_cooldown_seconds=retry_cooldown_seconds,
                 before_attempt=rate_gate,
+                return_metadata=True,
+                expected_model_id=generator_id,
+                require_provider_model_id=bool(generator_id),
             )
+            if error is None:
+                validate_fingerprint(response_metadata)
             _sleep_between_requests(post_sleep)
             if error:
                 fails += 1
@@ -583,6 +836,9 @@ def run_rag_and_llm_only(
             )
             llm_row["generator_id"] = generator_id
             llm_row["generator_version"] = generator_version
+            llm_row["generator_family"] = generator_family
+            llm_row["concrete_model"] = effective_model
+            llm_row.update(response_metadata)
         return rag_row, llm_row, fails
 
     rag_rows: list[dict[str, Any]] = []
@@ -630,15 +886,29 @@ def run_rag_and_llm_only(
     llm_stats = compact_response_file(llm_output) if run_llm_only else {
         "input_rows": 0, "unique_queries": 0, "duplicates_removed": 0, "succeeded": 0, "failed": 0,
     }
-    planned = len({str(row["query_id"]) for row in accepted_queries})
-    index_manifest_path = Path(index_dir) / "index_manifest.json"
-    index_manifest_hash = None
-    if retriever is not None:
-        index_manifest_hash = (
-            sha256_file(index_manifest_path)
-            if index_manifest_path.is_file()
-            else sha256_obj(getattr(retriever, "manifest", {}))
-        )
+    planned = full_accepted_query_count
+    metadata_rows: list[dict[str, Any]] = []
+    for response_path, enabled in (
+        (rag_output, run_rag),
+        (llm_output, run_llm_only),
+    ):
+        if enabled and response_path.is_file():
+            metadata_rows.extend(read_jsonl(response_path))
+    successful_metadata_rows = [
+        row
+        for row in metadata_rows
+        if response_is_success(row)
+    ]
+    call_times = sorted(
+        str(row["called_at"])
+        for row in successful_metadata_rows
+        if row.get("called_at")
+    )
+    provider_model_ids = sorted({
+        str(row["provider_model_id"])
+        for row in successful_metadata_rows
+        if row.get("provider_model_id")
+    })
 
     manifest = {
         "dataset": dataset,
@@ -646,17 +916,69 @@ def run_rag_and_llm_only(
         "query_budget": planned,
         "query_budget_per_source": fixed_budget.get("queries_per_source"),
         "fixed_budget": fixed_budget,
+        "generator_family": generator_family,
+        "concrete_model": effective_model,
         "generator_id": generator_id,
         "generator_version": generator_version,
         "retriever_backend": (
             getattr(retriever, "retriever_backend", None) if retriever is not None else None
         ),
         "retriever_id": (
-            getattr(retriever, "manifest", {}).get("retriever_id") if retriever is not None else None
+            (
+                retriever_identity_override
+                or getattr(retriever, "manifest", {}).get("retriever_id")
+            )
+            if retriever is not None
+            else None
         ),
+        "context_control": normalized_context_control,
+        "ground_truth_source_store_hash": resume_identity[
+            "ground_truth_source_store_hash"
+        ],
+        "schedule_hash": resume_identity["schedule_hash"],
+        "schedule_cell": resume_identity["schedule_cell"],
         "index_manifest_hash": index_manifest_hash,
         "queries_path": str(queries_path),
         "queries_hash": sha256_file(queries_path),
+        "query_hash": resume_identity["query_hash"],
+        "benchmark_hash": resume_identity["benchmark_hash"],
+        "code_commit": resume_identity["code_commit"],
+        "experiment_identity": resume_identity,
+        "provider_response_metadata": {
+            "actual_model_ids": provider_model_ids,
+            "request_ids_present": sum(
+                bool(row.get("provider_request_id"))
+                for row in successful_metadata_rows
+            ),
+            "system_fingerprints": sorted({
+                str(row["system_fingerprint"])
+                for row in successful_metadata_rows
+                if row.get("system_fingerprint")
+            }),
+            "first_call_at": call_times[0] if call_times else None,
+            "last_call_at": call_times[-1] if call_times else None,
+            "input_tokens_total": sum(
+                int(row.get("input_tokens") or 0)
+                for row in successful_metadata_rows
+            ),
+            "output_tokens_total": sum(
+                int(row.get("output_tokens") or 0)
+                for row in successful_metadata_rows
+            ),
+            "finish_reasons": sorted({
+                str(row["finish_reason"])
+                for row in successful_metadata_rows
+                if row.get("finish_reason") is not None
+            }),
+            "latency_ms_total": sum(
+                float(row.get("latency_ms") or 0.0)
+                for row in successful_metadata_rows
+            ),
+            "retry_count_total": sum(
+                int(row.get("retry_count") or 0)
+                for row in successful_metadata_rows
+            ),
+        },
         "source_whitelist_hash": sha256_obj(sorted({
             str(row.get("source_key") or row.get("source_id") or row.get("doc_id"))
             for row in accepted_queries
@@ -719,7 +1041,10 @@ def _call_generator(
     retry_until_success: bool = False,
     retry_cooldown_seconds: float = 300.0,
     before_attempt: Callable[[], None] | None = None,
-) -> tuple[str, str | None]:
+    return_metadata: bool = False,
+    expected_model_id: str | None = None,
+    require_provider_model_id: bool = False,
+) -> Any:
     """带重试调用 generator。
 
     中文说明：封装"调用一次大模型生成回答"的逻辑，并在失败时按指数退避自动重试。
@@ -732,24 +1057,145 @@ def _call_generator(
         retry_backoff_base/retry_backoff_max: 控制短重试等待时间。
         retry_until_success: API/网络错误是否在短重试耗尽后继续长冷却重试。
         retry_cooldown_seconds: 长冷却时间。
+        expected_model_id: 冻结的具体模型 ID；提供后必须与 provider 实际返回值一致。
+        require_provider_model_id: 是否拒绝缺失 provider 实际模型 ID 的响应。
     返回:
-        (response, error)：成功时 error 为 None；多次失败后返回 ("", 错误信息)。
+        (response, error, metadata)：成功时 error 为 None。
     """
     retry_cycle = 0
     while True:
         last_exception: Exception | None = None
+        last_response = ""
+        last_metadata = {
+            "provider_model_id": None,
+            "provider_request_id": None,
+            "system_fingerprint": None,
+            "called_at": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "finish_reason": None,
+            "latency_ms": None,
+            "retry_count": 0,
+        }
         # 总共尝试 retries+1 次(第 1 次 + retries 次短重试)。
         for attempt in range(retries + 1):
+            last_response = ""
+            last_metadata = {
+                "provider_model_id": None,
+                "provider_request_id": None,
+                "system_fingerprint": None,
+                "called_at": None,
+                "input_tokens": None,
+                "output_tokens": None,
+                "finish_reason": None,
+                "latency_ms": None,
+                "retry_count": 0,
+            }
             try:
                 if before_attempt is not None:
                     before_attempt()
-                response = client.generate(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
-                if not str(response or "").strip():
-                    raise ValueError("empty_response")
-                return str(response), None
+                generate_with_metadata = getattr(
+                    client,
+                    "generate_with_metadata",
+                    None,
+                )
+                if callable(generate_with_metadata):
+                    result = generate_with_metadata(
+                        prompt,
+                        temperature=temperature,
+                        timeout=timeout,
+                        max_tokens=max_tokens,
+                    )
+                    response = getattr(result, "content", None)
+                    if response is None and isinstance(result, dict):
+                        response = result.get("content")
+                    metadata = {
+                        "provider_model_id": (
+                            result.get("provider_model_id")
+                            if isinstance(result, dict)
+                            else getattr(result, "provider_model_id", None)
+                        ),
+                        "provider_request_id": (
+                            result.get("provider_request_id")
+                            if isinstance(result, dict)
+                            else getattr(result, "provider_request_id", None)
+                        ),
+                        "system_fingerprint": (
+                            result.get("system_fingerprint")
+                            if isinstance(result, dict)
+                            else getattr(result, "system_fingerprint", None)
+                        ),
+                        "called_at": (
+                            result.get("called_at")
+                            if isinstance(result, dict)
+                            else getattr(result, "called_at", None)
+                        ),
+                        "input_tokens": (
+                            result.get("input_tokens")
+                            if isinstance(result, dict)
+                            else getattr(result, "input_tokens", None)
+                        ),
+                        "output_tokens": (
+                            result.get("output_tokens")
+                            if isinstance(result, dict)
+                            else getattr(result, "output_tokens", None)
+                        ),
+                        "finish_reason": (
+                            result.get("finish_reason")
+                            if isinstance(result, dict)
+                            else getattr(result, "finish_reason", None)
+                        ),
+                        "latency_ms": (
+                            result.get("latency_ms")
+                            if isinstance(result, dict)
+                            else getattr(result, "latency_ms", None)
+                        ),
+                        "retry_count": int(
+                            (
+                                result.get("retry_count", 0)
+                                if isinstance(result, dict)
+                                else getattr(result, "retry_count", 0)
+                            )
+                            or 0
+                        )
+                        + attempt
+                        + retry_cycle * (retries + 1),
+                    }
+                else:
+                    response = client.generate(
+                        prompt,
+                        temperature=temperature,
+                        timeout=timeout,
+                        max_tokens=max_tokens,
+                    )
+                    metadata = {
+                        "provider_model_id": None,
+                        "provider_request_id": None,
+                        "system_fingerprint": None,
+                        "called_at": datetime.now(timezone.utc).isoformat(),
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "finish_reason": None,
+                        "latency_ms": None,
+                        "retry_count": attempt
+                        + retry_cycle * (retries + 1),
+                    }
+                last_response = str(response or "")
+                last_metadata = metadata
+                validation_error = generator_response_error(
+                    last_response,
+                    provider_model_id=metadata.get("provider_model_id"),
+                    expected_model_id=expected_model_id,
+                    require_provider_model_id=require_provider_model_id,
+                )
+                if validation_error:
+                    raise RuntimeError(validation_error)
+                if return_metadata:
+                    return last_response, None, metadata
+                return last_response, None
             except Exception as exc:  # noqa: BLE001
                 last_exception = exc
-                if attempt >= retries:
+                if attempt >= retries or not is_retryable_generator_error(exc):
                     break
                 delay = _retry_delay(attempt, retry_backoff_base, retry_backoff_max)
                 LOGGER.warning(
@@ -761,7 +1207,16 @@ def _call_generator(
         assert last_exception is not None
         if not retry_until_success or not is_retryable_generator_error(last_exception):
             LOGGER.warning("Generator call failed after short retries error=%s", str(last_exception))
-            return "", str(last_exception)
+            failure_metadata = {
+                **last_metadata,
+                "called_at": (
+                    last_metadata.get("called_at")
+                    or datetime.now(timezone.utc).isoformat()
+                ),
+            }
+            if return_metadata:
+                return last_response, str(last_exception), failure_metadata
+            return last_response, str(last_exception)
         retry_cycle += 1
         delay = max(0.0, float(retry_cooldown_seconds))
         LOGGER.warning(
@@ -818,7 +1273,6 @@ def _successful_query_ids(path: str | Path) -> set[Any]:
         return set()
     done: set[Any] = set()
     for row in read_jsonl(p):
-        # 三个条件都满足才算成功：有 id、无错误、回答去掉空白后非空。
-        if row.get("query_id") and not row.get("error") and str(row.get("response") or "").strip():
+        if response_is_success(row):
             done.add(row["query_id"])
     return done

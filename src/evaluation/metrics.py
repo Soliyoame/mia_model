@@ -270,6 +270,7 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
             "Oracle Accuracy@best": None,
             "Oracle TPR@1%FPR": None,
             "Oracle TPR@5%FPR": None,
+            "Attack Advantage": None,
             "Accuracy@best": None,
             "TPR@1%FPR": None,
             "TPR@5%FPR": None,
@@ -282,6 +283,10 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     best_acc = max((float(r["Accuracy"]) for r in curve), default=0.0)
     oracle_tpr_1 = tpr_at_fpr(curve, 0.01)
     oracle_tpr_5 = tpr_at_fpr(curve, 0.05)
+    attack_advantage = max(
+        (float(row["TPR"]) - float(row["FPR"]) for row in curve),
+        default=0.0,
+    )
     return {
         "status": "available",
         "score_key": score_key,
@@ -290,6 +295,7 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
         "Oracle Accuracy@best": best_acc,
         "Oracle TPR@1%FPR": oracle_tpr_1,
         "Oracle TPR@5%FPR": oracle_tpr_5,
+        "Attack Advantage": attack_advantage,
         # 旧字段保留兼容，但新报告必须显示 Oracle 前缀。
         "Accuracy@best": best_acc,
         "TPR@1%FPR": oracle_tpr_1,
@@ -342,15 +348,26 @@ def summarize_conformal_membership(
     alpha: float = 0.01,
     calibration_group: str = "Reserve",
     positive_group: str = "KB_Member",
+    calibration_source_keys: set[str] | None = None,
 ) -> dict[str, Any]:
-    """在独立 Reserve 上冻结 conformal 规则，再评估测试 TPR/FPR。"""
+    """做 Retriever 冻结后的经验非成员校准。
+
+    ``calibration_source_keys`` 用于永久排除 Pilot 使用的 Reserve。该校准是
+    secondary empirical calibration；本函数不声称独立校准覆盖保证。
+    """
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0,1): {alpha}")
-    reserve_scores = [
-        float(row.get(score_key, 0.0))
+    reserve_rows = [
+        row
         for row in rows
         if str(row.get("group")) == calibration_group
+        and (
+            calibration_source_keys is None
+            or str(row.get("source_key") or row.get("source_id"))
+            in calibration_source_keys
+        )
     ]
+    reserve_scores = [float(row.get(score_key, 0.0)) for row in reserve_rows]
     eval_rows = [row for row in rows if str(row.get("group")) != calibration_group]
     if not reserve_scores:
         return {
@@ -387,6 +404,10 @@ def summarize_conformal_membership(
         "positive_count": pos_total,
         "negative_count": negative_total,
         "min_attainable_p": 1.0 / (len(reserve_scores) + 1.0),
+        "calibration_scope": "post_retriever_frozen_nonmember_calibration",
+        "retriever_selection_used_reserve_recall": True,
+        "retriever_selection_used_attack_scores": False,
+        "pilot_reserve_excluded_from_calibration": calibration_source_keys is not None,
     }
 
 
@@ -443,15 +464,28 @@ def bootstrap_conformal_ci(
     calibration_group: str = "Reserve",
     n_bootstrap: int = 2000,
     seed: int = 42,
+    calibration_source_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """同时重采样 Reserve 与测试组，传播 conformal 阈值的不确定性。"""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row.get("group")), []).append(row)
-    reserve = grouped.get(calibration_group, [])
+    reserve = [
+        row
+        for row in grouped.get(calibration_group, [])
+        if (
+            calibration_source_keys is None
+            or str(row.get("source_key") or row.get("source_id"))
+            in calibration_source_keys
+        )
+    ]
     eval_groups = {group: values for group, values in grouped.items() if group != calibration_group}
     point = summarize_conformal_membership(
-        rows, score_key=score_key, alpha=alpha, calibration_group=calibration_group
+        rows,
+        score_key=score_key,
+        alpha=alpha,
+        calibration_group=calibration_group,
+        calibration_source_keys=calibration_source_keys,
     )
     if not reserve or not eval_groups or n_bootstrap <= 0:
         return {**point, "TPR_ci95": [None, None], "FPR_ci95": [None, None], "bootstrap": 0, "seed": seed}
@@ -463,7 +497,11 @@ def bootstrap_conformal_ci(
         for values in eval_groups.values():
             sample.extend(rng.choices(values, k=len(values)))
         metric = summarize_conformal_membership(
-            sample, score_key=score_key, alpha=alpha, calibration_group=calibration_group
+            sample,
+            score_key=score_key,
+            alpha=alpha,
+            calibration_group=calibration_group,
+            calibration_source_keys=calibration_source_keys,
         )
         if metric.get("status") == "ok":
             tprs.append(float(metric["TPR"]))
@@ -505,7 +543,12 @@ def paired_bootstrap_metric_delta(
         )
 
     point_left, point_right = metrics(common) if positives and negatives else ({}, {})
-    fields = ("AUC", "Oracle TPR@1%FPR", "Oracle TPR@5%FPR")
+    fields = (
+        "AUC",
+        "Oracle TPR@1%FPR",
+        "Oracle TPR@5%FPR",
+        "Attack Advantage",
+    )
     point = {
         field: (
             float(point_left[field]) - float(point_right[field])
@@ -529,5 +572,74 @@ def paired_bootstrap_metric_delta(
         "estimate": point,
         "ci95": {field: [_percentile(values, 0.025), _percentile(values, 0.975)] for field, values in samples.items()},
         "bootstrap": n_bootstrap if positives and negatives else 0,
+        "seed": seed,
+    }
+
+
+def bootstrap_macro_auc_ci(
+    dataset_rows: dict[str, list[dict[str, Any]]],
+    *,
+    score_key: str = "pcv_score",
+    positive_group: str = "KB_Member",
+    n_bootstrap: int = 2000,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """三个数据集内分层重采样后，计算等权 macro source-level AUC CI。"""
+
+    datasets = sorted(dataset_rows)
+    point_values = [
+        roc_auc(dataset_rows[name], score_key=score_key, positive_group=positive_group)
+        for name in datasets
+    ]
+    point_finite = [float(value) for value in point_values if value is not None]
+    point = sum(point_finite) / len(point_finite) if len(point_finite) == len(datasets) else None
+    if not datasets or point is None or n_bootstrap <= 0:
+        return {
+            "estimate": point,
+            "ci95": [None, None],
+            "datasets": datasets,
+            "bootstrap": 0,
+            "seed": seed,
+        }
+    strata: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    for dataset in datasets:
+        rows = dataset_rows[dataset]
+        positives = [
+            row for row in rows if str(row.get("group")) == positive_group
+        ]
+        negatives = [
+            row for row in rows if str(row.get("group")) != positive_group
+        ]
+        if not positives or not negatives:
+            return {
+                "estimate": point,
+                "ci95": [None, None],
+                "datasets": datasets,
+                "bootstrap": 0,
+                "seed": seed,
+            }
+        strata[dataset] = (positives, negatives)
+    rng = random.Random(seed)
+    samples: list[float] = []
+    for _ in range(n_bootstrap):
+        aucs: list[float] = []
+        for dataset in datasets:
+            positives, negatives = strata[dataset]
+            sample = rng.choices(positives, k=len(positives))
+            sample += rng.choices(negatives, k=len(negatives))
+            value = roc_auc(
+                sample,
+                score_key=score_key,
+                positive_group=positive_group,
+            )
+            if value is not None:
+                aucs.append(float(value))
+        if len(aucs) == len(datasets):
+            samples.append(sum(aucs) / len(aucs))
+    return {
+        "estimate": point,
+        "ci95": [_percentile(samples, 0.025), _percentile(samples, 0.975)],
+        "datasets": datasets,
+        "bootstrap": n_bootstrap,
         "seed": seed,
     }

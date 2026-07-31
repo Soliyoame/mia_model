@@ -1,0 +1,119 @@
+protocol_version: pcv-mia-v20
+method_version: pcv-rag-only-source-v20
+dataset_status: pre_response_frozen_canonical
+metrics_version: source-conformal-bootstrap-v2
+reserve_role: retriever_dev_and_conformal
+conformal_source_count: 245
+conformal_alphas: [0.01, 0.05]
+execution: source_block_interleaved
+generator_registry: configs/generator_families.yaml
+
+retrieval_offline_gate:
+  datasets: [edgar, enron, pubmed]
+  api_calls: 0
+  chunk_candidates:
+    - {chunk_size_tokens: 128, overlap_tokens: 32}
+    - {chunk_size_tokens: 256, overlap_tokens: 32}
+    - {chunk_size_tokens: 384, overlap_tokens: 64}
+  systems: [bge_dense, bm25, bge_bm25_rrf, rrf_bge_reranker]
+  thresholds:
+    target_doc_recall_at_5_min: 0.70
+    target_doc_recall_at_10_min: 0.80
+    zero_hit_source_rate_max: 0.05
+    forbidden_group_overlap: 0
+  tie_break_order: [macro_recall_at_5_desc, macro_mrr_desc, p95_latency_asc]
+  forbidden_selection_signal: attack_auc
+  one_time_fallback:
+    model: BAAI/bge-large-en-v1.5
+    chunk_size_tokens: 256
+    overlap_tokens: 32
+
+primary_generator_pilot:
+  generator_family: llama
+  concrete_model: meta/llama-3.1-70b-instruct
+  per_dataset_sources:
+    KB_Member: 10
+    True_Non_Member: 10
+    Reserve: 5
+  queries_per_dataset: 150
+  systems:
+    - bge_dense
+    - bm25
+    - hybrid_reranker
+    - matched_llm_only
+    - oracle_context
+    - random_distractor
+  estimated_total_calls: 2700
+  gates:
+    response_completeness: 1.0
+    stance_parse_rate_min: 0.99
+    duplicate_responses: 0
+    empty_responses: 0
+    model_identity_drift: 0
+    hybrid_recall_at_5_max_drop_vs_bge: 0.02
+    oracle_minus_random_utility_min: 0.10
+    kb_isolation_required: true
+
+primary_generator_formal_suite:
+  generator_family: llama
+  concrete_model: meta/llama-3.1-70b-instruct
+  datasets: [edgar, enron, pubmed]
+  queries_per_dataset_per_cell: 7500
+  calls:
+    bge_dense: 22500
+    bm25: 22500
+    matched_llm_only: 22500
+    hybrid_reranker: 22500
+    mechanism_oracle_random: 3600
+  main_calls_without_mechanism_subset: 90000
+  baselines: [RAG-MIA, S2MIA, MBA, IA, DCMI]
+  full_defense_and_mechanism_analysis: true
+  primary_endpoint: equal_weight_macro_source_auc_llama_bge_three_datasets
+  secondary_only:
+    [conformal, bm25, hybrid, baselines, defenses, mechanism_analysis]
+  multiplicity_policy: confidence_intervals_only_no_significance_claims
+
+conformal_calibration:
+  role: secondary_empirical
+  calibration_scope: post_retriever_frozen_nonmember_calibration
+  reserve_total: 250
+  pilot_diagnostic_sources: 5
+  calibration_sources: 245
+  pilot_reserve_excluded_from_calibration: true
+  retriever_selection_used_reserve_recall: true
+  retriever_selection_used_attack_scores: false
+  p_value: (1 + count(reserve_score >= candidate_score)) / 246
+  minimum_p_value: 0.0040650406504065045
+  alphas: [0.01, 0.05]
+  bootstrap_replicates: 2000
+  bootstrap_seed: 42
+  strict_finite_sample_coverage_claimed: false
+
+reporting:
+  remove_numeric_tpr_at_0_1_percent_fpr: true
+  structured_claim_verification_rag_scope_only: true
+  neutral_prompt_experiment: false
+  human_claim_double_annotation: false
+  human_llama_parser_audit: false
+
+extension_family_template:
+  families: [gemini, qwen, gpt]
+  compatibility_pilot_queries: 150
+  formal_cells: [bge_dense, bm25, matched_llm_only]
+  estimated_calls_per_family: 67500
+  hybrid_oracle_random_full_baselines_defenses: false
+  model_change_policy: new_suite_from_pilot
+
+paper_release_gate:
+  required_identity_fields:
+    - dataset
+    - generator_family
+    - concrete_model
+    - generator_version
+    - retriever_id
+    - index_manifest_hash
+    - query_hash
+    - benchmark_hash
+    - code_commit
+  require_complete_responses: true
+  forbid_cross_model_merge: true

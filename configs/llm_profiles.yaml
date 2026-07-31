@@ -7,7 +7,7 @@
 
 active:
   sibling: dashscope_qwen
-  victim: openai_api
+  victim: llama_primary
 
 sibling:
   profiles:
@@ -36,6 +36,30 @@ sibling:
 
 victim:
   profiles:
+    llama_primary:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      model_version_env: PCV_VICTIM_MODEL_VERSION
+      base_url: ""
+      model: meta/llama-3.1-70b-instruct
+      model_version: meta/llama-3.1-70b-instruct
+      timeout: 60
+      stream: false
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
+    gemini_primary:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      model_version_env: PCV_VICTIM_MODEL_VERSION
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      model: gemini-2.0-flash
+      model_version: gemini-2.0-flash
+      timeout: 60
+      stream: false
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
     openai_api:
       provider: openai_compatible
       api_key_env: PCV_VICTIM_API_KEY

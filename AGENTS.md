@@ -4,6 +4,14 @@
 
 默认用中文和用户沟通。回答判断类问题时先给明确结论，再给依据；如果用户说“先别改代码”，只做只读分析。动手修改前先说明将改哪些文件和原因。保持改动小而直接，不做无关重构，不覆盖用户已有修改。
 
+## Research Progress Records
+
+`研究记录/顶会推进_notes.md` 与 `研究记录/顶会推进_task_plan.md` 是项目级总表。
+任何重要协议、模型、Retriever、环境、实验身份、门禁、产物状态、错误处理或下一步计划
+发生变化时，都必须同步更新这两个文件。`顶会推进_notes.md` 记录高层决策、依据和结果
+概况；`顶会推进_task_plan.md` 记录阶段勾选、当前状态和下一步。详细指标、逐次实验日志和
+完整证据继续写入对应的 `思路v*.txt` 或机器可读 artifact，总表只保留可快速接管的摘要。
+
 ## Project Structure & Module Organization
 
 本仓库实现 PCV-MIA，即面向 RAG 知识库的成员推理攻击流程。运行代码在 `src/`，按职责分为 `data/`、`prepare/`、`rag/`、`fact_extraction/`、`paired_claims/`、`query_generation/`、`parsing/`、`scoring/`、`baselines/`、`defenses/`、`evaluation/`、`llm/` 和 `utils/`。流水线入口在 `scripts/01_preprocess_data.py` 到 `scripts/15_generate_report.py`。配置集中在 `configs/`，测试在 `tests/`。`思路v*.txt`、`baseline.txt`、`thesislogic.txt` 是研究记录，不是运行入口。
@@ -13,6 +21,13 @@
 必须维护 PCV-MIA 的核心边界：只有 `KB_Member` 可以进入 RAG index；`True_Non_Member`、`Spoof_Seed`、`Reserve` 和 `Spoofed_Non_Member` 都不能进入 `indexes/`。Attack benchmark 应固定并保留 hash。`Spoofed_Non_Member` 只是 hard negative 对照组，由 `PCV_ENABLE_SPOOFED_NONMEMBER=true` 控制，不是主方法必需部分。当前脚本多了 `09_filter_stealth_queries.py`，因此以当前 `scripts/` 和 README 的编号为准。
 
 ## Build, Test, and Development Commands
+
+本项目默认且唯一的 Python 运行环境是 Conda 环境 `mia_model`。Windows 解释器路径为
+`D:\python\anaconda\envs\mia_model\python.exe`；已执行 `conda activate mia_model` 时可以
+使用 `python`。运行测试、流水线、模型下载或安装依赖前必须确认 `sys.executable` 指向
+该环境，禁止默认使用 `D:\python\anaconda\python.exe`（base）或向 base 环境安装依赖。
+该环境必须使用 `requirements.txt` 固定的 CUDA PyTorch；执行 BGE 建库或 reranker 门禁
+前检查 `torch.cuda.is_available()` 为 `True`，不得静默接受 CPU PyTorch 或 CPU fallback。
 
 - `pip install -r requirements.txt`: 安装核心依赖。
 - `python -B -m unittest discover -s tests`: 运行单元测试，避免写入 `.pyc`。

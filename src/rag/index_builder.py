@@ -32,7 +32,11 @@ except ImportError:  # pragma: no cover
 
 import numpy as np
 
-from .embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model
+from .embeddings import (
+    DEFAULT_BGE_QUERY_INSTRUCTION,
+    DEFAULT_EMBEDDING_MODEL,
+    build_embedding_model,
+)
 from ..utils.hash import sha256_file, sha256_obj, sha256_text
 from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
@@ -78,6 +82,42 @@ def chunk_for_rag(text: str, chunk_size: int = 500, chunk_overlap: int = 50) -> 
         chunks.append(" ".join(part))
         # 这一块已经覆盖到文本结尾，就不用再往后切了。
         if start + chunk_size >= len(words):
+            break
+    return chunks
+
+
+def chunk_for_rag_tokens(
+    text: str,
+    tokenizer: Any,
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> list[str]:
+    """使用冻结 retriever tokenizer 按真实 token 滑窗切块。"""
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise ValueError("chunk_overlap must satisfy 0 <= overlap < chunk_size")
+    token_ids = list(tokenizer.encode(text or "", add_special_tokens=False))
+    if not token_ids:
+        return []
+    step = chunk_size - chunk_overlap
+    chunks: list[str] = []
+    for start in range(0, len(token_ids), step):
+        token_window = token_ids[start : start + chunk_size]
+        if not token_window:
+            break
+        chunk = str(
+            tokenizer.decode(
+                token_window,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        ).strip()
+        if chunk:
+            chunks.append(chunk)
+        if start + chunk_size >= len(token_ids):
             break
     return chunks
 
@@ -163,6 +203,12 @@ def build_rag_index(
     config_snapshot: dict[str, Any] | None = None,
     allowed_group: str = "KB_Member",
     retriever_backend: str = "dense",
+    embedding_revision: str | None = None,
+    query_instruction: str = DEFAULT_BGE_QUERY_INSTRUCTION,
+    chunking_unit: str = "words",
+    tokenizer_model: str | None = None,
+    tokenizer_revision: str | None = None,
+    tokenizer_local_files_only: bool | None = None,
 ) -> dict[str, Any]:
     """构建 RAG index（默认只允许 KB_Member；L2 shadow 模式可指定 Reserve）。
 
@@ -194,11 +240,30 @@ def build_rag_index(
     """
     # 确保输出目录存在(不存在则创建)。
     out_dir = ensure_dir(output_dir)
+    if allowed_group != "KB_Member" and any(
+        part.casefold() == "indexes" for part in out_dir.parts
+    ):
+        raise RuntimeError(
+            f"{allowed_group} dev/shadow data cannot be written under a formal 'indexes' directory: "
+            f"{out_dir}"
+        )
     backend_name = str(retriever_backend or "dense").strip().lower()
     if backend_name in {"minilm", "vector", "faiss"}:
         backend_name = "dense"
     if backend_name not in {"dense", "bm25"}:
         raise ValueError(f"Unknown retriever_backend: {retriever_backend!r}")
+    normalized_chunking_unit = str(chunking_unit or "words").strip().casefold()
+    if normalized_chunking_unit not in {"words", "tokens"}:
+        raise ValueError(f"Unknown chunking_unit: {chunking_unit!r}")
+    if (
+        allowed_group == "KB_Member"
+        and backend_name == "dense"
+        and "minilm" in str(embedding_model).casefold()
+    ):
+        raise ValueError(
+            "MiniLM is retired from formal PCV-MIA indexes. "
+            "Use BAAI/bge-base-en-v1.5 or archive the run as legacy."
+        )
     index_path = out_dir / ("faiss.index" if backend_name == "dense" else "bm25.index.json")
     docstore_path = out_dir / "docstore.jsonl"
     manifest_path = out_dir / "index_manifest.json"
@@ -210,8 +275,20 @@ def build_rag_index(
             "dataset": dataset,
             "retriever_backend": backend_name,
             "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+            "embedding_revision": embedding_revision if backend_name == "dense" else None,
             "chunk_size": int(chunk_size),
             "chunk_overlap": int(chunk_overlap),
+            "chunking_unit": normalized_chunking_unit,
+            "tokenizer_model": (
+                str(tokenizer_model or embedding_model)
+                if normalized_chunking_unit == "tokens"
+                else None
+            ),
+            "tokenizer_revision": (
+                tokenizer_revision or embedding_revision
+                if normalized_chunking_unit == "tokens"
+                else None
+            ),
             "kb_hash": kb_hash,
         }
         mismatches = {
@@ -258,12 +335,51 @@ def build_rag_index(
         bad = [row.get("doc_id") for row in rows if row.get("group") != allowed_group][:5]
         raise RuntimeError(f"RAG index can only be built from {allowed_group}. Bad rows: {bad}")
 
+    embedder = None
+    tokenizer = None
+    if backend_name == "dense":
+        embedder = build_embedding_model(
+            embedding_model,
+            backend=embedding_backend,
+            dim=embedding_dim,
+            local_files_only=bool(embedding_local_files_only),
+            revision=embedding_revision,
+            query_instruction=query_instruction,
+        )
+        tokenizer = getattr(embedder, "tokenizer", None)
+    if normalized_chunking_unit == "tokens" and tokenizer is None:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_model or embedding_model,
+            revision=tokenizer_revision or embedding_revision,
+            local_files_only=(
+                bool(embedding_local_files_only)
+                if tokenizer_local_files_only is None
+                else bool(tokenizer_local_files_only)
+            ),
+        )
+
     docstore: list[dict[str, Any]] = []
     # 逐篇文档切块，并为每个块构造一条记录存进 docstore。
     for row in tqdm(rows, desc=f"chunk index {dataset}", unit="doc"):
         # 优先用 doc_id，没有就退而用 sample_id 作为文档标识。
         doc_id = str(row.get("doc_id") or row.get("sample_id"))
-        for chunk_idx, chunk in enumerate(chunk_for_rag(row["text"], chunk_size=chunk_size, chunk_overlap=chunk_overlap)):
+        chunks = (
+            chunk_for_rag_tokens(
+                row["text"],
+                tokenizer,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            if normalized_chunking_unit == "tokens"
+            else chunk_for_rag(
+                row["text"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+        )
+        for chunk_idx, chunk in enumerate(chunks):
             docstore.append(
                 {
                     # 块编号 = 文档id + "_c" + 两位序号，保证全局唯一。
@@ -271,12 +387,16 @@ def build_rag_index(
                     "doc_id": doc_id,
                     "dataset": dataset,
                     "group": allowed_group,
+                    "source_id": row.get("source_id") or doc_id,
+                    "source_key": row.get("source_key") or row.get("source_id") or doc_id,
                     "text": chunk,
                     # 记录文本 hash，便于校验与追踪。
                     "text_hash": sha256_text(chunk),
                     "metadata": {
                         "chunk_index": chunk_idx,
                         "source_doc_id": doc_id,
+                        "source_id": row.get("source_id") or doc_id,
+                        "source_key": row.get("source_key") or row.get("source_id") or doc_id,
                         "source_text_hash": row.get("text_hash"),
                     },
                 }
@@ -289,17 +409,18 @@ def build_rag_index(
     embedder_name: str | None = None
     actual_embedding_dim: int | None = None
     if backend_name == "dense":
-        embedder = build_embedding_model(
-            embedding_model,
-            backend=embedding_backend,
-            dim=embedding_dim,
-            local_files_only=bool(embedding_local_files_only),
+        assert embedder is not None
+        encode_documents = getattr(embedder, "encode_documents", embedder.encode)
+        vectors = encode_documents(
+            [row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")]
         )
-        vectors = embedder.encode([row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")])
         storage_backend = _write_index(index_path, vectors)
         embedder_name = embedder.name
         actual_embedding_dim = int(vectors.shape[1])
         retriever_id = str(embedding_model)
+        close = getattr(embedder, "close", None)
+        if callable(close):
+            close()
     else:
         storage_backend = _write_bm25_index(index_path, docstore)
         retriever_id = "bm25"
@@ -314,11 +435,24 @@ def build_rag_index(
         "index_filename": index_path.name,
         "embedding_model": embedder_name,
         "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+        "embedding_revision": embedding_revision if backend_name == "dense" else None,
+        "query_instruction": query_instruction if backend_name == "dense" else None,
         "embedding_backend": storage_backend if backend_name == "dense" else None,
         "embedding_local_files_only": bool(embedding_local_files_only) if backend_name == "dense" else None,
         "embedding_dim": actual_embedding_dim,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
+        "chunking_unit": normalized_chunking_unit,
+        "tokenizer_model": (
+            str(tokenizer_model or embedding_model)
+            if normalized_chunking_unit == "tokens"
+            else None
+        ),
+        "tokenizer_revision": (
+            tokenizer_revision or embedding_revision
+            if normalized_chunking_unit == "tokens"
+            else None
+        ),
         "num_docs": len(rows),
         "num_chunks": len(docstore),
         # 对关键文件算 hash，写进 manifest，用于实验复现与完整性校验。

@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -26,9 +25,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.evaluation.plots import plot_final_report, plot_run_trend
 from src.evaluation.paper_figures import render_paper_figures
 from src.evaluation.report_builder import generate_final_report
-from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
+from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json, write_jsonl
 from src.utils.logger import setup_logging
-from src.utils.run_context import append_index, current_run_id, index_path, local_timestamp, model_scoped_dir, run_dir
+from src.utils.run_context import current_run_id, experiment_run_dir, experiment_scoped_dir, local_timestamp
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +40,10 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Generate final PCV-MIA report.")
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
+    parser.add_argument("--attack-config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
+    parser.add_argument("--retriever-backend", choices=["dense", "bm25", "hybrid"], default=None)
+    parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
@@ -65,9 +70,30 @@ def main() -> int:
     except Exception:
         pass
     args = parse_args()
-    logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/report.log"), level="INFO")
-    out_dir = ensure_dir(model_scoped_dir("outputs/reports", args.dataset))
-    scores_dir = model_scoped_dir("outputs/scores", args.dataset)
+    rag_config = load_yaml(args.rag_config)
+    attack_config = load_yaml(args.attack_config)
+    retriever_backend = args.retriever_backend or str(
+        rag_config.get("retrieval", {}).get("backend", "dense")
+    )
+    generator_identity, _ = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+    )
+    retriever_id = retriever_id_from_config(rag_config, retriever_backend)
+    scope = {
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "retriever_id": retriever_id,
+    }
+    logger = setup_logging("pcv_mia", log_file=resolve_path("artifacts/v20/logs/report.log"), level="INFO")
+    out_dir = ensure_dir(
+        experiment_scoped_dir(rag_config["paths"]["reports_dir"], args.dataset, **scope)
+    )
+    scores_dir = experiment_scoped_dir(
+        attack_config["paths"]["scores_dir"],
+        args.dataset,
+        **scope,
+    )
     source_scores_path = scores_dir / f"{args.dataset}_pcv_scores_source_scores.jsonl"
     if not source_scores_path.exists():
         raise FileNotFoundError(f"Source-level scores are required for final report: {source_scores_path}")
@@ -77,21 +103,56 @@ def main() -> int:
         raise FileNotFoundError(f"Source coverage ledger is required for final report: {coverage_path}")
     report_json_path = out_dir / f"{args.dataset}_final_report.json"
     summary_md_path = out_dir / f"{args.dataset}_summary.md"
+    rag_response_dir = experiment_scoped_dir(
+        rag_config["paths"]["rag_responses_dir"],
+        args.dataset,
+        **scope,
+    )
+    index_manifest_path = (
+        rag_response_dir / f"{args.dataset}_rag_responses.manifest.json"
+        if retriever_backend == "hybrid"
+        else retriever_index_dir(rag_config, args.dataset, retriever_backend)
+        / "index_manifest.json"
+    )
+    baseline_dir = experiment_scoped_dir(
+        "artifacts/v20/baselines",
+        args.dataset,
+        **scope,
+    )
+    mechanism_dir = experiment_scoped_dir(
+        "artifacts/v20/mechanisms",
+        args.dataset,
+        **scope,
+    )
+    defense_dir = experiment_scoped_dir(
+        "artifacts/v20/defenses",
+        args.dataset,
+        **scope,
+    )
     report = generate_final_report(
         dataset=args.dataset,
-        benchmark_path=resolve_path("datasets/benchmarks") / f"{args.dataset}_attack_benchmark.jsonl",
+        benchmark_path=resolve_path(rag_config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
         scores_path=scores_path,
-        stealth_manifest_path=resolve_path("outputs/stealth_filtered_queries") / f"{args.dataset}_paired_queries.manifest.json",
-        index_manifest_path=resolve_path("indexes") / args.dataset / "index_manifest.json",
-        baseline_path=model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_comparison.jsonl",
-        mechanism_path=model_scoped_dir("outputs/mechanisms", args.dataset) / f"{args.dataset}_mechanism_report.json",
-        defense_path=model_scoped_dir("outputs/defenses", args.dataset) / f"{args.dataset}_defense_results.json",
+        stealth_manifest_path=resolve_path(rag_config["paths"]["queries_dir"]) / f"{args.dataset}_paired_queries.manifest.json",
+        index_manifest_path=index_manifest_path,
+        baseline_path=baseline_dir / f"{args.dataset}_baseline_comparison.jsonl",
+        mechanism_path=mechanism_dir / f"{args.dataset}_mechanism_report.json",
+        defense_path=defense_dir / f"{args.dataset}_defense_results.json",
         report_json_path=report_json_path,
         summary_md_path=summary_md_path,
         threshold=args.threshold,
         resume=not args.no_resume,
         force=args.force,
         coverage_path=coverage_path,
+        reserve_roles_path=(
+            resolve_path(
+                rag_config["paths"].get(
+                    "reserve_roles_dir",
+                    "artifacts/v20/release_controls/reserve_roles",
+                )
+            )
+            / f"{args.dataset}_reserve_roles.json"
+        ),
     )
     logger.info("Step 15 finished: %s", report)
 
@@ -100,7 +161,12 @@ def main() -> int:
     full_report = read_json(report_json_path) if report_json_path.exists() else report
     run_id = current_run_id()
     generated_at = local_timestamp()
-    rdir = run_dir(args.dataset, run_id)
+    rdir = experiment_run_dir(
+        rag_config["paths"]["runs_dir"],
+        args.dataset,
+        run_id,
+        **scope,
+    )
     score_rows = list(read_jsonl(scores_path)) if scores_path.exists() else []
 
     snap = f"{args.dataset}_final_report_{run_id}"  # 快照文件名带时间戳,单看文件名即知何时/何集
@@ -117,7 +183,7 @@ def main() -> int:
     )
 
     # ---- 论文级图表(独立于上面的自查仪表盘;整体兜底,画图失败不连累报告归档)----
-    baseline_path = model_scoped_dir("outputs/baselines", args.dataset) / f"{args.dataset}_baseline_comparison.jsonl"
+    baseline_path = baseline_dir / f"{args.dataset}_baseline_comparison.jsonl"
     baseline_rows = list(read_jsonl(baseline_path)) if baseline_path.exists() else []
     try:
         paper_files = render_paper_figures(full_report, score_rows, baseline_rows, rdir, dataset=args.dataset)
@@ -126,24 +192,29 @@ def main() -> int:
         paper_files = []
 
     metrics = full_report.get("main_attack_results", {})
-    append_index(
-        args.dataset,
-        {
+    run_index_path = rdir.parent / "index.jsonl"
+    write_jsonl(
+        [{
             "run_id": run_id,
             "generated_at": generated_at,
             "kind": "final_report",
             "dataset": args.dataset,
             "scale": _read_scale(),
-            "victim_model": os.environ.get("PCV_VICTIM_MODEL", ""),
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
+            "generator_version": generator_identity.generator_version,
+            "retriever_id": retriever_id,
             "auc_pcv": metrics.get("AUC"),
             "oracle_tpr_at_1fpr": metrics.get("Oracle TPR@1%FPR"),
             "oracle_tpr_at_5fpr": metrics.get("Oracle TPR@5%FPR"),
             "calibrated_alpha_1": full_report.get("calibrated_attack_results", {}).get("alpha_0.01"),
-        },
+        }],
+        run_index_path,
+        append=True,
     )
-    hist = [r for r in read_jsonl(index_path(args.dataset)) if r.get("kind") == "final_report"]
+    hist = [r for r in read_jsonl(run_index_path) if r.get("kind") == "final_report"]
     trend = plot_run_trend(
-        hist, index_path(args.dataset).parent / "trend_report.png", dataset=args.dataset
+        hist, run_index_path.parent / "trend_report.png", dataset=args.dataset
     )
 
     print(f"[归档] run_id={run_id}  生成时间={generated_at}")
@@ -155,7 +226,7 @@ def main() -> int:
         print("    可视化图:     (未生成 — 未安装 matplotlib)")
     if paper_files:
         print(f"    论文图:       {rdir / 'figures'}  ({len(paper_files)} 文件)")
-    print(f"    历次总表:     {index_path(args.dataset)}")
+    print(f"    历次总表:     {run_index_path}")
     if trend:
         print(f"    趋势图:       {trend}")
     return 0

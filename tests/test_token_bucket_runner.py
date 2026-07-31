@@ -266,14 +266,15 @@ class ConcurrentRunnerTest(unittest.TestCase):
         with temporary_dir() as work:
             qp, bp = _make_inputs(work, 8)
             t0 = time.monotonic()
-            _run(work, qp, bp, _DetClient(per_call_sleep=0.05), workers=1, rpm=0, tag="slow1")
+            # 让模拟端点延迟稳定高于 Windows manifest/hash 文件 I/O 抖动。
+            _run(work, qp, bp, _DetClient(per_call_sleep=0.1), workers=1, rpm=0, tag="slow1")
             serial_t = time.monotonic() - t0
 
             t0 = time.monotonic()
-            _run(work, qp, bp, _DetClient(per_call_sleep=0.05), workers=4, rpm=0, tag="slow4")
+            _run(work, qp, bp, _DetClient(per_call_sleep=0.1), workers=4, rpm=0, tag="slow4")
             concur_t = time.monotonic() - t0
 
-            # 8 query × 2 call × 0.05s:串行 ~0.8s,4 并发 ~0.2s。留足裕度,只断言明显更快。
+            # 8 query × 2 call × 0.1s：串行约 1.6s，4 并发约 0.4s。
             self.assertLess(concur_t, serial_t * 0.6, f"并发未有效抗卡顿: serial={serial_t:.2f} concur={concur_t:.2f}")
 
 

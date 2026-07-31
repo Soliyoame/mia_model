@@ -23,9 +23,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.parsing.stance_parser import parse_stance_files
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config
 from src.scoring.pcv_scorer import compute_pcv_scores
 from src.utils.io import ensure_dir, load_yaml, resolve_path
-from src.utils.run_context import model_scoped_dir
+from src.utils.run_context import experiment_scoped_dir
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -39,6 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Parse PCV-MIA stances and compute scores.")
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
+    parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
+    parser.add_argument("--retriever-backend", choices=["dense", "bm25", "hybrid"], default=None)
+    parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
     parser.add_argument(
         "--skip-llm-only",
         action="store_true",
@@ -57,20 +62,49 @@ def main() -> int:
     """
     args = parse_args()
     config = load_yaml(args.config)
+    rag_config = load_yaml(args.rag_config)
+    retriever_backend = args.retriever_backend or str(
+        rag_config.get("retrieval", {}).get("backend", "dense")
+    )
+    generator_identity, _ = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+    )
+    retriever_id = retriever_id_from_config(rag_config, retriever_backend)
     set_seed_from_config(config)
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
-    parsed_dir = ensure_dir(model_scoped_dir(config["paths"]["parsed_stance_dir"], args.dataset))
-    scores_dir = ensure_dir(model_scoped_dir(config["paths"]["scores_dir"], args.dataset))
+    scope = {
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "retriever_id": retriever_id,
+    }
+    parsed_dir = ensure_dir(
+        experiment_scoped_dir(config["paths"]["parsed_stance_dir"], args.dataset, **scope)
+    )
+    scores_dir = ensure_dir(
+        experiment_scoped_dir(config["paths"]["scores_dir"], args.dataset, **scope)
+    )
     parsed_path = parsed_dir / f"{args.dataset}_parsed_stance.jsonl"
     # 第一步:解析两套回答的立场,产出 parsed_stance.jsonl。
     parse_manifest = parse_stance_files(
         dataset=args.dataset,
         queries_path=resolve_path(config["paths"]["stealth_filtered_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
-        rag_responses_path=model_scoped_dir("outputs/rag_responses", args.dataset) / f"{args.dataset}_rag_responses.jsonl",
+        rag_responses_path=experiment_scoped_dir(
+            rag_config["paths"]["rag_responses_dir"],
+            args.dataset,
+            **scope,
+        )
+        / f"{args.dataset}_rag_responses.jsonl",
         llm_responses_path=(
             None
             if args.skip_llm_only
-            else model_scoped_dir("outputs/llm_only_responses", args.dataset)
+            else experiment_scoped_dir(
+                rag_config["paths"]["llm_only_responses_dir"],
+                args.dataset,
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id="none",
+            )
             / f"{args.dataset}_llm_only_responses.jsonl"
         ),
         output_path=parsed_path,

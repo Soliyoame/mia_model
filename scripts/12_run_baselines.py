@@ -33,9 +33,9 @@ from src.baselines.victim_harness import (
     Services,
     balanced_sample,
     build_attacker_chat,
-    load_targets,
     run_one_baseline,
 )
+from src.baselines.representative import load_representative_targets
 from src.evaluation.metrics import paired_bootstrap_metric_delta, summarize_membership_scores
 from src.llm.factory import (
     build_victim_client,
@@ -43,12 +43,19 @@ from src.llm.factory import (
     resolve_effective_llm_profile,
     resolve_llm_profile_name,
 )
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
 from src.rag.retriever import RagRetriever
 from src.rag.runner import TokenBucket
 from src.utils.dataset_paths import resolve_dataset_dir
-from src.utils.hash import sha256_file
-from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path, write_json, write_jsonl
-from src.utils.run_context import canonical_baseline_methods, model_scoped_dir
+from src.utils.hash import sha256_file, sha256_obj
+from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json, write_jsonl
+from src.utils.run_context import (
+    canonical_baseline_methods,
+    experiment_scoped_dir,
+    git_snapshot,
+    require_clean_release_commit,
+)
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -112,7 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
     parser.add_argument(
         "--retriever-backend",
-        choices=["dense", "bm25"],
+        choices=["dense", "bm25", "hybrid"],
         default=None,
         help="一次只运行一个 Retriever；未指定时读取 rag_config.retrieval.backend。",
     )
@@ -121,6 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-targets", type=int, default=None, help="只跑前 N 个目标(两类均衡,省 API 试跑)")
     parser.add_argument("--request-interval", type=float, default=None, help="每次 victim 调用后睡眠秒数(限速)")
     parser.add_argument("--victim-profile", default=None)
+    parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
     parser.add_argument("--sibling-profile", default=None)
     parser.add_argument("--attacker", choices=["sibling", "victim"], default="sibling",
                         help="IA/DCMI 的 attacker 用哪个模型:sibling(默认,需 PCV_SIBLING_API_KEY)或 victim(复用受害模型,免配 sibling key)")
@@ -151,6 +159,11 @@ def main() -> int:
         profile_name=victim_name,
     )
     victim_model = str(effective_profile.get("model") or "")
+    generator_identity, _ = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+        profile_name=victim_name,
+    )
     method_selection = "cli_override"
     if not methods:
         policy_cfg = config.get("baseline", {}).get("formal_method_policy", {})
@@ -161,7 +174,7 @@ def main() -> int:
             str(method)
             for method in (configured or canonical_baseline_methods(victim_model) or [])
         ]
-        method_selection = "v19_generator_policy"
+        method_selection = "v20_generator_policy"
     unknown = [method for method in methods if method not in BASELINES]
     if not methods or unknown:
         raise ValueError(
@@ -189,16 +202,24 @@ def main() -> int:
             )
 
     retriever_backend = args.retriever_backend or str(
-        rag_config.get("retrieval", {}).get("backend", "dense")
+        config.get("baseline", {}).get("retriever_backend", "dense")
     )
-    index_dir = (
-        resolve_path(rag_config["paths"]["indexes_dir"])
-        / args.dataset
-        / retriever_backend
-    )
+    if retriever_backend != "dense":
+        raise RuntimeError("v20 formal baselines are BGE-dense only")
+    index_dir = retriever_index_dir(rag_config, args.dataset, "dense")
     retriever = RagRetriever(index_dir)
-    splits_dir = resolve_dataset_dir(rag_config, "splits_dir", args.dataset)
-    targets = load_targets(splits_dir)
+    representative_path = (
+        resolve_path(config["paths"]["representative_manifest_dir"])
+        / f"{args.dataset}_representative_chunks.jsonl"
+    )
+    if not representative_path.is_file():
+        raise FileNotFoundError(
+            f"Representative chunk manifest missing: {representative_path}. "
+            "Run scripts/23_prepare_baseline_representatives.py first."
+        )
+    targets, representative_manifest = load_representative_targets(
+        representative_path
+    )
     if args.max_targets:
         targets = balanced_sample(targets, args.max_targets)
     n_kb = sum(t["group"] == "KB_Member" for t in targets)
@@ -207,7 +228,53 @@ def main() -> int:
 
     interval = args.request_interval if args.request_interval is not None else float(gen_cfg.get("request_interval_seconds", 0.0))
     threshold = float(config.get("baseline", {}).get("threshold", 0.3))
-    out_dir = ensure_dir(model_scoped_dir(config["paths"]["baselines_dir"], args.dataset))
+    retriever_id = retriever_id_from_config(rag_config, retriever_backend)
+    scope = {
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "retriever_id": retriever_id,
+    }
+    out_dir = ensure_dir(
+        experiment_scoped_dir(config["paths"]["baselines_dir"], args.dataset, **scope)
+    )
+    queries_path = (
+        resolve_path(config["paths"]["queries_dir"])
+        / f"{args.dataset}_paired_queries.jsonl"
+    )
+    benchmark_path = (
+        resolve_path(rag_config["paths"]["benchmark_dir"])
+        / f"{args.dataset}_attack_benchmark.jsonl"
+    )
+    code_commit = require_clean_release_commit(git_snapshot())
+    baseline_identity = {
+        "protocol_version": "pcv-mia-v20",
+        "dataset": args.dataset,
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "generator_version": generator_identity.generator_version,
+        "retriever_backend": "dense",
+        "retriever_id": retriever_id,
+        "index_manifest_hash": (
+            getattr(retriever, "index_manifest_hash", None)
+            or sha256_file(index_dir / "index_manifest.json")
+        ),
+        "query_hash": sha256_file(queries_path),
+        "benchmark_hash": sha256_file(benchmark_path),
+        "code_commit": code_commit,
+        "representative_chunk_manifest_hash": representative_manifest[
+            "representative_chunk_manifest_hash"
+        ],
+        "source_chunk_binding_hash": representative_manifest[
+            "source_chunk_binding_hash"
+        ],
+        "methods": methods,
+    }
+    identity_path = out_dir / "baseline_experiment_identity.json"
+    if identity_path.exists() and not args.force:
+        if read_json(identity_path) != baseline_identity:
+            raise RuntimeError("Baseline experiment identity drift; resume refused")
+    else:
+        write_json(baseline_identity, identity_path)
 
     # —— 限速:令牌桶(抗端点卡顿)+ 并发(跨目标),对齐第 10 步 runner ——
     # requests_per_minute>0 启用全局令牌桶(全局速率恒 ≤ RPM);配合 max_workers>1,某目标卡在
@@ -256,6 +323,21 @@ def main() -> int:
             threshold=threshold, resume=not args.no_resume, force=args.force,
             max_workers=max_workers,
         )
+        expected_calls = int(
+            config["baseline"]["victim_calls_per_source"][name]
+        )
+        method_rows = list(read_jsonl(res["output_path"]))
+        bad_call_rows = [
+            row
+            for row in method_rows
+            if row.get("score") is not None
+            and int(row.get("victim_calls") or 0) != expected_calls
+        ]
+        if bad_call_rows:
+            raise RuntimeError(
+                f"{name} exceeded or missed frozen victim budget "
+                f"{expected_calls}/source"
+            )
         results_by_method[name] = res
         comparison.append(_table_row(name, res))
         logger.info("[%s] scored=%s failed=%s victim=%s attacker=%s AUC=%s",
@@ -265,7 +347,11 @@ def main() -> int:
     # —— 把 PCV-MIA(本项目方法)从第 11 步分数拉进同一张表 ——
     # P0-2:chunk 是查询/检索单位，但统计单位固定为 source。PCV 与 baseline 都只在
     # 本次 target 覆盖的同一批 source 上评估；--max-targets 仅用于试跑，canonical 不应使用。
-    scores_dir = model_scoped_dir(config["paths"]["scores_dir"], args.dataset)
+    scores_dir = experiment_scoped_dir(
+        config["paths"]["scores_dir"],
+        args.dataset,
+        **scope,
+    )
     pcv_path = scores_dir / f"{args.dataset}_pcv_scores_source_scores.jsonl"
     budget_rows: list[dict] = []
     if pcv_path.exists():
@@ -358,10 +444,16 @@ def main() -> int:
         "dataset": args.dataset,
         "retriever_backend": retriever.retriever_backend,
         "retriever_id": retriever.manifest.get("retriever_id"),
-        "index_manifest_hash": sha256_file(index_dir / "index_manifest.json"),
+        "index_manifest_hash": (
+            getattr(retriever, "index_manifest_hash", None)
+            or sha256_file(index_dir / "index_manifest.json")
+        ),
         "methods": methods,
         "method_selection": method_selection,
         "generator_id": victim_model,
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "generator_version": generator_identity.generator_version,
         "targets": {"total": len(targets), "KB_Member": n_kb, "True_Non_Member": n_tn},
         "target_sources": len({str(t.get("source_key") or t.get("source_id") or t.get("doc_id")) for t in targets}),
         "evaluation_unit": "source",
@@ -375,6 +467,32 @@ def main() -> int:
         "budget_matched_path": str(budget_path),
         "victim_profile_used": victim_profile,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "query_hash": baseline_identity["query_hash"],
+        "benchmark_hash": baseline_identity["benchmark_hash"],
+        "code_commit": baseline_identity["code_commit"],
+        "model_identity": {
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
+            "generator_version": generator_identity.generator_version,
+        },
+        "representative_chunk_manifest_hash": representative_manifest[
+            "representative_chunk_manifest_hash"
+        ],
+        "source_chunk_binding_hash": representative_manifest[
+            "source_chunk_binding_hash"
+        ],
+        "actual_victim_calls": {
+            name: int(results_by_method[name]["victim_calls"])
+            for name in methods
+        },
+        "adaptation_disclosure": {
+            "shared_representative_chunk": True,
+            "selection": "max BGE cosine over six frozen PCV queries",
+            "official_implementation_difference": (
+                "All five methods use one preregistered source-level chunk and "
+                "the common OpenAI-compatible victim/RAG harness."
+            ),
+        },
     }
     write_json(manifest, table_path.with_suffix(".manifest.json"))
     logger.info("Step 12 finished: %s", table_path)

@@ -42,7 +42,7 @@ def run_mechanism_analysis(
         rag_responses_path: RAG 响应文件(jsonl),含检索命中信息。
         parsed_path:        立场解析结果(jsonl),只取 mode=="rag" 的部分。
         scores_path:        打分结果(jsonl),用于 RAG-only PVS 等统计。
-        docstore_path:      文档库(jsonl),按 doc_id 聚合正文,用于实体证据判定。
+        docstore_path:      文档库(jsonl),按 chunk_id 索引正文,用于实体证据判定。
         output_path:        机制报告输出路径(json)。
         resume:             断点续跑:报告已存在且非空则跳过。
         force:              强制重算。
@@ -59,21 +59,33 @@ def run_mechanism_analysis(
     parsed = [row for row in read_jsonl(parsed_path) if row.get("mode") == "rag"]
     parsed_by_query = {row["query_id"]: row for row in parsed}
     scores = list(read_jsonl(scores_path))
-    docstore_by_doc: dict[str, list[str]] = defaultdict(list)
-    for row in read_jsonl(docstore_path):
-        docstore_by_doc[str(row["doc_id"])].append(str(row["text"]))
+    docstore_by_chunk: dict[str, str] = {}
+    for legacy_index, row in enumerate(read_jsonl(docstore_path)):
+        chunk_id = str(
+            row.get("chunk_id")
+            or f"legacy::{row.get('doc_id')}::{legacy_index}"
+        )
+        docstore_by_chunk[chunk_id] = str(row["text"])
 
     exposure_rows = []
     evidence_rows = []
     override_rows = []
     similarity_values = []
+    missing_chunk_provenance = 0
     for rag in read_jsonl(rag_responses_path):
         query = queries.get(rag["query_id"], {})
         parsed_row = parsed_by_query.get(rag["query_id"], {})
-        retrieved_doc_ids = [str(doc_id) for doc_id in rag.get("retrieved_doc_ids", [])]
+        retrieved_chunk_ids = [
+            str(chunk_id) for chunk_id in rag.get("retrieved_chunk_ids", [])
+        ]
         original = str(query.get("expected_entity") or query.get("original_entity") or "")
-        # 实体证据:检索回来的任一文档片段里是否真的出现了原始实体字符串。
-        evidence = any(original and original in chunk for doc_id in retrieved_doc_ids for chunk in docstore_by_doc.get(doc_id, []))
+        # 只扫描真正返回的 chunk；按 doc_id 扫整篇会把未检索到的块误算为证据。
+        if not retrieved_chunk_ids:
+            missing_chunk_provenance += 1
+        evidence = any(
+            original and original in docstore_by_chunk.get(chunk_id, "")
+            for chunk_id in retrieved_chunk_ids
+        )
         exposure_rows.append(bool(rag.get("target_doc_retrieved")))
         evidence_rows.append(evidence)
         # 仅在确有实体证据时,才统计模型是否被该证据"带"着提到原始实体(覆盖率分母)。
@@ -97,6 +109,7 @@ def run_mechanism_analysis(
         "Retrieval Exposure Rate": _mean_bool(exposure_rows),
         # 实体证据率:检索内容中真实出现原始实体的比例。
         "Entity Evidence Rate": _mean_bool(evidence_rows),
+        "Missing Retrieved-Chunk Provenance": missing_chunk_provenance,
         "True Claim Support Rate": _mean_bool([bool(row.get("supports_true_claim")) for row in parsed if row.get("claim_type") == "true"]),
         "Counterfactual Rejection Rate": _mean_bool([bool(row.get("rejects_counterfactual")) for row in parsed if row.get("claim_type") == "counterfactual"]),
         "Counterfactual Correction Rate": _mean_bool([bool(row.get("corrects_to_original_entity")) for row in parsed if row.get("claim_type") == "counterfactual"]),

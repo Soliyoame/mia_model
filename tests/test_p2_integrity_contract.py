@@ -8,7 +8,11 @@ from pathlib import Path
 
 from src.evaluation.metrics import paired_bootstrap_metric_delta
 from src.baselines.victim_harness import aggregate_baseline_source_scores
-from src.rag.runner import _call_generator, compact_response_rows
+from src.rag.runner import (
+    _call_generator,
+    compact_response_rows,
+    response_is_success,
+)
 from src.parsing.stance_parser import parse_stance_files
 from src.scoring.pcv_scorer import compute_pcv_scores
 from src.utils.io import read_jsonl, write_jsonl
@@ -32,6 +36,85 @@ class ResponseIntegrityTests(unittest.TestCase):
         self.assertEqual(response, "Consistent")
         self.assertIsNone(error)
         self.assertEqual(client.calls, 2)
+
+    def test_nonempty_http_error_text_is_not_success(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def generate(self, *_args, **_kwargs) -> str:
+                self.calls += 1
+                return "Error: API key not valid"
+
+        client = Client()
+        response, error = _call_generator(
+            client, "prompt", temperature=0.0, timeout=1.0, max_tokens=8,
+            retries=2, retry_backoff_base=0.0, retry_backoff_max=0.0,
+        )
+        self.assertEqual(response, "Error: API key not valid")
+        self.assertIn("api_error_text", error or "")
+        self.assertEqual(client.calls, 1)
+        self.assertFalse(response_is_success({
+            "query_id": "q1",
+            "response": response,
+            "error": None,
+        }))
+        self.assertTrue(response_is_success({
+            "query_id": "q-normal",
+            "response": "API error rates in the evaluated system were below 1%.",
+            "error": None,
+        }))
+
+    def test_formal_response_requires_exact_provider_model(self) -> None:
+        class Client:
+            def __init__(self, actual_model: str | None) -> None:
+                self.actual_model = actual_model
+
+            def generate_with_metadata(self, *_args, **_kwargs) -> dict:
+                return {
+                    "content": "Consistent",
+                    "provider_model_id": self.actual_model,
+                    "provider_request_id": "request-1",
+                    "system_fingerprint": None,
+                    "called_at": "2026-07-30T00:00:00+00:00",
+                }
+
+        for actual_model, expected_error in (
+            (None, "provider_model_identity_missing"),
+            ("gemini-2.0-flash-001", "provider_model_identity_drift"),
+        ):
+            with self.subTest(actual_model=actual_model):
+                response, error, metadata = _call_generator(
+                    Client(actual_model),
+                    "prompt",
+                    temperature=0.0,
+                    timeout=1.0,
+                    max_tokens=8,
+                    retries=0,
+                    retry_backoff_base=0.0,
+                    retry_backoff_max=0.0,
+                    return_metadata=True,
+                    expected_model_id="gemini-2.0-flash",
+                    require_provider_model_id=True,
+                )
+                self.assertEqual(response, "Consistent")
+                self.assertIn(expected_error, error or "")
+                self.assertEqual(metadata["provider_model_id"], actual_model)
+
+        self.assertTrue(response_is_success({
+            "query_id": "q1",
+            "response": "Consistent",
+            "error": None,
+            "generator_id": "gemini-2.0-flash",
+            "provider_model_id": "gemini-2.0-flash",
+        }))
+        self.assertFalse(response_is_success({
+            "query_id": "q1",
+            "response": "Consistent",
+            "error": None,
+            "generator_id": "gemini-2.0-flash",
+            "provider_model_id": None,
+        }))
 
     def test_compaction_prefers_success_over_later_failure(self) -> None:
         rows = [

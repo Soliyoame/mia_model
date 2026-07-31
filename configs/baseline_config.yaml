@@ -2,20 +2,38 @@
 
 logging:
   level: INFO
-  file: datasets/logs/baselines.log
+  file: artifacts/v20/logs/baselines.log
 
 paths:
-  scores_dir: outputs/scores
-  baselines_dir: outputs/baselines
+  scores_dir: artifacts/v20/scores
+  baselines_dir: artifacts/v20/baselines
   # PCV 分数按 audit_id 标识、baseline 按 doc_id;并表需经 facts 文件的 audit_id→doc_id 映射桥对齐。
   facts_dir: outputs/facts
+  queries_dir: artifacts/v6_3/stealth_filtered_queries
+  splits_dir: artifacts/v6_3/splits
+  representative_manifest_dir: artifacts/v20/release_controls/representative_chunks
 
 baseline:
-  # v19 formal matrix selects methods for the current single Generator only.
+  retriever_backend: dense
+  retriever_id: BAAI/bge-base-en-v1.5
+  representative_chunk:
+    enabled: true
+    chunk_size: 128
+    chunk_overlap: 32
+    selection: max_bge_cosine_over_six_frozen_queries
+    tie_break: chunk_id_lexicographic
+    shared_across_methods: true
+  victim_calls_per_source:
+    DCMI: 2
+    IA: 5
+    MBA: 1
+    RAG-MIA: 1
+    S2MIA: 1
+  # v20 formal matrix selects methods for the current single Generator only.
   formal_method_policy:
-    full_generator: qwen/qwen3.5-397b-a17b
+    full_generator: meta/llama-3.1-70b-instruct
     full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI]
-    extension_methods: [IA, DCMI]
+    extension_methods: []
 
   # 把分数转成成员/非成员判定时用的阈值(用于固定阈值指标;AUC/Acc@best 不受其影响)。
   threshold: 0.3

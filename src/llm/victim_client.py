@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, Protocol
 
-from .openai_compatible import OpenAICompatibleChatClient
+from .openai_compatible import ChatResult, OpenAICompatibleChatClient
 
 
 class VictimClient(Protocol):
@@ -26,6 +26,15 @@ class VictimClient(Protocol):
 
     def generate(self, prompt: str, temperature: float = 0.0, timeout: float = 60.0, max_tokens: int = 512) -> str:
         # 输入一段 prompt，返回模型回答文本。此处仅声明签名，无实现。
+        ...
+
+    def generate_with_metadata(
+        self,
+        prompt: str,
+        temperature: float = 0.0,
+        timeout: float = 60.0,
+        max_tokens: int = 512,
+    ) -> ChatResult:
         ...
 
 
@@ -75,3 +84,19 @@ class OpenAICompatibleVictimClient:
             模型回答文本。
         """
         return self._client.chat(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+
+    def generate_with_metadata(
+        self,
+        prompt: str,
+        temperature: float = 0.0,
+        timeout: float = 60.0,
+        max_tokens: int = 512,
+    ) -> ChatResult:
+        """返回文本以及 provider 实际模型、请求 ID、指纹和调用时间。"""
+
+        return self._client.chat_with_metadata(
+            prompt,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        )

@@ -21,6 +21,7 @@ from .metrics import (
     low_fpr_exact_intervals,
     summarize_membership_scores,
 )
+from .v20_release_controls import calibration_source_keys
 from ..scoring.calibration import CALIBRATION_GROUP
 from ..utils.hash import sha256_file, sha256_obj
 from ..utils.io import read_json, read_jsonl, write_json
@@ -45,6 +46,7 @@ def generate_final_report(
     resume: bool = True,
     force: bool = False,
     coverage_path: str | Path | None = None,
+    reserve_roles_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """汇总各阶段 manifest 和指标，生成 JSON + Markdown 报告。
 
@@ -91,9 +93,31 @@ def generate_final_report(
     # 算主攻击指标(在排除 Reserve 后的 source-level 评估样本上)。
     metrics = summarize_membership_scores(eval_rows, score_key=score_key, threshold=threshold)
     metrics["AUC_CI"] = bootstrap_auc_ci(eval_rows, score_key=score_key)
+    if reserve_roles_path is None:
+        if dataset in {"edgar", "enron", "pubmed"}:
+            raise ValueError(
+                "v20 canonical report requires the frozen 5/245 Reserve role manifest"
+            )
+        calibration_keys = None
+    else:
+        calibration_keys = calibration_source_keys(reserve_roles_path)
     calibrated = {
-        "alpha_0.01": bootstrap_conformal_ci(score_rows, score_key=score_key, alpha=0.01),
-        "alpha_0.05": bootstrap_conformal_ci(score_rows, score_key=score_key, alpha=0.05),
+        "alpha_0.01": bootstrap_conformal_ci(
+            score_rows,
+            score_key=score_key,
+            alpha=0.01,
+            n_bootstrap=2000,
+            seed=42,
+            calibration_source_keys=calibration_keys,
+        ),
+        "alpha_0.05": bootstrap_conformal_ci(
+            score_rows,
+            score_key=score_key,
+            alpha=0.05,
+            n_bootstrap=2000,
+            seed=42,
+            calibration_source_keys=calibration_keys,
+        ),
     }
     negative_count = sum(1 for row in eval_rows if str(row.get("group")) != "KB_Member")
     # 分组分数分布保留所有组(含 Reserve)用于诊断展示:Reserve 的均值应≈True_Non_Member。
@@ -112,6 +136,7 @@ def generate_final_report(
             "baseline_comparison": _file_provenance(baseline_path),
             "mechanism": _file_provenance(mechanism_path),
             "defense": _file_provenance(defense_path),
+            "reserve_roles": _file_provenance(reserve_roles_path),
         },
         "created_at": datetime.now(timezone.utc).isoformat(),
         "data_statistics": {
@@ -145,6 +170,16 @@ def generate_final_report(
         "main_attack_results": metrics,
         "low_fpr_exact_intervals": low_fpr_exact_intervals(negative_count),
         "calibrated_attack_results": calibrated,
+        "calibration_protocol": {
+            "calibration_scope": "post_retriever_frozen_nonmember_calibration",
+            "reserve_role": "retriever_dev_and_conformal",
+            "conformal_source_count": 245,
+            "conformal_alphas": [0.01, 0.05],
+            "retriever_selection_used_reserve_recall": True,
+            "retriever_selection_used_attack_scores": False,
+            "pilot_reserve_excluded_from_calibration": True,
+            "claim": "secondary_empirical_calibration_without_strict_coverage_guarantee",
+        },
         "main_score_key": score_key,
         "score_distributions": group_scores,
         # baseline 文件存在才读,否则给空列表。
@@ -156,6 +191,7 @@ def generate_final_report(
         "required_report_items": {
             "Oracle TPR@1%FPR": metrics.get("Oracle TPR@1%FPR"),
             "Oracle TPR@5%FPR": metrics.get("Oracle TPR@5%FPR"),
+            "Attack Advantage": metrics.get("Attack Advantage"),
             "Calibrated alpha=1%": calibrated["alpha_0.01"],
             "Calibrated alpha=5%": calibrated["alpha_0.05"],
             "FPR-True_Non_Member": metrics.get("FPR-True_Non_Member"),
@@ -278,6 +314,7 @@ def _render_summary(report: dict[str, Any]) -> str:
         f"- Accuracy @ threshold {metrics.get('threshold')}: {_num(metrics.get('Accuracy'))}\n"
         f"- Oracle TPR@1%FPR: {_num(metrics.get('Oracle TPR@1%FPR'))}\n"
         f"- Oracle TPR@5%FPR: {_num(metrics.get('Oracle TPR@5%FPR'))}\n"
+        f"- Attack Advantage: {_num(metrics.get('Attack Advantage'))}\n"
         f"- Calibrated TPR @ alpha=1%: {_num(report.get('calibrated_attack_results', {}).get('alpha_0.01', {}).get('TPR'))}\n"
         f"- Realized FPR @ alpha=1%: {_num(report.get('calibrated_attack_results', {}).get('alpha_0.01', {}).get('realized_FPR'))}\n"
         f"- FPR True_Non_Member: {_num(metrics.get('FPR-True_Non_Member'))}\n"

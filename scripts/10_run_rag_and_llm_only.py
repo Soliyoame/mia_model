@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -24,9 +25,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.llm.factory import build_victim_client, load_llm_profiles, resolve_llm_profile_name
+from src.llm.generator_registry import (
+    load_and_resolve_frozen_generator,
+    record_first_formal_call,
+)
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
+from src.rag.retriever import HybridRagRetriever
 from src.rag.runner import run_rag_and_llm_only
-from src.utils.io import ensure_dir, load_yaml, read_jsonl, resolve_path
-from src.utils.run_context import model_scoped_dir
+from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json
+from src.utils.run_context import (
+    experiment_scoped_dir,
+    git_snapshot,
+    require_clean_release_commit,
+)
 from src.utils.logger import setup_logging
 from src.utils.seed import set_seed_from_config
 
@@ -42,7 +53,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
     parser.add_argument("--victim-profile", default=None)
-    parser.add_argument("--retriever-backend", choices=["dense", "bm25"], default=None)
+    parser.add_argument(
+        "--retriever-backend",
+        choices=["dense", "bm25", "hybrid"],
+        default=None,
+    )
+    parser.add_argument(
+        "--generator-family",
+        choices=["gemini", "qwen", "gpt", "llama"],
+        default=None,
+    )
+    parser.add_argument(
+        "--context-control",
+        choices=["retrieved", "oracle", "random"],
+        default="retrieved",
+        help="真实检索、Oracle target context 或确定性 Random distractor。",
+    )
     parser.add_argument(
         "--variant-id",
         default="full_pvs",
@@ -52,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         "--queries-path",
         default=None,
         help="显式查询计划 JSONL；省略时按 variant-id 从配置目录解析",
+    )
+    parser.add_argument(
+        "--suite-id",
+        default=None,
+        help="Pilot/extension 的隔离 suite ID；省略时写正式 v20 目录。",
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
@@ -85,8 +116,22 @@ def main() -> int:
         进程退出码,正常结束返回 0。
     """
     args = parse_args()
+    if (
+        args.suite_id is None
+        and os.getenv("PCV_ALLOW_SINGLE_CELL_FORMAL", "").strip().lower()
+        not in {"1", "true", "yes"}
+    ):
+        raise RuntimeError(
+            "Direct one-cell formal execution is disabled by v20. "
+            "Use scripts/22_run_interleaved_v20.py so all four conditions "
+            "follow the frozen source-block schedule."
+        )
     if args.skip_rag and not args.llm_only:
         raise ValueError("--skip-rag requires --llm-only")
+    if args.llm_only and not args.skip_rag:
+        raise ValueError(
+            "v20 matched LLM-only must run as a separate cell: use --llm-only --skip-rag."
+        )
     if args.checkpoint_every < 1:
         raise ValueError("--checkpoint-every must be a positive integer")
     config = load_yaml(args.config)
@@ -94,6 +139,10 @@ def main() -> int:
     logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
     profiles = load_llm_profiles(config)
     gen_cfg = config.get("generation", {})
+    if bool(gen_cfg.get("run_llm_only", False)) and not args.skip_rag:
+        raise ValueError(
+            "generation.run_llm_only cannot be combined with a RAG cell in v20."
+        )
     # 受害者模型 profile:命令行 --victim-profile 优先,其次取配置里的 victim_profile。
     profile_name = resolve_llm_profile_name(
         "victim",
@@ -102,6 +151,44 @@ def main() -> int:
     )
     client, profile = build_victim_client(profiles, profile_name=profile_name)
     retriever_backend = args.retriever_backend or str(config.get("retrieval", {}).get("backend", "dense"))
+    generator_family = args.generator_family or str(config.get("generator_family") or "")
+    generator_identity = load_and_resolve_frozen_generator(
+        family=generator_family,
+        concrete_model=str(profile.get("model") or ""),
+        provider=str(profile.get("provider") or ""),
+        generator_version=profile.get("model_version"),
+        path=str(
+            config.get(
+                "generator_registry_path",
+                "configs/generator_families.yaml",
+            )
+        ),
+        allow_pilot_candidate=bool(args.suite_id),
+    )
+    selected_retriever_id = (
+        retriever_id_from_config(config, retriever_backend)
+        if args.context_control == "retrieved"
+        else {
+            "oracle": "oracle-context",
+            "random": "random-distractor",
+        }[args.context_control]
+    )
+    if args.suite_id:
+        suite_id = re.sub(
+            r"[^A-Za-z0-9._-]+",
+            "-",
+            str(args.suite_id).strip(),
+        ).strip("-")
+        if not suite_id:
+            raise ValueError("--suite-id must contain at least one safe character")
+        suite_root = resolve_path(
+            config["paths"].get("pilots_dir", "artifacts/v20/pilots")
+        ) / suite_id
+        rag_responses_base = suite_root / "rag_responses"
+        llm_only_responses_base = suite_root / "llm_only_responses"
+    else:
+        rag_responses_base = config["paths"]["rag_responses_dir"]
+        llm_only_responses_base = config["paths"]["llm_only_responses_dir"]
     variant_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(args.variant_id).strip()).strip("-")
     if not variant_id or variant_id != str(args.variant_id).strip():
         logger.error("非法 --variant-id: %r", args.variant_id)
@@ -112,8 +199,24 @@ def main() -> int:
             resolve_path(config["paths"]["queries_dir"])
             / f"{args.dataset}_paired_queries.jsonl"
         )
-        rag_dir = ensure_dir(model_scoped_dir(config["paths"]["rag_responses_dir"], args.dataset))
-        llm_dir = ensure_dir(model_scoped_dir(config["paths"]["llm_only_responses_dir"], args.dataset))
+        rag_dir = ensure_dir(
+            experiment_scoped_dir(
+                rag_responses_base,
+                args.dataset,
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id=selected_retriever_id,
+            )
+        )
+        llm_dir = ensure_dir(
+            experiment_scoped_dir(
+                llm_only_responses_base,
+                args.dataset,
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id="none",
+            )
+        )
         rag_output_path = rag_dir / f"{args.dataset}_rag_responses.jsonl"
         llm_output_path = llm_dir / f"{args.dataset}_llm_only_responses.jsonl"
     else:
@@ -122,13 +225,17 @@ def main() -> int:
         )
         default_queries_path = control_queries_dir / args.dataset / variant_id / "queries.jsonl"
         control_dir = ensure_dir(
-            model_scoped_dir(
+            experiment_scoped_dir(
                 config["paths"].get(
                     "query_control_responses_dir",
                     "outputs/query_control_responses",
                 ),
                 args.dataset,
-            ) / variant_id
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id=selected_retriever_id,
+            )
+            / variant_id
         )
         rag_output_path = control_dir / "rag_responses.jsonl"
         llm_output_path = control_dir / "llm_only_responses.jsonl"
@@ -152,11 +259,98 @@ def main() -> int:
         }
         logger.info("primary-only 生效: %s 个 primary fact 进入本次运行", len(allowed_fact_ids))
 
+    retriever_override = None
+    if (
+        retriever_backend == "hybrid"
+        and args.context_control == "retrieved"
+        and not args.skip_rag
+    ):
+        hybrid_cfg = config.get("retrieval", {}).get("hybrid", {})
+        retriever_override = HybridRagRetriever(
+            retriever_index_dir(config, args.dataset, "dense"),
+            retriever_index_dir(config, args.dataset, "bm25"),
+            dense_candidate_top_k=int(
+                hybrid_cfg.get("dense_candidate_top_k", 20)
+            ),
+            bm25_candidate_top_k=int(
+                hybrid_cfg.get("bm25_candidate_top_k", 20)
+            ),
+            rrf_k=int(hybrid_cfg.get("rrf_k", 60)),
+            fusion_top_k=int(hybrid_cfg.get("fusion_top_k", 20)),
+            final_top_k=int(hybrid_cfg.get("final_top_k", 5)),
+            reranker_model=str(
+                hybrid_cfg.get("reranker_model", "BAAI/bge-reranker-base")
+            ),
+            reranker_revision=hybrid_cfg.get("reranker_revision"),
+            reranker_local_files_only=bool(
+                hybrid_cfg.get("reranker_local_files_only", True)
+            ),
+        )
+        index_dir = resolve_path(config["paths"]["indexes_dir"]) / args.dataset
+    elif not args.skip_rag:
+        underlying_backend = (
+            retriever_backend
+            if args.context_control == "retrieved"
+            else "dense"
+        )
+        index_dir = retriever_index_dir(config, args.dataset, underlying_backend)
+    else:
+        index_dir = resolve_path(config["paths"]["indexes_dir"]) / args.dataset
+    if not args.skip_rag:
+        active_retriever = retriever_override
+        if active_retriever is None:
+            from src.rag.retriever import RagRetriever
+
+            active_retriever = RagRetriever(index_dir)
+            retriever_override = active_retriever
+        active_manifest = getattr(active_retriever, "manifest", {})
+        snapshot_backend = (
+            retriever_backend
+            if args.context_control == "retrieved"
+            else "dense"
+        )
+        if snapshot_backend == "dense" and not active_manifest.get(
+            "embedding_revision"
+        ):
+            raise RuntimeError(
+                "Dense Retriever snapshot is not frozen. Set embedding.revision "
+                "to an exact commit and rebuild the index before API calls."
+            )
+        if snapshot_backend == "bm25" and not active_manifest.get(
+            "tokenizer_revision"
+        ):
+            raise RuntimeError(
+                "BM25 tokenizer snapshot is not frozen. Set tokenizer_revision "
+                "to an exact commit and rebuild the index before API calls."
+            )
+        if snapshot_backend == "hybrid":
+            if not active_manifest.get("dense_embedding_revision"):
+                raise RuntimeError("Hybrid dense snapshot is not frozen.")
+            if not active_manifest.get("reranker_revision"):
+                raise RuntimeError("Hybrid reranker snapshot is not frozen.")
+    code_commit = require_clean_release_commit(git_snapshot())
+    schedule_path = None
+    schedule_hash = None
+    schedule_cell = None
+    if args.suite_id is None and args.context_control == "retrieved":
+        schedule_path = resolve_path(config["paths"]["execution_schedule_path"])
+        schedule_manifest_path = resolve_path(
+            config["paths"]["execution_schedule_manifest_path"]
+        )
+        if not schedule_path.is_file() or not schedule_manifest_path.is_file():
+            raise FileNotFoundError(
+                "Formal v20 execution requires the frozen execution schedule; "
+                "run scripts/21_prepare_v20_release_controls.py first."
+            )
+        schedule_manifest = read_json(schedule_manifest_path)
+        schedule_hash = str(schedule_manifest.get("schedule_hash") or "")
+        schedule_cell = "none" if args.skip_rag else retriever_backend
+
     manifest = run_rag_and_llm_only(
         dataset=args.dataset,
         queries_path=queries_path,
         benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
-        index_dir=resolve_path(config["paths"]["indexes_dir"]) / args.dataset / retriever_backend,
+        index_dir=index_dir,
         rag_output_path=rag_output_path,
         llm_output_path=llm_output_path,
         client=client,
@@ -180,17 +374,54 @@ def main() -> int:
         resume=not args.no_resume,
         force=args.force,
         # 把实际用到的 victim profile 一并写进配置快照,方便结果追溯。
-        config_snapshot={**config, "victim_profile_used": profile},
+        config_snapshot={
+            **config,
+            "victim_profile_used": profile,
+            "generator_identity": generator_identity.to_dict(),
+            "suite_id": args.suite_id,
+        },
         variant_id=variant_id,
         checkpoint_every=args.checkpoint_every,
-        generator_id=str(profile.get("model") or profile_name),
-        generator_version=str(profile.get("model_version") or profile.get("model") or profile_name),
+        generator_family=generator_identity.generator_family,
+        concrete_model=generator_identity.concrete_model,
+        generator_id=generator_identity.concrete_model,
+        generator_version=generator_identity.generator_version,
+        code_commit=code_commit,
+        retriever_override=retriever_override,
+        context_control=args.context_control,
+        retriever_identity_override=selected_retriever_id,
         pairs_per_source=(
             int(config.get("experiment_protocol", {}).get("pairs_per_source"))
             if config.get("experiment_protocol", {}).get("pairs_per_source") is not None
             else None
         ),
+        ground_truth_source_store_path=(
+            resolve_path(config["paths"]["ground_truth_source_store_dir"])
+            / f"{args.dataset}_sources.jsonl"
+            if args.context_control != "retrieved"
+            else None
+        ),
+        schedule_path=schedule_path,
+        schedule_hash=schedule_hash,
+        schedule_cell=schedule_cell,
     )
+    first_call_at = (
+        manifest.get("provider_response_metadata") or {}
+    ).get("first_call_at")
+    if args.suite_id is None and first_call_at:
+        freeze_state = record_first_formal_call(
+            generator_identity,
+            called_at=str(first_call_at),
+            state_root=config["paths"].get(
+                "generator_registry_state_dir",
+                "artifacts/v20/generator_registry_state",
+            ),
+        )
+        manifest["generator_freeze_state_path"] = str(freeze_state)
+        if not args.skip_rag:
+            write_json(manifest, rag_output_path.with_suffix(".manifest.json"))
+        if bool(args.llm_only or gen_cfg.get("run_llm_only", False)):
+            write_json(manifest, llm_output_path.with_suffix(".manifest.json"))
     logger.info("Step 10 finished: %s", manifest)
     return 0
 

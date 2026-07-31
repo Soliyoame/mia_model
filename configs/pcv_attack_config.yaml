@@ -2,7 +2,7 @@
 
 logging:
   level: INFO
-  file: artifacts/v6_3/logs/pcv_attack.log
+  file: artifacts/v20/logs/pcv_attack.log
 
 llm_profiles_path: configs/llm_profiles.yaml
 
@@ -12,8 +12,8 @@ paths:
   paired_claims_dir: artifacts/v6_3/paired_claims
   paired_queries_dir: artifacts/v6_3/paired_queries
   stealth_filtered_queries_dir: artifacts/v6_3/stealth_filtered_queries
-  parsed_stance_dir: artifacts/v6_3/parsed_stance
-  scores_dir: artifacts/v6_3/scores
+  parsed_stance_dir: artifacts/v20/parsed_stance
+  scores_dir: artifacts/v20/scores
 
 fact_extraction:
   max_facts_per_doc: 4

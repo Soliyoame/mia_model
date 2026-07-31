@@ -24,9 +24,11 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from ..utils.env import load_dotenv
+from .response_validation import detect_api_error_text
 
 
 def normalize_chat_completions_url(base_url: str) -> str:
@@ -49,6 +51,22 @@ def normalize_chat_completions_url(base_url: str) -> str:
     return f"{cleaned}/chat/completions"
 
 
+@dataclass(frozen=True)
+class ChatResult:
+    """回答文本及 provider 返回的可用溯源元数据。"""
+
+    content: str
+    provider_model_id: str | None
+    provider_request_id: str | None
+    system_fingerprint: str | None
+    called_at: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    finish_reason: str | None = None
+    latency_ms: float | None = None
+    retry_count: int = 0
+
+
 @dataclass
 class OpenAICompatibleChatClient:
     """最小 OpenAI-compatible Chat Completions 客户端。
@@ -68,15 +86,15 @@ class OpenAICompatibleChatClient:
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数(如 top_p)
     stream: bool = False          # 是否走流式(SSE):慢模型 + Cloudflare 类网关下可绕开"N 秒无响应"的 524
 
-    def chat(
+    def chat_with_metadata(
         self,
         user_prompt: str,
         *,
         temperature: float = 0.0,
         timeout: float | None = None,
         max_tokens: int = 512,
-    ) -> str:
-        """发送一次 chat completion 请求并返回文本内容。
+    ) -> ChatResult:
+        """发送一次 chat completion 请求并返回文本与 provider 元数据。
 
         参数:
             user_prompt: 用户这轮要问的内容。
@@ -88,6 +106,8 @@ class OpenAICompatibleChatClient:
         异常:
             ValueError / RuntimeError: 配置缺失、密钥未设置、或返回格式异常时抛出。
         """
+        called_at = datetime.now(timezone.utc).isoformat()
+        request_started = time.perf_counter()
         # 基础地址和模型名是必填项，缺了直接报错。
         if not self.base_url:
             raise ValueError("OpenAI-compatible base_url is required.")
@@ -150,28 +170,120 @@ class OpenAICompatibleChatClient:
 
         # 流式:逐块读 SSE、累积答案文本后直接返回(已是纯文本,无需再解析整段 JSON)。
         if self.stream:
-            return self._stream_with_retries(request, request_timeout)
+            (
+                content,
+                provider_model_id,
+                provider_request_id,
+                system_fingerprint,
+                input_tokens,
+                output_tokens,
+                finish_reason,
+                retry_count,
+            ) = self._stream_with_retries(request, request_timeout)
+            api_error = detect_api_error_text(content)
+            if api_error:
+                raise RuntimeError(f"OpenAI-compatible API error response: {api_error}")
+            return ChatResult(
+                content=content,
+                provider_model_id=provider_model_id,
+                provider_request_id=provider_request_id,
+                system_fingerprint=system_fingerprint,
+                called_at=called_at,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+                latency_ms=(time.perf_counter() - request_started) * 1000.0,
+                retry_count=retry_count,
+            )
 
         # 非流式:发请求(带重试)，拿到原始返回字符串。
-        raw = self._urlopen_with_retries(request, request_timeout)
+        transport_result = self._urlopen_with_retries(request, request_timeout)
+        if isinstance(transport_result, tuple):
+            raw, retry_count = transport_result
+        else:  # compatibility with mocked/legacy transports
+            raw, retry_count = transport_result, 0
 
         # 解析返回的 JSON，取出模型回答文本。OpenAI 风格返回放在 choices[0].message.content。
         try:
             data = json.loads(raw)
+            api_error = detect_api_error_text(raw)
+            if api_error:
+                raise RuntimeError(f"OpenAI-compatible API error response: {api_error}")
             choice = data["choices"][0]
             # 新式 chat 接口:答案在 message.content。
             if "message" in choice and isinstance(choice["message"], dict):
-                return str(choice["message"].get("content", ""))
-            # 兼容旧式 completion 接口:答案在 text。
-            return str(choice.get("text", ""))
+                content = str(choice["message"].get("content", ""))
+            else:
+                # 兼容旧式 completion 接口:答案在 text。
+                content = str(choice.get("text", ""))
+            content_error = detect_api_error_text(content)
+            if content_error:
+                raise RuntimeError(
+                    f"OpenAI-compatible API error response: {content_error}"
+                )
+            return ChatResult(
+                content=content,
+                provider_model_id=(
+                    str(data.get("model")) if data.get("model") is not None else None
+                ),
+                provider_request_id=(
+                    str(data.get("id")) if data.get("id") is not None else None
+                ),
+                system_fingerprint=(
+                    str(data.get("system_fingerprint"))
+                    if data.get("system_fingerprint") is not None
+                    else None
+                ),
+                called_at=called_at,
+                input_tokens=(
+                    int((data.get("usage") or {}).get("prompt_tokens"))
+                    if (data.get("usage") or {}).get("prompt_tokens") is not None
+                    else None
+                ),
+                output_tokens=(
+                    int((data.get("usage") or {}).get("completion_tokens"))
+                    if (data.get("usage") or {}).get("completion_tokens") is not None
+                    else None
+                ),
+                finish_reason=(
+                    str(choice.get("finish_reason"))
+                    if choice.get("finish_reason") is not None
+                    else None
+                ),
+                latency_ms=(time.perf_counter() - request_started) * 1000.0,
+                retry_count=retry_count,
+            )
+        except RuntimeError:
+            raise
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             # 返回结构不符合预期(可能是错误页/限流页)，截前 500 字符报错便于排查。
             raise RuntimeError(f"Unexpected OpenAI-compatible response: {raw[:500]}") from exc
 
+    def chat(
+        self,
+        user_prompt: str,
+        *,
+        temperature: float = 0.0,
+        timeout: float | None = None,
+        max_tokens: int = 512,
+    ) -> str:
+        """兼容旧调用：仅返回文本。"""
+
+        return self.chat_with_metadata(
+            user_prompt,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens=max_tokens,
+        ).content
+
     # 可重试的瞬时传输错误与限流状态码。524 = Cloudflare 网关"源站超时",慢模型常踩,纳入重试。
     _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 524})
 
-    def _urlopen_with_retries(self, request: urllib.request.Request, request_timeout: float) -> str:
+    def _urlopen_with_retries(
+        self,
+        request: urllib.request.Request,
+        request_timeout: float,
+    ) -> tuple[str, int]:
         """发送请求；对限流 / 5xx / 网络抖动做指数退避重试。
 
         max_retries=0（默认）时行为与原来一致：失败立即抛错，由上层（如 rag.runner）
@@ -191,7 +303,7 @@ class OpenAICompatibleChatClient:
             try:
                 # 打开连接、读出正文并按 utf-8 解码返回。
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
-                    return response.read().decode("utf-8")
+                    return response.read().decode("utf-8"), attempt
             except urllib.error.HTTPError as exc:
                 # 服务器返回了错误状态码(如 429/500)。
                 detail = exc.read().decode("utf-8", errors="replace")
@@ -209,7 +321,20 @@ class OpenAICompatibleChatClient:
         # 理论上不会走到这里(循环里要么 return 要么 raise)，兜底再抛一次。
         raise RuntimeError("OpenAI-compatible request failed after retries.")
 
-    def _stream_with_retries(self, request: urllib.request.Request, request_timeout: float) -> str:
+    def _stream_with_retries(
+        self,
+        request: urllib.request.Request,
+        request_timeout: float,
+    ) -> tuple[
+        str,
+        str | None,
+        str | None,
+        str | None,
+        int | None,
+        int | None,
+        str | None,
+        int,
+    ]:
         """发流式(SSE)请求,逐行解析 data: 块,累积并返回答案文本。
 
         与 _urlopen_with_retries 同样的退避重试策略;区别是按 SSE 流式读取——服务端边
@@ -220,6 +345,12 @@ class OpenAICompatibleChatClient:
         for attempt in range(attempts + 1):
             try:
                 chunks: list[str] = []
+                provider_models: set[str] = set()
+                provider_request_id: str | None = None
+                system_fingerprint: str | None = None
+                input_tokens: int | None = None
+                output_tokens: int | None = None
+                finish_reason: str | None = None
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     for raw_line in response:  # 按行迭代 SSE 流
                         line = raw_line.decode("utf-8", errors="replace").strip()
@@ -229,13 +360,55 @@ class OpenAICompatibleChatClient:
                         if data == "[DONE]":
                             break
                         try:
-                            delta = json.loads(data)["choices"][0].get("delta", {})
-                        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                            event = json.loads(data)
+                        except json.JSONDecodeError as exc:
+                            api_error = detect_api_error_text(data)
+                            if api_error:
+                                raise RuntimeError(
+                                    f"OpenAI-compatible streaming API error: {api_error}"
+                                ) from exc
                             continue  # 心跳/非标准行,跳过
+                        api_error = detect_api_error_text(data)
+                        if api_error:
+                            raise RuntimeError(
+                                f"OpenAI-compatible streaming API error: {api_error}"
+                            )
+                        if event.get("model") is not None:
+                            provider_models.add(str(event["model"]))
+                        if provider_request_id is None and event.get("id") is not None:
+                            provider_request_id = str(event["id"])
+                        if system_fingerprint is None and event.get("system_fingerprint") is not None:
+                            system_fingerprint = str(event["system_fingerprint"])
+                        usage = event.get("usage") or {}
+                        if usage.get("prompt_tokens") is not None:
+                            input_tokens = int(usage["prompt_tokens"])
+                        if usage.get("completion_tokens") is not None:
+                            output_tokens = int(usage["completion_tokens"])
+                        try:
+                            choice = event["choices"][0]
+                            delta = choice.get("delta", {})
+                            if choice.get("finish_reason") is not None:
+                                finish_reason = str(choice["finish_reason"])
+                        except (KeyError, IndexError, TypeError):
+                            continue  # 心跳/用量统计行,跳过
                         piece = delta.get("content")
                         if piece:
                             chunks.append(str(piece))
-                return "".join(chunks)
+                if len(provider_models) > 1:
+                    raise RuntimeError(
+                        "OpenAI-compatible streaming model identity drift:"
+                        f" {sorted(provider_models)!r}"
+                    )
+                return (
+                    "".join(chunks),
+                    next(iter(provider_models), None),
+                    provider_request_id,
+                    system_fingerprint,
+                    input_tokens,
+                    output_tokens,
+                    finish_reason,
+                    attempt,
+                )
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
                 if exc.code in self._RETRYABLE_STATUS and attempt < attempts:

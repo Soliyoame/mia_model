@@ -4,27 +4,48 @@
 # ---------------- 日志 ----------------
 logging:
   level: INFO                      # 日志详细程度：INFO=常规；排错可改 DEBUG
-  file: artifacts/v6_3/logs/rag.log # v6.3 RAG 阶段独立日志
+  file: artifacts/v20/logs/rag.log
 
 # 大模型 profile 定义文件（接口风格、system prompt、默认模型名都在这里）。
 # 真实 key/base_url/model 仍由 .env 的 PCV_VICTIM_* / PCV_SIBLING_* 覆盖。
 llm_profiles_path: configs/llm_profiles.yaml
+generator_registry_path: configs/generator_families.yaml
+generator_family: llama
 
 experiment_protocol:
+  protocol_version: pcv-mia-v20
+  method_version: pcv-rag-only-source-v20
+  dataset_status: pre_response_frozen_canonical
+  metrics_version: source-conformal-bootstrap-v2
+  reserve_role: retriever_dev_and_conformal
+  conformal_source_count: 245
+  conformal_alphas: [0.01, 0.05]
+  execution: source_block_interleaved
   pairs_per_source: 3
   logical_victim_calls_per_source_per_mode: 6
-  dense_retriever_model: sentence-transformers/all-MiniLM-L6-v2
+  dense_retriever_model: BAAI/bge-base-en-v1.5
 
 # ---------------- 输入/输出目录 ----------------
 paths:
   query_controls_dir: artifacts/v6_3/query_controls
   query_control_responses_dir: artifacts/v6_3/query_control_responses
   splits_dir: artifacts/v6_3/splits                     # 读：v6.3 source-level split
-  indexes_dir: artifacts/v6_3/indexes                    # 写：仅含 KB_Member，dense/BM25 分目录隔离
+  indexes_dir: artifacts/v20/indexes                     # 写：v20 正式 KB_Member 索引
+  retrieval_dev_indexes_dir: artifacts/v20/retrieval_dev_indexes # Reserve-only pseudo-member 门禁，绝不进入正式 indexes
   benchmark_dir: artifacts/v6_3/benchmarks               # 读：v6.3 固化 benchmark（带 hash）
   queries_dir: artifacts/v6_3/stealth_filtered_queries   # 读：v6.3 第 09 步固定预算查询
-  rag_responses_dir: artifacts/v6_3/rag_responses        # 写：v6.3 RAG 回答
-  llm_only_responses_dir: artifacts/v6_3/llm_only_responses
+  rag_responses_dir: artifacts/v20/rag_responses
+  llm_only_responses_dir: artifacts/v20/llm_only_responses
+  scores_dir: artifacts/v20/scores
+  reports_dir: artifacts/v20/reports
+  runs_dir: artifacts/v20/runs
+  pilots_dir: artifacts/v20/pilots
+  release_controls_dir: artifacts/v20/release_controls
+  reserve_roles_dir: artifacts/v20/release_controls/reserve_roles
+  ground_truth_source_store_dir: artifacts/v20/release_controls/ground_truth_source_store
+  execution_schedule_path: artifacts/v20/release_controls/execution_schedule.jsonl
+  execution_schedule_manifest_path: artifacts/v20/release_controls/execution_schedule.manifest.json
+  generator_registry_state_dir: artifacts/v20/generator_registry_state
   facts_dir: artifacts/v6_3/facts
 
 # ---------------- 向量嵌入（把文本转成向量，用于检索）----------------
@@ -37,23 +58,60 @@ dataset_paths:
     splits_dir: artifacts/v6_3/splits/pubmed
 
 embedding:
-  # 正式实验可改为 bge-small-en、all-MiniLM-L6-v2、bge-base-en、e5-base-v2、gte 等。
-  model: sentence-transformers/all-MiniLM-L6-v2   # 当前用的嵌入模型（384 维小模型，CPU 可跑）
+  model: BAAI/bge-base-en-v1.5
+  # 首次下载并验证后应替换为 Hugging Face commit SHA；canonical 门禁拒绝模糊 snapshot。
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
   backend: auto                                   # auto/sentence_transformers=用真实模型；
                                                   # 写 hashing 会直接报错（已禁用假 fallback）
   local_files_only: true                          # 正式实验只使用已冻结的本地模型 snapshot
-  dim: 384                                        # 向量维度，必须与上面模型的输出维度一致
+  dim: 768
+  query_instruction: "Represent this sentence for searching relevant passages: "
 
 # ---------------- 分块（建索引时把文档再切成检索单元）----------------
 chunking:
-  chunk_size: 500        # 每个检索块的大小（字符数）
-  chunk_overlap: 50      # 相邻块重叠 50 字符，避免把一句话从中间切断丢信息
+  unit: tokens
+  tokenizer_model: BAAI/bge-base-en-v1.5
+  tokenizer_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  tokenizer_local_files_only: true
+  chunk_size: 128
+  chunk_overlap: 32
+  offline_gate_candidates:
+    - {chunk_size: 128, chunk_overlap: 32}
+    - {chunk_size: 256, chunk_overlap: 32}
+    - {chunk_size: 384, chunk_overlap: 64}
 
 # ---------------- 检索（回答问题前先从库里找相关块）----------------
 retrieval:
-  backend: dense          # dense 或 bm25；正式实验两者分别运行并使用隔离索引
-  top_k: 5               # 每个问题检索最相关的 5 个块喂给模型
+  backend: dense
+  top_k: 5
   query_rewriting: false # 是否先把问题改写再检索：false=直接用原问题检索（保持攻击查询原样）
+  retriever_ids:
+    dense: BAAI/bge-base-en-v1.5
+    bm25: bm25
+    hybrid: bge-base-en-v1.5+bm25+rrf+bge-reranker-base
+    none: none
+  hybrid:
+    dense_candidate_top_k: 20
+    bm25_candidate_top_k: 20
+    rrf_k: 60
+    fusion_top_k: 20
+    reranker_model: BAAI/bge-reranker-base
+    reranker_revision: 2cfc18c9415c912f9d8155881c133215df768a70
+    reranker_local_files_only: true
+    final_top_k: 5
+  offline_gate:
+    recall_at_5_min: 0.70
+    recall_at_10_min: 0.80
+    zero_hit_source_rate_max: 0.05
+    forbidden_group_overlap: 0
+    fallback_dense_model: BAAI/bge-large-en-v1.5
+    fallback_chunk_size: 256
+    fallback_chunk_overlap: 32
+  context_controls:
+    oracle_max_chunks: 5
+    random_token_tolerance: 0.05
+    minhash_jaccard_exclusion: 0.85
+    dense_cosine_exclusion: 0.85
 
 # ---------------- 生成（第 10 步调 victim 大模型回答问题）----------------
 generation:

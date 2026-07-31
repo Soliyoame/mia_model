@@ -2,16 +2,21 @@
 
 logging:
   level: INFO
-  file: datasets/logs/defenses.log
+  file: artifacts/v20/logs/defenses.log
 
 paths:
-  scores_dir: outputs/scores
-  defenses_dir: outputs/defenses
+  scores_dir: artifacts/v20/scores
+  defenses_dir: artifacts/v20/defenses
+  queries_dir: artifacts/v6_3/stealth_filtered_queries
+  rag_responses_dir: artifacts/v20/rag_responses
+  reserve_roles_dir: artifacts/v20/release_controls/reserve_roles
 
 defense:
   threshold: 0.5
+  score_key: pcv_score
+  bootstrap: 2000
+  seed: 42
+  conformal_alphas: [0.01, 0.05]
   policies:
-    conflict_aware_non_disclosure: true
-    entity_redaction: true
-    query_similarity_filter: true
     answer_without_correction: true
+    target_entity_redaction: true

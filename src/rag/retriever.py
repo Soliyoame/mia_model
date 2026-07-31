@@ -22,8 +22,14 @@ from typing import Any
 
 import numpy as np
 
-from .embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model
-from ..utils.hash import sha256_file
+from .embeddings import (
+    DEFAULT_BGE_QUERY_INSTRUCTION,
+    DEFAULT_EMBEDDING_MODEL,
+    build_embedding_model,
+    enforce_hf_offline,
+    resolve_hf_model_source,
+)
+from ..utils.hash import sha256_file, sha256_obj
 from ..utils.io import read_json, read_jsonl
 
 
@@ -82,6 +88,11 @@ class RagRetriever:
                 backend="auto",
                 dim=int(self.manifest.get("embedding_dim") or 384),
                 local_files_only=bool(self.manifest.get("embedding_local_files_only", False)),
+                revision=self.manifest.get("embedding_revision"),
+                query_instruction=str(
+                    self.manifest.get("query_instruction")
+                    or DEFAULT_BGE_QUERY_INSTRUCTION
+                ),
             )
         # 记录后端类型(faiss 还是 json 兜底)，决定下面用哪种方式加载/检索。
         self.backend = str(self.manifest.get("embedding_backend", ""))
@@ -141,7 +152,8 @@ class RagRetriever:
             if self.embedder is None:
                 return []
             # 把查询文本编码成 (1, 维度) 的向量，类型转成 float32 以匹配索引。
-            q = self.embedder.encode([query]).astype("float32")
+            encode_queries = getattr(self.embedder, "encode_queries", self.embedder.encode)
+            q = encode_queries([query]).astype("float32")
             pairs = self._retrieve_dense(q, top_k)
 
         results = []
@@ -157,7 +169,11 @@ class RagRetriever:
                     doc_id=str(row["doc_id"]),
                     text=str(row["text"]),
                     score=score,
-                    metadata=row.get("metadata", {}),
+                    metadata={
+                        **(row.get("metadata") or {}),
+                        "source_id": row.get("source_id"),
+                        "source_key": row.get("source_key"),
+                    },
                 )
             )
         return results
@@ -211,3 +227,154 @@ class RagRetriever:
                 scores[idx] = scores.get(idx, 0.0) + idf * (tf * (k1 + 1.0)) / denominator
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [(idx, float(score)) for idx, score in ranked[: max(0, int(top_k))]]
+
+
+class HybridRagRetriever:
+    """BGE dense + BM25 + RRF + BGE cross-encoder reranker。"""
+
+    retriever_backend = "hybrid"
+
+    def __init__(
+        self,
+        dense_index_dir: str | Path,
+        bm25_index_dir: str | Path,
+        *,
+        dense_candidate_top_k: int = 20,
+        bm25_candidate_top_k: int = 20,
+        rrf_k: int = 60,
+        fusion_top_k: int = 20,
+        final_top_k: int = 5,
+        reranker_model: str = "BAAI/bge-reranker-base",
+        reranker_revision: str | None = None,
+        reranker_local_files_only: bool = False,
+        reranker: Any | None = None,
+    ):
+        self.dense = RagRetriever(dense_index_dir)
+        self.bm25 = RagRetriever(bm25_index_dir)
+        if self.dense.retriever_backend != "dense":
+            raise RuntimeError("Hybrid dense_index_dir does not contain a dense index")
+        if self.bm25.retriever_backend != "bm25":
+            raise RuntimeError("Hybrid bm25_index_dir does not contain a BM25 index")
+        dense_docstore_hash = str(self.dense.manifest.get("docstore_hash") or "")
+        bm25_docstore_hash = str(self.bm25.manifest.get("docstore_hash") or "")
+        if dense_docstore_hash != bm25_docstore_hash:
+            raise RuntimeError(
+                "Hybrid indexes must share an identical token-aware docstore"
+            )
+        self.dense_candidate_top_k = int(dense_candidate_top_k)
+        self.bm25_candidate_top_k = int(bm25_candidate_top_k)
+        self.rrf_k = int(rrf_k)
+        self.fusion_top_k = int(fusion_top_k)
+        self.final_top_k = int(final_top_k)
+        if min(
+            self.dense_candidate_top_k,
+            self.bm25_candidate_top_k,
+            self.rrf_k,
+            self.fusion_top_k,
+            self.final_top_k,
+        ) <= 0:
+            raise ValueError("Hybrid retrieval parameters must all be positive")
+        self.reranker_model = str(reranker_model)
+        self.reranker_revision = reranker_revision
+        if reranker is None:
+            enforce_hf_offline(bool(reranker_local_files_only))
+            reranker_source = resolve_hf_model_source(
+                self.reranker_model,
+                revision=self.reranker_revision,
+                local_files_only=bool(reranker_local_files_only),
+            )
+            from sentence_transformers import CrossEncoder
+
+            reranker = CrossEncoder(
+                reranker_source,
+                revision=(
+                    None
+                    if reranker_source != self.reranker_model
+                    else self.reranker_revision
+                ),
+                local_files_only=bool(reranker_local_files_only),
+            )
+        self.reranker = reranker
+        dense_id = str(self.dense.manifest.get("retriever_id") or "dense")
+        self.manifest = {
+            "retriever_backend": "hybrid",
+            "retriever_id": f"{dense_id}+bm25+rrf+bge-reranker",
+            "dense_retriever_id": dense_id,
+            "dense_embedding_revision": self.dense.manifest.get(
+                "embedding_revision"
+            ),
+            "sparse_retriever_id": str(
+                self.bm25.manifest.get("retriever_id") or "bm25"
+            ),
+            "reranker_model": self.reranker_model,
+            "reranker_revision": self.reranker_revision,
+            "dense_candidate_top_k": self.dense_candidate_top_k,
+            "bm25_candidate_top_k": self.bm25_candidate_top_k,
+            "rrf_k": self.rrf_k,
+            "fusion_top_k": self.fusion_top_k,
+            "final_top_k": self.final_top_k,
+            "dense_index_manifest_hash": sha256_obj(self.dense.manifest),
+            "bm25_index_manifest_hash": sha256_obj(self.bm25.manifest),
+        }
+        self.index_manifest_hash = sha256_obj(self.manifest)
+
+    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+        """执行两路召回、RRF 融合、交叉编码器重排。"""
+
+        dense_rows = self.dense.retrieve(query, top_k=self.dense_candidate_top_k)
+        bm25_rows = self.bm25.retrieve(query, top_k=self.bm25_candidate_top_k)
+        candidates: dict[str, dict[str, Any]] = {}
+        for stage, rows in (("dense", dense_rows), ("bm25", bm25_rows)):
+            for rank, row in enumerate(rows, start=1):
+                state = candidates.setdefault(
+                    row.chunk_id,
+                    {
+                        "chunk": row,
+                        "rrf_score": 0.0,
+                        "dense_score": None,
+                        "bm25_score": None,
+                        "dense_rank": None,
+                        "bm25_rank": None,
+                    },
+                )
+                state["rrf_score"] += 1.0 / (self.rrf_k + rank)
+                state[f"{stage}_score"] = row.score
+                state[f"{stage}_rank"] = rank
+        fused = sorted(
+            candidates.values(),
+            key=lambda row: (
+                -float(row["rrf_score"]),
+                str(row["chunk"].chunk_id),
+            ),
+        )[: self.fusion_top_k]
+        if not fused:
+            return []
+        reranker_scores = self.reranker.predict(
+            [[query, state["chunk"].text] for state in fused]
+        )
+        reranked: list[RetrievedChunk] = []
+        for state, reranker_score in zip(fused, reranker_scores):
+            chunk = state["chunk"]
+            stage_scores = {
+                "dense_score": state["dense_score"],
+                "dense_rank": state["dense_rank"],
+                "bm25_score": state["bm25_score"],
+                "bm25_rank": state["bm25_rank"],
+                "rrf_score": float(state["rrf_score"]),
+                "reranker_score": float(reranker_score),
+            }
+            reranked.append(
+                RetrievedChunk(
+                    chunk_id=chunk.chunk_id,
+                    doc_id=chunk.doc_id,
+                    text=chunk.text,
+                    score=float(reranker_score),
+                    metadata={
+                        **chunk.metadata,
+                        "retrieval_stage_scores": stage_scores,
+                    },
+                )
+            )
+        reranked.sort(key=lambda row: (-row.score, row.chunk_id))
+        requested_top_k = self.final_top_k if top_k is None else int(top_k)
+        return reranked[: min(requested_top_k, self.final_top_k)]

@@ -2,9 +2,19 @@
 
 ## 当前唯一执行口径
 
-当前正式版本是 `v6.3 attack-first RC2`，主实验统一为每个 source
-`3 pair / 6 queries`。旧 v19、RC1 和 eligibility 原始扫描产物已清理；
-研究过程保留在 `研究记录/`，不要再按历史命令补跑。
+当前正式 RAG 协议是 `pcv-mia-v20 / pcv-rag-only-source-v20`。上游
+attack-first RC2 的三数据集 benchmark 与每 source `3 pair / 6 queries`
+预算继续冻结复用；旧 MiniLM RAG 已标记为 `superseded` 并封存在
+`legacy/abandoned_retriever_20260730/`，禁止续跑、合并、评分或进入论文。
+
+v20 的正式系统为：
+
+- dense：`BAAI/bge-base-en-v1.5`
+- sparse：BM25
+- strong-RAG：BGE Top-20 + BM25 Top-20 + RRF(`k=60`) + `BAAI/bge-reranker-base` + final Top-5
+- Generator 家族：Gemini、Qwen、GPT、Llama
+- 第一套冻结主模型：Llama 3.1 70B Instruct；服务商 concrete model ID 为 `meta/llama-3.1-70b-instruct`
+- `gemini-2.0-flash` 已在首次正式调用前因 API 不可用解冻，未产生可合并的 v20 正式响应
 
 激活 `(mia_model)` 环境后统一使用 `python`。标准配置入口只有：
 
@@ -12,41 +22,78 @@
 - `configs/pcv_attack_config.yaml`
 - `configs/rag_config.yaml`
 - `configs/llm_profiles.yaml`
+- `configs/generator_families.yaml`
+- `configs/experiment_plan_v20.yaml`
+- `configs/canonical_suite_v20_llama.yaml`
 
-先验证当前三数据集正式产物：
+先验证既有三数据集 benchmark/query 产物：
 
 ```powershell
 python -B scripts/verify_v6_3_budget6_formal_artifacts.py `
   --output artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json
 ```
 
-Enron 的 `all-MiniLM-L6-v2` FAISS 索引已经建好。需要重建时只运行：
+然后用 Reserve 构建 pseudo-member dev indexes，并执行 API=0 的检索门禁。Reserve
+同时承担 Retriever dev 与后续经验 conformal calibration，因此不得描述为“完全独立校准集”：
 
 ```powershell
-python -B scripts/03_build_rag_index.py `
-  --dataset enron `
-  --config configs/rag_config.yaml `
-  --retriever-backend dense `
-  --force
+python -B scripts/18_build_retrieval_dev_indexes.py --dataset edgar
+python -B scripts/18_build_retrieval_dev_indexes.py --dataset enron
+python -B scripts/18_build_retrieval_dev_indexes.py --dataset pubmed
+python -B scripts/19_evaluate_retrieval_gate.py
 ```
 
-第一个单 cell pilot 已冻结在
-`artifacts/v6_3/pilots/enron_qwen3_5_397b_minilm_rc2/queries.jsonl`。
-确认 `configs/llm_profiles.yaml` 中当前只启用一个真实 Generator profile 后，
-再运行：
+`configs/rag_config.yaml` 已冻结 BGE 与 reranker 的 Hugging Face commit SHA；
+revision 为空的 dense/hybrid run 会被 canonical 门禁拒绝。只有三个数据集全部通过
+Recall、零命中率和隔离门禁后，才构建正式 KB index。当前冻结结果选中
+`128 tokens / overlap 32`：
 
 ```powershell
-python -B scripts/10_run_rag_and_llm_only.py `
-  --dataset enron `
-  --config configs/rag_config.yaml `
-  --victim-profile <当前唯一的 profile 名> `
-  --retriever-backend dense `
-  --queries-path artifacts/v6_3/pilots/enron_qwen3_5_397b_minilm_rc2/queries.jsonl
+python -B scripts/03_build_rag_index.py --dataset enron --retriever-backend hybrid
 ```
 
-Retriever 和 Generator 都必须一次只跑一个。RAG index 只能包含
+首次 API 前必须运行总预检；它会复核三数据集 split/query/benchmark、Reserve 5/245
+角色、正式 index、representative chunks、90,000-request schedule、Generator 身份和
+“正式响应仍为 0”，不会调用任何模型 API：
+
+```powershell
+python -B scripts/26_validate_v20_preflight.py
+```
+
+Llama pilot 必须加独立 `--suite-id llama-3.1-70b-instruct-pilot`，依次采集
+dense、BM25、hybrid、matched LLM-only、Oracle 和 Random；不得直接写入正式目录。
+在干净 release commit 上配置好 `PCV_VICTIM_*` 后，以下一条 PowerShell 块会按
+三数据集完成全部 2,700 次 Pilot 调用：
+
+```powershell
+foreach ($dataset in @("edgar", "enron", "pubmed")) {
+  $queries = "artifacts/v6_3/query_controls/$dataset/llama-3.1-70b-instruct-pilot/queries.jsonl"
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend dense --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend bm25 --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend hybrid --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend dense --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot --llm-only --skip-rag
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend dense --context-control oracle --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot
+  python -B scripts/10_run_rag_and_llm_only.py --dataset $dataset --victim-profile llama_primary --generator-family llama --retriever-backend dense --context-control random --queries-path $queries --suite-id llama-3.1-70b-instruct-pilot
+}
+```
+
+完成后逐数据集运行：
+
+```powershell
+python -B scripts/20_check_generator_pilot.py `
+  --dataset enron `
+  --suite-id llama-3.1-70b-instruct-pilot `
+  --queries-path <该数据集冻结的150-query计划>
+```
+
+Retriever 和 Generator 都必须一次只跑一个 cell。RAG index 只能包含
 `KB_Member`；`True_Non_Member`、`Reserve`、`Spoof_Seed` 和
 `Spoofed_Non_Member` 一律不能进入索引。
+
+所有 v20 主产物按
+`{dataset}/{generator_family}/{model_slug}/{retriever_id}/` 隔离；matched
+LLM-only 的 Retriever 固定为 `none`。已有响应的 query、benchmark、index、
+具体模型版本或 code commit 任一变化，resume 都会在 API 调用前失败。
 
 PCV-MIA 是一个面向 RAG 知识库的成员推理攻击实验框架。方法全称是：
 
@@ -76,19 +123,36 @@ KB isolation
 
 ## 当前状态
 
-### 2026-07-22：v19 顶会协议本地阶段完成
+### 2026-07-31：v20 首次 API 前离线门禁完成
 
-v19 已冻结为三数据集、四 Generator、两 Retriever 的 source-level 正式协议。Generator 和 Retriever 都必须逐 cell 显式选择，不在 `llm_profiles.yaml` 或一条命令中隐式批量运行。
-
-| 维度 | v19 正式定义 |
+| 维度 | v20 冻结定义 |
 |---|---|
-| 数据集 | Edgar（filing）、Enron（完整邮件）、PubMed（PMCID 论文） |
-| Generator | Qwen3.5-397B、Gemini-2.0-Flash、GPT-4.1-mini、Llama-3.3-70B-Instruct |
-| Retriever | dense=`sentence-transformers/all-MiniLM-L6-v2`、BM25 |
-| source split | 每数据集 500 `KB_Member` + 500 `True_Non_Member` + 250 `Reserve` |
-| 查询预算 | 每 source 固定 3 个 Q+/Q− pair，即 6 次 victim 调用 |
-| 主矩阵 | 3 数据集 × 4 Generator × 2 Retriever = 24 main cells |
-| 归因对照 | 3 数据集 × 4 Generator = 12 matched LLM-only cells |
+| 数据集 | Edgar、Enron、PubMed，各 500 `KB_Member` + 500 `True_Non_Member` + 250 `Reserve` |
+| 主 Generator | `meta/llama-3.1-70b-instruct` |
+| Retriever | BGE、BM25、`BGE+BM25+RRF+BGE-reranker`；baseline 只跑 BGE |
+| 查询预算 | 每 source 固定 3 pair / 6 queries；每正式 cell 7,500 calls |
+| Reserve | 5 source 用于 Pilot diagnosis，245 source 用于 Retriever 冻结后的经验 conformal calibration |
+| 主矩阵 | 三数据集 × BGE/BM25/hybrid/matched LLM-only = 90,000 calls |
+| 机制与 baseline | Oracle/Random 约 3,600 calls；五个 BGE-only baseline 约 30,000 calls |
+
+API=0 的本地验收已经通过：三数据集 BGE Recall 门禁全部通过，选中
+`128/32`；macro Recall@5=`0.8487`、macro MRR=`0.7635`。冻结 schedule 含
+90,000 个不重复请求；三个 Pilot 计划合计 2,700 calls；正式 Llama 响应仍为 0。
+最终代码测试为 306/306 通过，255 个 Python 文件通过 AST 编译，17 个 YAML
+文件解析成功。
+
+Conformal 只表述为“Retriever 冻结后的经验非成员校准”，不声称 Reserve 是完全
+独立的校准集，也不声称 exchangeability 自动给出严格有限样本保证。主报告保留
+source-level AUC、attack advantage、TPR@1%/5% FPR 与 conformal
+TPR/FPR@1%/5%；不生成数值型 TPR@0.1% FPR。
+
+> 下方 2026-07-22 及更早内容仅保留为历史进度；与 v20 冲突时，以本节、当前配置和
+> `artifacts/v20/release_controls/preflight_report.json` 为准。
+
+### 2026-07-22：v19 顶会协议本地阶段完成（历史）
+
+v19 曾冻结为三数据集、四 Generator、两 Retriever 的 source-level 正式协议；该版本
+现已被 v20 supersede，不得用于新实验或与 v20 合并。
 
 早期 Step 01–09 的 4 pair/8 query 产物现仅作为历史证据保留。RC1 后的主协议已统一改为每 source 3 pair/6 条文本唯一 query；正式产物必须按当前配置重新生成。3-pair 主协议仍使用相同的本地 claim validator 硬门禁：
 
