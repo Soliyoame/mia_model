@@ -19,75 +19,32 @@ from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 from ..utils.hash import short_hash
+from .entity_type_policy import SEMANTIC_REPLACEMENT_CANDIDATES
 
 
-ATTACK_FIRST_GENERATION_PROTOCOL = "v6_3_attack_first_counterfactual_rc2"
+ATTACK_FIRST_GENERATION_PROTOCOL = "v21_entity_policy_counterfactual_r1"
 
 # 下面几组是"候选替换库":当要替换地点/人名/机构/产品/项目名时，从这里挑一个不同的。
 # 库适当扩大,配合 _candidate_replacement 的哈希选择,让不同原值落到不同假值、跨文档不雷同
 # (固定且过小的库会使反事实高度重复,容易被模型先验识破,从而抬高 cvg_llm 假阳性)。
-LOCATION_CANDIDATES = [
-    "California",
-    "Texas",
-    "New York",
-    "London",
-    "Canada",
-    "Germany",
-    "Singapore",
-    "Tokyo",
-    "Sydney",
-    "Toronto",
-    "Paris",
-    "Dublin",
-]
-DEFINITE_ARTICLE_LOCATION_CANDIDATES = [
-    "United Kingdom",
-    "United Arab Emirates",
-    "Netherlands",
-    "Philippines",
-]
-PERSON_CANDIDATES = [
-    "Jordan Ellis",
-    "Taylor Morgan",
-    "Alex Carter",
-    "Morgan Lee",
-    "Casey Brooks",
-    "Riley Bennett",
-    "Avery Sinclair",
-    "Dakota Reyes",
-    "Quinn Harper",
-    "Sawyer Bishop",
-]
-ORG_CANDIDATES = [
-    "Orion Services Inc",
-    "Northstar Logistics LLC",
-    "Harborview Group",
-    "Summit Data Corp",
-    "Cedarline Partners",
-    "Vanta Industries",
-    "Brightpeak Holdings",
-    "Ironwood Associates",
-]
-PRODUCT_CANDIDATES = [
-    "Atlas Platform",
-    "Beacon System",
-    "Meridian Service",
-    "Nova Device",
-    "Helix Suite",
-    "Quanta Engine",
-    "Lumen Toolkit",
-    "Vertex Console",
-]
-PROJECT_CANDIDATES = [
-    "Project Atlas",
-    "Project Beacon",
-    "Program Meridian",
-    "Initiative Nova",
-    "Project Helix",
-    "Program Vega",
-    "Initiative Lumen",
-    "Project Vertex",
-]
+LOCATION_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_geographic_location"]
+)
+DEFINITE_ARTICLE_LOCATION_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["definite_article_location"]
+)
+PERSON_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["multi_token_person_name"]
+)
+ORG_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_organization"]
+)
+PRODUCT_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_product"]
+)
+PROJECT_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["titled_project_name"]
+)
 
 _DEFINITE_ARTICLE_LOCATIONS = frozenset(
     {
@@ -398,72 +355,7 @@ def _attack_location_pool(value: str, subtype: str) -> list[str] | None:
     return _ATTACK_LOCATION_CANDIDATES.get(subtype)
 
 
-SEMANTIC_SUBTYPE_CANDIDATES = {
-    "initialed_person_name": ["J. Ellis", "T. Morgan", "A. Carter", "R. Bennett"],
-    "titled_person_name": ["Dr. Jordan Ellis", "Prof. Taylor Morgan", "Dr. Alex Carter"],
-    "single_person_name": ["Jordan", "Taylor", "Morgan", "Riley", "Avery"],
-    "multi_token_person_name": PERSON_CANDIDATES,
-    "corporate_organization": [
-        "Orion Services Inc",
-        "Northstar Logistics LLC",
-        "Summit Data Corp",
-        "Vanta Industries Ltd",
-    ],
-    "academic_or_medical_organization": [
-        "Northbridge University",
-        "Harborview Medical Institute",
-        "Cedarline Research Hospital",
-        "Summit Technical College",
-    ],
-    "government_organization": [
-        "Northland Regulatory Commission",
-        "Westbridge Public Health Agency",
-        "Cedar State Department",
-        "Harbor County Authority",
-    ],
-    "named_organization": ORG_CANDIDATES,
-    "compound_geographic_location": [
-        "Austin, Texas",
-        "Toronto, Canada",
-        "Dublin, Ireland",
-        "Sydney, Australia",
-    ],
-    "definite_article_location": DEFINITE_ARTICLE_LOCATION_CANDIDATES,
-    "named_geographic_location": LOCATION_CANDIDATES,
-    "versioned_or_numbered_product": [
-        "Atlas 4",
-        "Beacon X2",
-        "Meridian 7",
-        "Nova 3",
-    ],
-    "software_or_service_product": [
-        "Atlas Platform",
-        "Beacon Service",
-        "Meridian Software",
-        "Nova Suite",
-    ],
-    "named_product": PRODUCT_CANDIDATES,
-    "acronym_project_name": ["ATLAS", "BEACON", "MERIDIAN", "NOVA"],
-    "titled_project_name": PROJECT_CANDIDATES,
-    "named_agreement": [
-        "Northstar Services Agreement",
-        "Harborview License Agreement",
-        "Cedarline Supply Contract",
-        "Summit Facility Lease",
-    ],
-    "contractual_plan_or_policy": [
-        "Northstar Incentive Plan",
-        "Harborview Retention Plan",
-        "Cedarline Compensation Policy",
-        "Summit Benefit Plan",
-    ],
-    "defined_contract_term": [
-        "Renewal Period",
-        "Termination Event",
-        "Permitted Transfer",
-        "Notice Period",
-    ],
-}
+SEMANTIC_SUBTYPE_CANDIDATES = SEMANTIC_REPLACEMENT_CANDIDATES
 CONTRACT_TERM_REPLACEMENTS = {
     "effective date": "expiration date",
     "expiration date": "effective date",

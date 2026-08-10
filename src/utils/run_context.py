@@ -79,7 +79,7 @@ P0_PROTOCOL: dict[str, Any] = {
     "primary_generator_model": "meta/llama-3.1-70b-instruct",
     "baseline_method_policy": {
         "full_generator": "meta/llama-3.1-70b-instruct",
-        "full_methods": ["RAG-MIA", "S2MIA", "MBA", "IA", "DCMI"],
+        "full_methods": ["RAG-MIA", "S2MIA", "MBA", "IA", "DCMI", "MEntA"],
         "extension_methods": [],
     },
     "defense_representative_cells": [
@@ -190,7 +190,7 @@ def experiment_scoped_dir(
         "-",
         str(generator_family or "").strip().casefold(),
     ).strip("-")
-    if family not in {"gemini", "qwen", "gpt", "llama"}:
+    if family not in {"gemini", "gemma", "qwen", "gpt", "llama", "phi", "command-r"}:
         raise ValueError(f"Invalid generator family: {generator_family!r}")
     if not str(concrete_model or "").strip():
         raise ValueError("concrete_model is required")
@@ -535,6 +535,16 @@ def build_experiment_identity(manifest: dict[str, Any], source_whitelist_hash: s
         or manifest.get("queries_hash")
         or (manifest.get("query_plan") or {}).get("sha256"),
         "benchmark_hash": (manifest.get("benchmark") or {}).get("benchmark_hash"),
+        "ia_shadow_manifest_hash": manifest.get("ia_shadow_manifest_hash")
+        or (manifest.get("ia_shadow_identity") or {}).get("ia_shadow_manifest_hash")
+        or ((manifest.get("method_identities") or {}).get("IA") or {}).get(
+            "ia_shadow_manifest_hash"
+        ),
+        "ia_shadow_model_version": manifest.get("ia_shadow_model_version")
+        or (manifest.get("ia_shadow_identity") or {}).get("ia_shadow_model_version")
+        or ((manifest.get("method_identities") or {}).get("IA") or {}).get(
+            "ia_shadow_model_version"
+        ),
         "config_hashes": {
             name: value.get("sha256") if isinstance(value, dict) else None
             for name, value in sorted(configs.items())

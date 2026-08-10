@@ -30,13 +30,17 @@ from ..attack.perturbation_generator import (
     infer_attack_subtype,
     perturb_entity_value,
 )
+from ..attack.entity_type_policy import (
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+)
 from ..attack.semantic_entity_resolver import (
     SEMANTIC_TARGET_TYPES,
     SemanticResolverRuntime,
     load_semantic_entity_resolver,
     resolve_semantic_runtime,
 )
-from ..utils.hash import sha256_file, sha256_obj
+from ..utils.hash import canonical_json, sha256_file, sha256_obj
 from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 from .validator import VALIDATOR_VERSION, find_entity_span, validate_claim_pair
@@ -202,6 +206,8 @@ def generate_paired_claims_file(
         existing = read_json(manifest_path)
         expected = {
             "claim_validator_version": VALIDATOR_VERSION,
+            "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+            "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
             "perturbation_levels": levels,
             "max_pairs_per_fact": int(max_pairs_per_fact),
             "semantic_resolver_enabled": semantic_enabled,
@@ -224,7 +230,7 @@ def generate_paired_claims_file(
         mismatches = {
             key: {"expected": value, "actual": existing.get(key)}
             for key, value in expected.items()
-            if existing.get(key) != value
+            if canonical_json(existing.get(key)) != canonical_json(value)
         }
         if mismatches:
             raise RuntimeError(
@@ -300,6 +306,8 @@ def generate_paired_claims_file(
                     "validation_failure_reason": reason,
                     "validation_failure_reasons": [reason],
                     "claim_validator_version": VALIDATOR_VERSION,
+                    "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                    "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                 }
             )
             by_validation_failure[reason] += 1
@@ -334,6 +342,8 @@ def generate_paired_claims_file(
                         "validation_failure_reasons": [reason],
                         "error_detail": f"{type(exc).__name__}: {exc}",
                         "claim_validator_version": VALIDATOR_VERSION,
+                        "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                        "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                     }
                 )
                 by_validation_failure[reason] += 1
@@ -481,6 +491,8 @@ def generate_paired_claims_file(
                     "quality_weight": fact.get("quality_weight"),
                     "claim_validation_status": "passed",
                     "claim_validator_version": VALIDATOR_VERSION,
+                    "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                    "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                     "original_semantic_resolution": original_semantic_resolution,
                     "counterfactual_semantic_resolution": counterfactual_semantic_resolution,
                     "counterfactual_generation_protocol": (
@@ -603,6 +615,8 @@ def generate_paired_claims_file(
                         "quality_weight": fact.get("quality_weight"),
                         "claim_validation_status": "passed",
                         "claim_validator_version": VALIDATOR_VERSION,
+                        "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                        "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                         "original_semantic_resolution": item[
                             "original_semantic_resolution"
                         ],
@@ -638,6 +652,8 @@ def generate_paired_claims_file(
         "pairs_by_entity_type": dict(by_type),
         "validation_failures_by_reason": dict(by_validation_failure),
         "claim_validator_version": VALIDATOR_VERSION,
+        "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+        "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
         "counterfactual_generation_protocol": ATTACK_FIRST_GENERATION_PROTOCOL,
         "perturbation_levels": levels,
         "max_pairs_per_fact": int(max_pairs_per_fact),

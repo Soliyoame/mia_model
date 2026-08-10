@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
 from typing import Iterator
@@ -25,7 +26,13 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from src.llm.factory import build_victim_client, resolve_effective_llm_profile, resolve_llm_profile_name
+from src.llm.factory import (
+    build_sibling_client,
+    build_victim_client,
+    llm_profile_identity,
+    resolve_effective_llm_profile,
+    resolve_llm_profile_name,
+)
 from src.paired_claims.claim_generator import generate_paired_claims_file
 from src.parsing.stance_parser import parse_stance_files
 from src.rag.embeddings import (
@@ -35,7 +42,7 @@ from src.rag.embeddings import (
 from src.scoring.pcv_scorer import compute_pcv_scores
 from src.fact_extraction.fact_extractor import extract_facts_file
 from src.utils.env import env_str
-from src.utils.io import read_jsonl, write_jsonl
+from src.utils.io import load_yaml, read_jsonl, write_jsonl
 
 
 WORKSPACE_TMP = Path(__file__).resolve().parents[1] / ".pytest_tmp"
@@ -190,6 +197,80 @@ class PcvMiaTests(unittest.TestCase):
         # extra_body 应在 profile 与 client 两侧都保持原样,确保推理参数能下发给后端。
         self.assertEqual(profile["extra_body"], {"enable_thinking": False})
         self.assertEqual(client.extra_body, {"enable_thinking": False})  # type: ignore[attr-defined]
+
+    def test_ollama_sibling_profile_builds_expected_request_and_identity(self) -> None:
+        profiles = load_yaml("configs/llm_profiles.yaml")
+        with temporary_env(
+            {
+                "PCV_SIBLING_API_KEY": "ollama",
+                "PCV_SIBLING_BASE_URL": "http://127.0.0.1:11434/v1",
+                "PCV_SIBLING_MODEL": "pcv-qwen3-4b:q4km-8k",
+                "PCV_SIBLING_MODEL_VERSION": "ollama:0123456789ab",
+            },
+        ):
+            client, profile = build_sibling_client(
+                profiles,
+                profile_name="ollama_qwen3_4b",
+            )
+
+        self.assertEqual(profile["requests_per_minute"], 0)
+        self.assertEqual(profile["request_interval_seconds"], 0)
+        self.assertFalse(client.stream)  # type: ignore[attr-defined]
+        self.assertEqual(client.max_retries, 2)  # type: ignore[attr-defined]
+        self.assertEqual(client.retry_backoff_base, 2)  # type: ignore[attr-defined]
+        self.assertEqual(client.retry_backoff_max, 30)  # type: ignore[attr-defined]
+
+        captured: dict = {}
+
+        def fake_request(request, _timeout):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return (
+                '{"id":"local-1","model":"pcv-qwen3-4b:q4km-8k",'
+                '"choices":[{"finish_reason":"stop",'
+                '"message":{"content":"{}"}}]}'
+            )
+
+        chat_client = client._client  # type: ignore[attr-defined]
+        with temporary_env({"PCV_SIBLING_API_KEY": "ollama"}):
+            with patch.object(
+                chat_client,
+                "_urlopen_with_retries",
+                side_effect=fake_request,
+            ):
+                result = chat_client.chat_with_metadata(
+                    "query",
+                    temperature=0,
+                    max_tokens=1024,
+                )
+
+        self.assertEqual(result.provider_model_id, profile["model"])
+        self.assertEqual(captured["model"], "pcv-qwen3-4b:q4km-8k")
+        self.assertEqual(captured["temperature"], 0)
+        self.assertEqual(captured["max_tokens"], 1024)
+        self.assertEqual(captured["reasoning_effort"], "none")
+        self.assertEqual(captured["seed"], 42)
+        self.assertNotIn("stream", captured)
+
+        identity = llm_profile_identity(profile)
+        changed = llm_profile_identity({**profile, "model_version": "ollama:drift"})
+        self.assertNotEqual(identity["profile_hash"], changed["profile_hash"])
+        self.assertNotIn("api_key", identity)
+
+    def test_ollama_sibling_requires_actual_model_id(self) -> None:
+        profiles = load_yaml("configs/llm_profiles.yaml")
+        with temporary_env(
+            {
+                "PCV_SIBLING_API_KEY": "ollama",
+                "PCV_SIBLING_BASE_URL": "http://127.0.0.1:11434/v1",
+                "PCV_SIBLING_MODEL": "pcv-qwen3-4b:q4km-8k",
+                "PCV_SIBLING_MODEL_VERSION": "not-a-digest",
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "actual 12-64 hex model ID"):
+                build_sibling_client(
+                    profiles,
+                    profile_name="ollama_qwen3_4b",
+                )
 
     def test_hashing_embedding_is_disabled(self) -> None:
         """验证 hashing 这种"伪 embedding"已被禁用:无论作为模型名还是 backend 都必须抛 ValueError。"""

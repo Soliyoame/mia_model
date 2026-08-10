@@ -26,7 +26,9 @@ from src.prepare.eligibility_scan import (
     SCAN_PROTOCOL,
     V4_QUERY_ELIGIBILITY_PROTOCOL,
     V4_SCAN_PROTOCOL,
+    V21_ENRON_FULL_SCAN_PROTOCOL,
     _iter_wave_rows,
+    _enforce_candidate_pool_capacity,
     _promote_staged_file,
     _validate_scan_config,
     configured_release_protocol,
@@ -192,6 +194,43 @@ class PrecisionCascadeSourcePlanTests(unittest.TestCase):
             "not preregistered|cap=5",
         ):
             _validate_scan_config(config, selected_cap=8)
+
+    def test_v21_enron_full_freezes_30k_pool_at_cap5(self) -> None:
+        config = {
+            "protocol": V21_ENRON_FULL_SCAN_PROTOCOL,
+            "selection_seed": 42,
+            "wave_size": 250,
+            "candidate_pool_multiplier": None,
+            "candidate_pool_target_sources": 30000,
+            "candidate_pool_shortfall_policy": "fail",
+            "scan_full_candidate_pool": True,
+            "target_query_eligible_sources": 2250,
+            "required_formal_sources": 2250,
+            "max_chunks_per_source": 5,
+            "fallback_chunk_caps": [],
+            "minimum_valid_claims": 3,
+            "minimum_stealth_pairs": 3,
+            "deduplicate_complete_sources": True,
+            "sampling_manifest_path": (
+                "artifacts/v21/enron_full/sampling/"
+                "enron_sampling_manifest.json"
+            ),
+        }
+        validated = _validate_scan_config(config, selected_cap=5)
+        self.assertEqual(
+            validated["candidate_pool_target_sources"], 30000
+        )
+        self.assertEqual(validated["preregistered_chunk_caps"], [5])
+        self.assertIsNone(validated["candidate_pool_multiplier"])
+        with self.assertRaisesRegex(RuntimeError, "not preregistered|cap=5"):
+            _validate_scan_config(config, selected_cap=8)
+
+        with self.assertRaisesRegex(RuntimeError, "below.*30,000"):
+            _enforce_candidate_pool_capacity(
+                V21_ENRON_FULL_SCAN_PROTOCOL,
+                {"effective_candidate_pool_source_count": 29999},
+                candidate_pool_target_sources=30000,
+            )
 
     def test_fixed_pool_uses_prefix_or_complete_short_universe(
         self,

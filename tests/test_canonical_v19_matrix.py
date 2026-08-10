@@ -72,7 +72,7 @@ class CanonicalV19MatrixTests(unittest.TestCase):
     def test_baseline_and_defense_policies_match_v20_plan(self) -> None:
         self.assertEqual(
             canonical_baseline_methods("meta/llama-3.1-70b-instruct"),
-            ("RAG-MIA", "S2MIA", "MBA", "IA", "DCMI"),
+            ("RAG-MIA", "S2MIA", "MBA", "IA", "DCMI", "MEntA"),
         )
         self.assertEqual(canonical_baseline_methods("qwen/qwen3.5-397b-a17b"), ())
         self.assertTrue(

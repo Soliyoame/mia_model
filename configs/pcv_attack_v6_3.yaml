@@ -17,6 +17,10 @@ paths:
   scores_dir: artifacts/v6_3/scores
 
 fact_extraction:
+  entity_type_policy:
+    protocol: pcv_entity_policy_v21_r1
+    config_path: configs/entity_type_policy_v21_r1.yaml
+    sha256: e867112519b5ee952b740ba58f3ffec046c5a0a710297dc06d8c677cc670b00e
   max_facts_per_doc: 4
   max_entities_per_doc: 8
   max_samples: null
@@ -46,6 +50,10 @@ fact_extraction:
     thresholds_frozen: true
     thresholds_sha256: d180bdb02d5bcb5748cfac64b955ecc307b37022671c0200a35a50d0394edfa8
     calibration_summary_path: artifacts/v6_3/semantic_calibration_precision_cascade_per_type/calibration_summary.json
+    # v21 清理后，旧 summary 正文已删除；只允许通过清单哈希 + 研究记录证据恢复身份。
+    calibration_identity_mode: v21_inventory_recovery
+    calibration_provenance_path: artifacts/v21/release_controls/semantic_calibration_provenance.json
+    calibration_provenance_sha256: 342bb8774df212ca41d406c18c160fa5b58fd130ceeccdda1b8e5a6f359d8dcb
     min_target_confidence: 0.95
     min_confidence_margin: 0.40
     thresholds_by_entity_type:
@@ -86,7 +94,31 @@ paired_claims:
   max_pairs_per_fact: 1
 
 paired_queries:
-  query_types: [compressed_verification]
+  query_types: [diverse_slotted_verification]
+  pairs_per_source: 3
+  sibling_profile: openai_api
+  naturalization:
+    candidates_per_pair: 3
+    correction_retries: 2
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 120
+    embedding_model: sentence-transformers/all-MiniLM-L6-v2
+    embedding_local_files_only: true
+    min_question_proposition_similarity: 0.80
+    max_five_gram_containment: 0.35
+    max_longest_common_token_run: 8
+    max_dataset_duplicate_template_rate: 0.01
+    max_dataset_opening_4gram_rate: 0.15
+  nli:
+    model_id: tasksource/deberta-base-long-nli
+    revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+    snapshot_dir: models/menta/deberta-base-long-nli
+    local_files_only: true
+    device: cuda
+    require_cuda: true
+    batch_size: 16
+    max_length: 1280
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
@@ -96,8 +128,10 @@ stealth_filter:
   min_naturalness: 0.55
   max_context_probe: 0.5
   max_prompt_injection: 0.5
-  min_similarity: 0.03
-  max_similarity: 0.97
+  max_five_gram_containment: 0.35
+  max_longest_common_token_run: 8
+  max_dataset_duplicate_template_rate: 0.01
+  max_dataset_opening_4gram_rate: 0.15
 
 scoring:
   unknown_lambda: 0.5

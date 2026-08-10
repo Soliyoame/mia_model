@@ -21,6 +21,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
+from .entity_type_policy import (
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+    SEMANTIC_TARGET_TYPES,
+    TARGET_SUBTYPE_SCHEMA,
+    TARGET_TYPE_SCHEMA,
+)
+
 
 # v6.3 的正式 bulk 协议只使用 large；旧三模型共识仍保留为显式审计模式。
 PRECISION_CASCADE_PROTOCOL = "local_claim_pair_v6_3_precision_cascade"
@@ -31,61 +39,6 @@ SUPPORTED_SEMANTIC_PROTOCOLS = frozenset(
 )
 PRECISION_CASCADE_MODE = "precision_cascade"
 AUDIT_CONSENSUS_MODE = "audit_consensus"
-SEMANTIC_TARGET_TYPES = frozenset(
-    {"PERSON", "ORG", "LOCATION", "PRODUCT", "PROJECT_NAME", "CONTRACT_TERM"}
-)
-
-TARGET_TYPE_SCHEMA: dict[str, str] = {
-    "PERSON": (
-        "A specific natural person or a person's full or abbreviated name; "
-        "exclude roles, liabilities, plans, methods, products, and organizations."
-    ),
-    "ORG": (
-        "A specific company, government body, university, laboratory, nonprofit, "
-        "or other named organization; exclude methods, metrics, proteins, cell "
-        "lines, document headings, legal plans, and generic departments."
-    ),
-    "LOCATION": (
-        "A named geographic place such as a country, state, province, city, county, "
-        "region, or physical geographic site; exclude methods, organizations, "
-        "financial concepts, and product names."
-    ),
-    "PRODUCT": (
-        "A specific named commercial product, software product, platform, device, "
-        "or service; exclude organizations, scientific methods, biological "
-        "entities, legal doctrines, and generic common nouns."
-    ),
-    "PROJECT_NAME": (
-        "The proper name of a specific research, engineering, business, or public "
-        "project, programme, initiative, study, or named operation; exclude paper "
-        "headings, methods, organizations, products, and generic activities."
-    ),
-    "CONTRACT_TERM": (
-        "A specific legal agreement name, defined contractual term, covenant, "
-        "clause, plan governed by a contract, or named legal instrument; exclude "
-        "ordinary common nouns, accounting metrics, document headings, and roles."
-    ),
-}
-
-TARGET_SUBTYPE_SCHEMA: dict[str, str] = {
-    "COMMERCIAL_PRODUCT": (
-        "A specific branded commercial product, model, platform, device, or "
-        "marketed service with a proper name."
-    ),
-    "SOFTWARE_OR_OPERATIONAL_SYSTEM": (
-        "A specific named software system, reporting system, control system, "
-        "detection system, ordering system, enterprise platform, or operational "
-        "information service; exclude generic methods and unnamed infrastructure."
-    ),
-    "NAMED_SERVICE": (
-        "A specific proper-named service offering or information service, not a "
-        "generic activity, organization, legal service category, or method."
-    ),
-    "NAMED_DEVICE_OR_TOOL": (
-        "A specific named device, instrument, toolkit, console, or operational "
-        "tool; exclude assays, algorithms, proteins, and generic equipment."
-    ),
-}
 
 COMPETING_TYPE_SCHEMA: dict[str, str] = {
     "FINANCIAL_METRIC": (
@@ -228,8 +181,8 @@ def _schema_sha256() -> str:
             # schema hash 绑定实体定义，不随执行协议 ID 改变；沿用 v6.3
             # 初始 schema domain，避免模型锁因运行模式切换而漂移。
             "protocol": LEGACY_CONSENSUS_PROTOCOL,
-            "targets": TARGET_TYPE_SCHEMA,
-            "target_subtypes": TARGET_SUBTYPE_SCHEMA,
+            "targets": dict(TARGET_TYPE_SCHEMA),
+            "target_subtypes": dict(TARGET_SUBTYPE_SCHEMA),
             "competitors": COMPETING_TYPE_SCHEMA,
             "biomedical_veto": BIOMEDICAL_VETO_SCHEMA,
         },
@@ -759,6 +712,8 @@ class SemanticResolution:
     competing_labels: tuple[str, ...]
     protocol: str = SEMANTIC_RESOLVER_PROTOCOL
     schema_sha256: str = SEMANTIC_SCHEMA_SHA256
+    entity_policy_version: str = ENTITY_TYPE_POLICY_VERSION
+    entity_policy_sha256: str = ENTITY_TYPE_POLICY_SHA256
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -802,6 +757,8 @@ class SemanticResolverMetadata:
     thresholds_by_entity_type: dict[str, dict[str, float]] = field(
         default_factory=dict
     )
+    entity_policy_version: str = ENTITY_TYPE_POLICY_VERSION
+    entity_policy_sha256: str = ENTITY_TYPE_POLICY_SHA256
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -147,6 +147,40 @@ def generator_response_error(
     return None
 
 
+def strict_response_metadata_error(
+    content: str | None,
+    *,
+    provider_model_id: str | None,
+    provider_request_id: str | None,
+    called_at: str | None,
+    expected_model_id: str,
+    configured_model_version: str | None,
+) -> str | None:
+    """Formal-call validation including identity and audit metadata.
+
+    ``configured_model_version`` is provenance for the frozen endpoint/snapshot.
+    OpenAI-compatible responses generally do not return a separate version field,
+    so the version must be present in the frozen profile while the provider-returned
+    model ID is checked independently.
+    """
+
+    error = generator_response_error(
+        content,
+        provider_model_id=provider_model_id,
+        expected_model_id=expected_model_id,
+        require_provider_model_id=True,
+    )
+    if error:
+        return error
+    if not str(configured_model_version or "").strip():
+        return "configured_model_version_missing"
+    if not str(provider_request_id or "").strip():
+        return "provider_request_id_missing"
+    if not str(called_at or "").strip():
+        return "called_at_missing"
+    return None
+
+
 def response_record_is_success(
     row: Mapping[str, Any],
     *,
@@ -175,4 +209,23 @@ def response_record_is_success(
         expected_model_id=expected,
         require_provider_model_id=bool(expected),
     )
-    return validation_error is None
+    if validation_error is not None:
+        return False
+    if row.get("strict_response_validation") is True:
+        return strict_response_metadata_error(
+            str(row.get("response") or ""),
+            provider_model_id=(
+                str(row.get("provider_model_id"))
+                if row.get("provider_model_id") is not None
+                else None
+            ),
+            provider_request_id=(
+                str(row.get("provider_request_id") or row.get("request_id") or "")
+            ),
+            called_at=str(row.get("called_at") or row.get("generated_at") or ""),
+            expected_model_id=str(expected or ""),
+            configured_model_version=str(
+                row.get("generator_version") or row.get("model_version") or ""
+            ),
+        ) is None
+    return True

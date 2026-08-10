@@ -1,0 +1,19 @@
+eligibility_scan:
+  protocol: v21_entity_policy_full_rescan_v3_capacity_qualified_primary_r1
+  dataset: edgar
+  selection_seed: 42
+  wave_size: 250
+  candidate_pool_multiplier: null
+  candidate_pool_target_sources: 4500
+  candidate_pool_shortfall_policy: fail
+  scan_full_candidate_pool: false
+  exact_target_stop: true
+  target_query_eligible_sources: 2250
+  required_formal_sources: 2250
+  max_chunks_per_source: 5
+  fallback_chunk_caps: []
+  minimum_valid_claims: 3
+  minimum_stealth_pairs: 3
+  deduplicate_complete_sources: true
+  sampling_manifest_path: null
+  output_dir: artifacts/v21/formal_entity_policy_r2/eligibility/cap_5/edgar

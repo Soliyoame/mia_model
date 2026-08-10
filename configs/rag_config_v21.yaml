@@ -1,0 +1,101 @@
+logging: {level: INFO, file: artifacts/v21/logs/rag.log}
+llm_profiles_path: configs/llm_profiles.yaml
+generator_registry_path: configs/generator_families_v21.yaml
+generator_family: gemma
+
+experiment_protocol:
+  protocol_version: pcv-mia-v21
+  method_version: pcv-rag-only-source-v21
+  dataset_status: rebuild_pending
+  metrics_version: source-bootstrap-low-fpr-v21
+  reserve_role: retriever_dev
+  conformal_alphas: [0.005, 0.01, 0.05]
+  execution: source_block_interleaved
+  pairs_per_source: 3
+  logical_victim_calls_per_source_per_mode: 6
+  dense_retriever_model: BAAI/bge-base-en-v1.5
+
+paths:
+  query_controls_dir: artifacts/v21/query_controls
+  query_control_responses_dir: artifacts/v21/query_control_responses
+  splits_dir: artifacts/v21/splits
+  indexes_dir: artifacts/v21/indexes
+  retrieval_dev_indexes_dir: artifacts/v21/retrieval_dev_indexes
+  benchmark_dir: artifacts/v21/benchmarks
+  queries_dir: artifacts/v21/stealth_filtered_queries
+  rag_responses_dir: artifacts/v21/rag_responses
+  llm_only_responses_dir: artifacts/v21/llm_only_responses
+  scores_dir: artifacts/v21/scores
+  reports_dir: artifacts/v21/reports
+  runs_dir: artifacts/v21/runs
+  pilots_dir: artifacts/v21/pilots
+  release_controls_dir: artifacts/v21/release_controls
+  reserve_roles_dir: artifacts/v21/release_controls/reserve_roles
+  ground_truth_source_store_dir: artifacts/v21/release_controls/ground_truth_source_store
+  execution_schedule_path: artifacts/v21/release_controls/execution_schedule.jsonl
+  execution_schedule_manifest_path: artifacts/v21/release_controls/execution_schedule.manifest.json
+  generator_registry_state_dir: artifacts/v21/generator_registry_state
+  facts_dir: artifacts/v21/facts
+
+dataset_paths:
+  edgar: {splits_dir: artifacts/v21/splits/edgar}
+  enron: {splits_dir: artifacts/v21/splits/enron}
+  pubmed: {splits_dir: artifacts/v21/splits/pubmed}
+
+embedding:
+  model: BAAI/bge-base-en-v1.5
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  backend: auto
+  local_files_only: true
+  dim: 768
+  query_instruction: "Represent this sentence for searching relevant passages: "
+
+chunking:
+  unit: tokens
+  tokenizer_model: BAAI/bge-base-en-v1.5
+  tokenizer_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  tokenizer_local_files_only: true
+  chunk_size: 128
+  chunk_overlap: 32
+  offline_gate_candidates:
+    - {chunk_size: 128, chunk_overlap: 32}
+    - {chunk_size: 256, chunk_overlap: 32}
+    - {chunk_size: 384, chunk_overlap: 64}
+
+retrieval:
+  backend: dense
+  top_k: 5
+  query_rewriting: false
+  retriever_ids:
+    dense: BAAI/bge-base-en-v1.5
+    bm25: bm25
+    hybrid: bge-base-en-v1.5+bm25+rrf+bge-reranker-base
+    menta_bridge: sentence-transformers/all-mpnet-base-v2
+    none: none
+  hybrid:
+    dense_candidate_top_k: 20
+    bm25_candidate_top_k: 20
+    rrf_k: 60
+    fusion_top_k: 20
+    reranker_model: BAAI/bge-reranker-base
+    reranker_revision: 2cfc18c9415c912f9d8155881c133215df768a70
+    reranker_local_files_only: true
+    final_top_k: 5
+  offline_gate:
+    recall_at_5_min: 0.70
+    recall_at_10_min: 0.80
+    zero_hit_source_rate_max: 0.05
+    forbidden_group_overlap: 0
+
+generation:
+  run_llm_only: false
+  victim_profile: gemma2_2b_primary
+  temperature: 0.0
+  max_tokens: 512
+  timeout: 600
+  retries: 0
+  retry_until_success: false
+  request_interval_seconds: 0
+  requests_per_minute: 0
+  sibling_requests_per_minute: 4
+  max_workers: 1

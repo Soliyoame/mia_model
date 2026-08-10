@@ -211,7 +211,7 @@ P1 推荐恢复顺序：
 - `Spoofed_Non_Member` 是可选 hard negative 对照组，不是 PCV-MIA 主方法必需部分。
 - `Reserve` 组从第 05 步起被纳入 benchmark，随主流水线跑出 `cvg_rag`，仅作为 L1 群体校准的"非成员零分布"；评估指标时必须排除（开关 `PCV_ENABLE_RESERVE_CALIBRATION`，默认 true）。
 - 当前 NER 只是 `EntityExtractor` 的可注入候选源接口，默认没有自动加载 NER 模型。
-- 5 个 baseline 已实现；defense 仍以 policy/report 骨架为主。P1 重跑完成前，现有 baseline 数值不得与新 source-level 主结果混用。
+- 6 个 baseline 已接入统一 harness；其中 MEntA 明确属于 source-level adapted baseline。P1 重跑完成前，现有 baseline 数值不得与新 source-level 主结果混用。
 
 ### 2026-07-13：Baseline 与 API 请求可靠性
 
@@ -320,7 +320,7 @@ PCV_VICTIM_BASE_URL=https://your-provider/v1
 PCV_VICTIM_MODEL=your-victim-model
 PCV_VICTIM_PROFILE=openai_api
 
-# Sibling LLM：只在启用 Spoofed_Non_Member 时用于 rewrite / judge
+# Sibling LLM：用于 MEntA/IA/DCMI attacker，以及可选 Spoof
 PCV_SIBLING_API_KEY=your-sibling-key
 PCV_SIBLING_BASE_URL=https://your-provider/v1
 PCV_SIBLING_MODEL=your-sibling-model
@@ -336,16 +336,73 @@ PCV_ENABLE_SPOOFED_NONMEMBER=false
 CLI --profile > .env 的 PCV_VICTIM_PROFILE / PCV_SIBLING_PROFILE > 脚本配置 > configs/llm_profiles.yaml 的 active
 ```
 
-`configs/llm_profiles.yaml` 内置两个 profile：
+`configs/llm_profiles.yaml` 内置以下常用 profile：
 
 ```text
 openai_api      OpenAI 官方接口，默认模型 gpt-4.1-mini
 dashscope_qwen  阿里云 DashScope OpenAI 兼容接口，默认模型 qwen3-235b-a22b
+ollama_qwen3_4b 本地 Ollama，固定别名 pcv-qwen3-4b:q4km-8k
 ```
 
 仓库当前默认 victim active 是 `openai_api`，sibling active 是 `dashscope_qwen`。profile 只决定接口风格和 system prompt；真实的 `base_url`、`model`、`api_key` 仍由 `.env` 中的 `PCV_VICTIM_*` / `PCV_SIBLING_*` 覆盖。
 
 第 10 步必须配置 `PCV_VICTIM_*`。第 04 步只有在 `PCV_ENABLE_SPOOFED_NONMEMBER=true` 时才需要 `PCV_SIBLING_*`。
+
+### 本地 Qwen3-4B sibling（RTX 4060 8GB）
+
+完整操作与门禁命令见
+[`docs/ollama_qwen3_4b_sibling_使用说明.md`](docs/ollama_qwen3_4b_sibling_使用说明.md)。
+
+本地攻击侧统一使用 Ollama 的 `qwen3:4b-q4_K_M`。仓库保留云端默认 sibling，
+本机只通过 `.env` 选择 `ollama_qwen3_4b`，不会改变 victim Generator 或
+`configs/generator_families.yaml`。当前本机安装在 `D:\Ollama`，模型目录为
+`D:\Ollama\models`，项目别名实际 ID 冻结为 `39297c75a309`。
+
+安装 Ollama 后执行：
+
+```powershell
+ollama pull qwen3:4b-q4_K_M
+ollama create pcv-qwen3-4b:q4km-8k -f configs\qwen3_4b_q4km_8k.Modelfile
+ollama list
+```
+
+Modelfile 固定 `num_ctx=8192`、`temperature=0`、`seed=42`。至少预留 5GB
+磁盘；拉取完成后可离线运行。将以下变量设为 Windows 用户环境变量后重启 Ollama：
+
+```powershell
+[Environment]::SetEnvironmentVariable("OLLAMA_HOST", "127.0.0.1:11434", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_NUM_PARALLEL", "1", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_MAX_LOADED_MODELS", "1", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_FLASH_ATTENTION", "1", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_KV_CACHE_TYPE", "q8_0", "User")
+[Environment]::SetEnvironmentVariable("OLLAMA_KEEP_ALIVE", "10m", "User")
+```
+
+本机 `.env` 使用：
+
+```dotenv
+PCV_SIBLING_PROFILE=ollama_qwen3_4b
+PCV_SIBLING_API_KEY=ollama
+PCV_SIBLING_BASE_URL=http://127.0.0.1:11434/v1
+PCV_SIBLING_MODEL=pcv-qwen3-4b:q4km-8k
+PCV_SIBLING_MODEL_VERSION=ollama:39297c75a309
+```
+
+`ollama_qwen3_4b` 显式设置 `requests_per_minute: 0` 和
+`request_interval_seconds: 0`：这表示 sibling 不创建令牌桶，也不继承云端的
+20 秒间隔；单并发只由 `OLLAMA_NUM_PARALLEL=1` 保证。victim 仍独立使用
+`generation.requests_per_minute: 4` 的令牌桶，两者互不影响。
+
+正式生成 MEntA manifest 前先做 30 条功能门禁（每数据集 10 条）和至少 50 次
+稳定性门禁。要求 HTTP/JSON 成功率 100%、每条恰好 5 个唯一问题、无 `<think>`
+泄漏、provider model ID 精确等于本地别名、热启动 p95≤30 秒；BGE 同驻时还需
+`ollama ps` 显示 100% GPU、无 OOM/超时且独显峰值约不超过 7.2GiB。若显存失败，
+只允许创建新的 4K 上下文别名并重跑全部门禁，不接受 CPU fallback，也不复用旧
+sibling 生成结果。
+
+本机 2026-07-31 实测已通过：三数据集 30/30 功能样本的热启动 p95 分别为
+2.462s、1.834s、2.403s；BGE 同驻下 50/50 稳定性样本 p95 为 1.735s，GPU 峰值
+3983MiB/8188MiB，`ollama ps` 为 100% GPU、8192 context，无 OOM、超时或 CPU fallback。
 
 ## 数据准备
 
@@ -457,6 +514,8 @@ generation:
   # 全局速率恒 ≤ 此 RPM，但 max_workers>1 时某条 call 卡住不阻塞其他线程。
   # =0 则回退到 request_interval_seconds 固定间隔（旧行为）。详见「10. 双路推理」提速小节。
   requests_per_minute: 4
+  # 云端 sibling 的 generation fallback；profile 内显式值优先。
+  # ollama_qwen3_4b 显式为 0，因此不创建 sibling 令牌桶。
   sibling_requests_per_minute: 4
   max_workers: 4
 ```
@@ -488,7 +547,7 @@ paired_claims:
   max_pairs_per_fact: 1
 
 paired_queries:
-  query_types: [compressed_verification]
+  query_types: [diverse_slotted_verification]
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
@@ -883,6 +942,12 @@ outputs/paired_queries/enron_paired_queries.jsonl
 outputs/paired_queries/enron_paired_queries.manifest.json
 ```
 
+正式 Step 08 使用 `diverse_slotted_verification`：`true_claim` 保留原文，Sibling
+对同一 source 的三个 pair 一次生成三个候选问句，并在 `{ENTITY}` 槽位只生成一次。
+Q+/Q− 由本地填入真/假实体，因此槽外必须字节级一致。运行前必须显式冻结
+`PCV_SIBLING_MODEL`；manifest 同时绑定 effective profile、实际返回模型、NLI snapshot、
+benchmark 与生成协议，身份变化会拒绝 resume。旧逐字查询仅允许用于 shadow 非劣对照。
+
 ### 09. Stealth filter
 
 ```powershell
@@ -896,6 +961,11 @@ outputs/stealth_filtered_queries/enron_paired_queries.jsonl
 outputs/stealth_filtered_queries/enron_paired_queries_rejected.jsonl
 outputs/stealth_filtered_queries/enron_paired_queries.manifest.json
 ```
+
+Step 09 从 attack benchmark 按 `source_key` 重新加载原始 chunk。查询与 chunk 统一遮蔽
+目标实体后，执行 5-gram containment 与最长连续公共 token 串门禁；embedding 余弦只记录
+问句—claim 语义保真度和问句—chunk 检索相关度，不再以“过于相似”为由拒绝查询。
+所有拒绝仍按 Q+/Q− 整对共进退。
 
 这一步会过滤太像 prompt injection、context probing、membership probing，或者相似度过低/过高的 query。**过滤以 pair 为单位**：Q+ 与 Q- 共进退，对内任一条被拒则整对剔除，保证进入第 10 步的永远是完整配对（否则下游 `score_pair` 会把缺失的一边按 0 计入、扭曲 CVG）。`manifest.json` 额外记录 `accepted_pairs` / `rejected_pairs` / `pair_rejection_rate`。
 
@@ -1010,7 +1080,7 @@ outputs/baselines/{dataset}/{model}/{dataset}_{method}_scores_source_scores.json
 outputs/baselines/{dataset}/{model}/{dataset}_baseline_comparison.jsonl
 ```
 
-5 个 baseline 均已按「方案一」忠实复现（原样移植官方确定性逻辑 + 接缝注入统一 RAG + 差分测试）：
+6 个 baseline 已接入统一 source-level representative-chunk harness：
 
 ```text
 PCV-MIA（本方法）
@@ -1019,9 +1089,15 @@ S2MIA(s)     切半 + BLEU(原文, 回答)，移植 IA 官方 mia_utils/s2.py（
 MBA          proxy-LM 高难词遮蔽 + 填空填对率，移植 IA 官方 mia_utils/mba.py
 IA           summary + 30问 + 同源检索器区分度筛选(代替 ElectraScorer) + 一致率
 DCMI         反义词扰动差分（base=BLEU 重叠），对齐官方 perturb.py
+MEntA        冻结 summary+5 个自然问题 + 本地 DeBERTa entailment/refusal 均值（source-level adapted）
 ```
 
-忠实度审计与实验条件对齐见 `src/baselines/BASELINES.md`；确定性逻辑由 `tests/test_baseline_adapters.py`（差分测试 14/14）背书。IA/DCMI 需 attacker LLM，可加 `--attacker victim` 复用受害模型。
+忠实度审计与实验条件对齐见 `src/baselines/BASELINES.md`；确定性逻辑由 `tests/test_baseline_adapters.py` 与 `tests/test_menta.py` 背书。IA/DCMI 需 runtime attacker LLM；MEntA 必须先运行 `scripts/download_frozen_menta_nli.py` 和 `scripts/27_prepare_menta_inputs.py --dataset <dataset>`，正式 runner 不会联网生成 query 或补模型。
+
+MEntA query manifest 和 baseline experiment identity 都绑定无密钥的 sibling profile
+快照及 hash（含本地模型摘要、endpoint、请求参数和限速配置）。partial/frozen
+resume 遇到 profile/model digest、provider model ID 或逐行 identity 漂移会直接拒绝，
+避免云端与本地 sibling 产物混用。
 
 MBA 额外对共享 proxy-LM 的 tokenizer/model 选词阶段加了串行锁，解决真实 GPT-2 在多线程下的 `Already borrowed`；得到攻击 query 后立即释放锁，victim 请求仍可并发。所有 baseline 的可恢复 API 错误与第 10 步一样，会长冷却并持续重试到成功。
 
@@ -1231,7 +1307,8 @@ src/spoof/
   generator.py  可选 Spoofed_Non_Member 对照组生成
 
 src/baselines/
-  victim_harness.py  5 个 baseline 的统一 RAG/API 执行、重试、聚合与输出接口
+  victim_harness.py  6 个 baseline 的统一 RAG/API 执行、重试、聚合与输出接口
+  menta.py           MEntA query/NLI/refusal runtime 与冻结产物校验
 
 src/defenses/
   runner.py  defense policy report 骨架
@@ -1703,7 +1780,7 @@ configs/rag_config.yaml 的 generation / retrieval 是否符合当前实验
 
 ### 8. baseline 和 defense 是否都已经完整实现
 
-baseline：5 个（RAG-MIA / S2MIA / MBA / IA / DCMI）均已按「方案一」忠实复现——移植官方确定性逻辑 + 接缝注入统一 RAG，差分测试 14/14 背书，见 `src/baselines/BASELINES.md`。注：S2/MBA 移植自第三方复现（原论文无官方码）、DCMI 的 base 为 BLEU 重叠近似（官方 base 未完整开源），均已诚实标注。defense 目前仍是 policy report 骨架。
+baseline：6 个（RAG-MIA / S2MIA / MBA / IA / DCMI / MEntA）统一接入第 12 步 harness，见 `src/baselines/BASELINES.md`。MEntA 固定每 source 5 次 victim 调用，query 由 sibling 离线生成并冻结，回答由 `tasksource/deberta-base-long-nli@04dcf11f...99d5` 本地打分；它使用共享 representative chunk，必须标注为 source-level adapted baseline，不冒充官方数据集复现。注：S2/MBA 移植自第三方复现、DCMI 的 base 为 BLEU 重叠近似，均已诚实标注。
 
 ## 安全与复现注意事项
 

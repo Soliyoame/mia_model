@@ -66,7 +66,9 @@ primary_generator_formal_suite:
     hybrid_reranker: 22500
     mechanism_oracle_random: 3600
   main_calls_without_mechanism_subset: 90000
-  baselines: [RAG-MIA, S2MIA, MBA, IA, DCMI]
+  baselines: [RAG-MIA, S2MIA, MBA, IA, DCMI, MEntA]
+  baseline_victim_calls_per_dataset: 15000
+  baseline_victim_calls_three_datasets: 45000
   full_defense_and_mechanism_analysis: true
   primary_endpoint: equal_weight_macro_source_auc_llama_bge_three_datasets
   secondary_only:
@@ -93,6 +95,10 @@ reporting:
   remove_numeric_tpr_at_0_1_percent_fpr: true
   structured_claim_verification_rag_scope_only: true
   neutral_prompt_experiment: false
+  query_type: diverse_slotted_verification
+  minimal_counterfactual_entity_slot_required: true
+  legacy_literal_queries_shadow_only: true
+  free_form_qa_generalization_claimed: false
   human_claim_double_annotation: false
   human_llama_parser_audit: false
 
@@ -113,6 +119,11 @@ paper_release_gate:
     - retriever_id
     - index_manifest_hash
     - query_hash
+    - query_generation_protocol
+    - sibling_profile_hash
+    - sibling_provider_model_id
+    - lexical_stealth_filter_hash
+    - query_rewrite_shadow_gate_hash
     - benchmark_hash
     - code_commit
   require_complete_responses: true

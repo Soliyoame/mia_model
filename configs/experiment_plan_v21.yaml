@@ -1,0 +1,33 @@
+protocol_version: pcv-mia-v21
+method_version: pcv-rag-only-source-v21
+primary_victim: {family: gemma, model: google/gemma-2-2b-it, profile: gemma2_2b_primary}
+roles:
+  query_generator: {model: gpt-5.6-luna, profile: luna_query_generator}
+  ia_shadow_answer: {model: pcv-qwen3-4b:q4km-8k, version: "ollama:39297c75a309", profile: qwen3_4b_ia_shadow}
+  victim_generator: {model: google/gemma-2-2b-it, precision: BF16, quantization: none, device: cuda, batch_size: 1, temperature: 0}
+application_datasets:
+  names: [edgar, enron, pubmed]
+  per_dataset: {KB_Member: 1000, True_Non_Member: 1000, Reserve: 250}
+  candidate_pool_target_sources: 4500
+  required_formal_sources: 2250
+  minimum_valid_claims: 3
+  minimum_stealth_pairs: 3
+  seed: 42
+main_victim_calls:
+  PCV-MIA: {queries_per_source: 6, calls: 36000}
+  MEntA: {queries_per_source: 5, calls: 30000}
+  IA: {queries_per_source: 5, calls: 30000}
+  S2MIA: {queries_per_source: 1, calls: 6000}
+  MBA: {queries_per_source: 1, calls: 6000}
+  DCMI: {queries_per_source: 2, calls: 12000}
+  total: 120000
+mechanism_victim_calls: {matched_llm_only: 9000, oracle_context: 9000, random_distractor: 9000, total: 27000}
+controlled_bridge:
+  datasets: [nfcorpus, scidocs, trec-covid]
+  per_dataset: {KB_Member: 1000, True_Non_Member: 1000}
+  methods: [PCV-MIA, MEntA]
+  retriever: sentence-transformers/all-mpnet-base-v2
+  top_k: 3
+  victim_calls: 66000
+total_gemma_victim_calls: 213000
+metrics: [ROC-AUC, source-bootstrap-95CI, TPR@0.5%FPR, TPR@1%FPR, TPR@5%FPR, attack-advantage, Acc@best-descriptive, Recall@5, Recall@10, target-hit-rate, zero-hit-rate]

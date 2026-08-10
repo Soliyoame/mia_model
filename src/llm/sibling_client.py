@@ -55,6 +55,7 @@ class OpenAICompatibleSiblingClient:
     retry_backoff_max: float = 30.0   # 重试退避上限
     stream: bool = False          # 是否走流式(SSE)请求,透传给底层 client
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数
+    request_rate_limiter: Any = None  # 远端 sibling 共享令牌桶
 
     @cached_property
     def _client(self) -> OpenAICompatibleChatClient:
@@ -71,6 +72,7 @@ class OpenAICompatibleSiblingClient:
             retry_backoff_max=self.retry_backoff_max,
             extra_body=self.extra_body,
             stream=self.stream,
+            request_rate_limiter=self.request_rate_limiter,
         )
 
     def _chat(self, prompt: str, *, max_tokens: int | None = None) -> str:

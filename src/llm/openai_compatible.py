@@ -85,6 +85,7 @@ class OpenAICompatibleChatClient:
     retry_backoff_max: float = 30.0   # 重试退避上限秒数
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数(如 top_p)
     stream: bool = False          # 是否走流式(SSE):慢模型 + Cloudflare 类网关下可绕开"N 秒无响应"的 524
+    request_rate_limiter: Any = None  # 每次物理 HTTP 尝试前取令牌；None 表示不限制
 
     def chat_with_metadata(
         self,
@@ -301,6 +302,8 @@ class OpenAICompatibleChatClient:
         attempts = max(0, int(self.max_retries))
         for attempt in range(attempts + 1):
             try:
+                if self.request_rate_limiter is not None:
+                    self.request_rate_limiter.acquire()
                 # 打开连接、读出正文并按 utf-8 解码返回。
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     return response.read().decode("utf-8"), attempt
@@ -344,6 +347,8 @@ class OpenAICompatibleChatClient:
         attempts = max(0, int(self.max_retries))
         for attempt in range(attempts + 1):
             try:
+                if self.request_rate_limiter is not None:
+                    self.request_rate_limiter.acquire()
                 chunks: list[str] = []
                 provider_models: set[str] = set()
                 provider_request_id: str | None = None

@@ -129,7 +129,13 @@ class V20RemediationTests(unittest.TestCase):
 
         config = load_yaml("configs/canonical_suite_v20_llama.yaml")
         protocol = config["protocol"]
-        self.assertEqual(protocol["dataset_status"], "pre_response_frozen_canonical")
+        self.assertEqual(
+            protocol["dataset_status"],
+            "facts_claims_splits_indexes_frozen_queries_unfrozen",
+        )
+        self.assertEqual(config["status"], "query_protocol_rebuild_required")
+        self.assertEqual(protocol["query_type"], "diverse_slotted_verification")
+        self.assertFalse(protocol["neutral_prompt_robustness_cell"])
         self.assertEqual(
             protocol["metrics_version"],
             "source-conformal-bootstrap-v2",

@@ -1,0 +1,11 @@
+# Enron 不执行 fresh formal scan；它从已冻结 capacity artifact 生成 promotion manifest。
+capacity_promotion:
+  protocol: v21_enron_capacity_qualified_primary_promotion_v1
+  dataset: enron
+  dataset_role: capacity_qualified_primary
+  selection_seed: 42
+  selection_method: sha256(scope_version,selection_seed,dataset,source_key)
+  required_formal_sources: 2250
+  source_query_eligibility_path: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron/enron_query_eligible_sources.json
+  source_query_eligibility_sha256: 7f3be4e292967c13630cd27816b8cb9d92a8443323789b9b29301dfbac3cdd9a
+  output_path: artifacts/v21/entity_policy_r2/enron_capacity_promotion/enron_capacity_qualified_primary_manifest.json

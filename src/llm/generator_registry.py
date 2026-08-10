@@ -10,7 +10,7 @@ from ..utils.hash import sha256_obj
 from ..utils.io import ensure_dir, load_yaml, read_json, resolve_path, write_json
 
 
-GENERATOR_FAMILIES = ("gemini", "qwen", "gpt", "llama")
+LEGACY_GENERATOR_FAMILIES = ("gemini", "qwen", "gpt", "llama")
 FROZEN_REQUIRED_FIELDS = (
     "provider",
     "endpoint_id",
@@ -55,8 +55,12 @@ def load_generator_registry(
     families = registry.get("generator_families")
     if not isinstance(families, dict):
         raise ValueError("generator_families must be a mapping")
-    unknown = sorted(set(families) - set(GENERATOR_FAMILIES))
-    missing = sorted(set(GENERATOR_FAMILIES) - set(families))
+    required = tuple(
+        str(value).strip().casefold()
+        for value in registry.get("required_families", LEGACY_GENERATOR_FAMILIES)
+    )
+    unknown = sorted(set(families) - set(required))
+    missing = sorted(set(required) - set(families))
     if unknown or missing:
         raise ValueError(
             f"Generator registry families mismatch: missing={missing}, unknown={unknown}"
@@ -70,9 +74,12 @@ def infer_generator_family(concrete_model: str) -> str | None:
     normalized = str(concrete_model or "").casefold()
     aliases = {
         "gemini": ("gemini",),
+        "gemma": ("gemma",),
         "qwen": ("qwen",),
         "gpt": ("gpt", "o1", "o3", "o4"),
         "llama": ("llama",),
+        "phi": ("phi",),
+        "command-r": ("command-r", "command_r", "command r"),
     }
     matches = [
         family
@@ -97,9 +104,10 @@ def resolve_frozen_generator(
     """
 
     family_name = str(family or "").strip().casefold()
-    if family_name not in GENERATOR_FAMILIES:
+    families = registry.get("generator_families") or {}
+    if family_name not in families:
         raise ValueError(f"Unknown generator family: {family!r}")
-    entry = (registry.get("generator_families") or {}).get(family_name) or {}
+    entry = families.get(family_name) or {}
     status = str(entry.get("status") or "").casefold()
     allowed_statuses = (
         {"frozen", "pilot_candidate"}

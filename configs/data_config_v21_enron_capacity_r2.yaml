@@ -1,0 +1,14 @@
+# Enron v21_r2 capacity study data binding.
+# The processed input is read-only; all capacity outputs use a new directory.
+
+logging:
+  level: INFO
+  file: artifacts/v21/enron_capacity_r2/logs/eligibility.log
+
+paths:
+  processed_dir: artifacts/v21/enron_full/processed
+
+datasets:
+  enron:
+    source_eligibility_path: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron/enron_query_eligible_sources.json
+    membership_unit: complete_email

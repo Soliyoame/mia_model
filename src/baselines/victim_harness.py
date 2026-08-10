@@ -1,4 +1,4 @@
-"""Baseline 受害查询 harness —— 把 5 个 RAG-MIA baseline 接到本项目同一套基础设施。
+"""Baseline 受害查询 harness —— 把 6 个 RAG-MIA baseline 接到本项目同一套基础设施。
 
 中文说明
 ========
@@ -7,7 +7,7 @@
 (kb_member=成员 / true_non_member=非成员)、同一套指标(summarize_membership_scores),
 唯一差异是每个 baseline 自己的「①发什么 query ②怎么打分」。
 
-5 个 baseline(参考实现/出处见 src/baselines/BASELINES.md):
+6 个 baseline(参考实现/出处见 src/baselines/BASELINES.md):
   - RAG-MIA   : 直接问"在不在上下文" yes/no(二值分,AUC 会退化,见 BASELINES.md)。1 次 victim/目标。
   - S2MIA(s)  : 按字符切半→前半段当 query 让 RAG 复述→BLEU(完整原文, 回答)。纯黑盒。1 次/目标。
   - MBA       : proxy LM 按预测难度挑高难词遮蔽→让 RAG 填空→填对率。proxy LM 仅离线选词。1 次/目标。
@@ -15,8 +15,10 @@
                 逐个问 victim→一致率(λ_unk 罚)。~top_k victim + (2+top_k) attacker/目标(贵)。
   - DCMI      : 差分校准——base(原文) − base(扰动文),base=S2(s) 同口径 BLEU 重叠,扰动=反义词
                 替换;成员在扰动下掉得更多。2 次 victim + 1 次 attacker/目标。
+  - MEntA     : 离线冻结 summary+5 个自然问题→逐个问 victim→本地 DeBERTa NLI 蕴含/拒答分。5 次/目标。
 
-IA / DCMI 需要一个独立于 victim 的 attacker LLM(用 sibling profile),其余三个纯靠 victim。
+IA / DCMI 需要一个独立于 victim 的 runtime attacker LLM(用 sibling profile);
+MEntA 的 sibling 仅在离线 query 准备阶段使用。
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from ..utils.logger import get_logger
 from .MBA.mba_highdiff import MBAHighDiff
 from .RAG_MIA.rag_mia_reference import RAGMIA
 from .S2MIA.s2mia_reference import S2
+from .ia_shadow import load_source_bundle
 
 LOGGER = get_logger(__name__)
 
@@ -103,6 +106,49 @@ def build_generic_rag_prompt(query: str, contexts: list[str]) -> str:
     )
 
 
+def resolve_attacker_rate_limits(
+    generation_config: dict[str, Any],
+    attacker_profile: dict[str, Any] | None,
+    *,
+    attacker_role: str,
+    victim_requests_per_minute: float,
+    victim_request_interval_seconds: float,
+) -> tuple[float, float]:
+    """解析 attacker 限速；profile 中显式的 0 表示禁用本地限速。"""
+
+    if attacker_role == "victim":
+        return victim_requests_per_minute, victim_request_interval_seconds
+    if attacker_role != "sibling":
+        raise ValueError(f"Unsupported attacker role: {attacker_role}")
+
+    profile_rpm = (
+        attacker_profile.get("requests_per_minute")
+        if attacker_profile is not None
+        else None
+    )
+    requests_per_minute = float(
+        generation_config.get(
+            "sibling_requests_per_minute",
+            victim_requests_per_minute,
+        )
+        if profile_rpm is None
+        else profile_rpm
+    )
+    profile_interval = (
+        attacker_profile.get("request_interval_seconds")
+        if attacker_profile is not None
+        else None
+    )
+    request_interval_seconds = float(
+        victim_request_interval_seconds
+        if profile_interval is None
+        else profile_interval
+    )
+    if requests_per_minute < 0 or request_interval_seconds < 0:
+        raise ValueError("Attacker rate limits must be non-negative")
+    return requests_per_minute, request_interval_seconds
+
+
 @dataclass
 class Services:
     """提供给各 baseline 适配器的"服务":检索作答、attacker 调用、向量相似度。"""
@@ -115,6 +161,7 @@ class Services:
     max_tokens: int = 512
     timeout: float = 60.0
     request_interval_seconds: float = 0.0  # 每次 victim 调用后限速睡眠
+    attacker_request_interval_seconds: float | None = None
     # 重试退避:吸收瞬时 HTTP 524/5xx/网络抖动(对齐第 10 步 runner 的做法)。
     retries: int = 3
     retry_backoff_base: float = 2.0
@@ -131,20 +178,34 @@ class Services:
     # 传入【同一只】桶,把两路调用合并计入该 key 的 RPM 限额。
     victim_bucket: Any = None
     attacker_bucket: Any = None
+    menta_runtime: Any = None
+    dataset: str | None = None
+    ia_shadow_manifest_dir: str | Path | None = None
     # 并发下保护调用计数自增(victim_calls/attacker_calls)的锁。
     _count_lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
     _scope_local: Any = field(default_factory=threading.local, repr=False, compare=False)
 
-    def begin_scope(self) -> None:
+    def begin_scope(self, target: dict[str, Any] | None = None) -> None:
         """开始一个目标的调用计数作用域；线程池下各目标互不串扰。"""
         self._scope_local.victim_calls = 0
         self._scope_local.attacker_calls = 0
+        self._scope_local.target = dict(target or {})
+        self._scope_local.diagnostics = {}
 
     def scope_counts(self) -> tuple[int, int]:
         return (
             int(getattr(self._scope_local, "victim_calls", 0)),
             int(getattr(self._scope_local, "attacker_calls", 0)),
         )
+
+    def scope_target(self) -> dict[str, Any]:
+        return dict(getattr(self._scope_local, "target", {}) or {})
+
+    def set_scope_diagnostics(self, diagnostics: dict[str, Any]) -> None:
+        self._scope_local.diagnostics = dict(diagnostics)
+
+    def scope_diagnostics(self) -> dict[str, Any]:
+        return dict(getattr(self._scope_local, "diagnostics", {}) or {})
 
     def _with_retries(
         self,
@@ -184,7 +245,12 @@ class Services:
             if delay > 0:
                 time.sleep(delay)
 
-    def rag_answer(self, query: str) -> str:
+    def rag_answer(
+        self,
+        query: str,
+        *,
+        prompt_builder: Callable[[str, list[str]], str] | None = None,
+    ) -> str:
         """检索 top_k → 通用 RAG prompt → victim 作答(带重试)。计 1 次 victim 调用。
 
         限速:启用令牌桶时【发请求前】acquire() 取令牌(全局 ≤ RPM,抗端点卡顿),对齐第 10 步
@@ -193,7 +259,7 @@ class Services:
         """
         retrieved = self.retriever.retrieve(query, top_k=self.top_k)
         contexts = [r.text for r in retrieved]
-        prompt = build_generic_rag_prompt(query, contexts)
+        prompt = (prompt_builder or build_generic_rag_prompt)(query, contexts)
         out = self._with_retries(
             lambda: self.victim.generate(
                 prompt, temperature=self.temperature, timeout=self.timeout, max_tokens=self.max_tokens
@@ -224,8 +290,13 @@ class Services:
         with self._count_lock:
             self.attacker_calls += 1
         self._scope_local.attacker_calls = int(getattr(self._scope_local, "attacker_calls", 0)) + 1
-        if self.attacker_bucket is None and self.request_interval_seconds > 0:
-            time.sleep(self.request_interval_seconds)
+        attacker_interval = (
+            self.request_interval_seconds
+            if self.attacker_request_interval_seconds is None
+            else self.attacker_request_interval_seconds
+        )
+        if self.attacker_bucket is None and attacker_interval > 0:
+            time.sleep(attacker_interval)
         return out
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -242,7 +313,7 @@ class Services:
 
 
 # ============================================================
-# 5 个 baseline 适配器:score_target(text, svc) -> float(越大越像成员)
+# 6 个 baseline 适配器:score_target(text, svc) -> float(越大越像成员)
 # ============================================================
 def lexical_overlap(reference: str, candidate: str) -> float:
     """统一的「生成 vs 原文」词法重叠度量(BLEU,method4 平滑)。
@@ -399,7 +470,7 @@ def _ia_parse_questions(raw_q: str) -> list[str]:
     return questions
 
 
-def score_ia(text: str, svc: Services, n_questions: int = 30, top_k_questions: int = 5, lambda_unk: float = 0.1) -> float:
+def score_ia_legacy(text: str, svc: Services, n_questions: int = 30, top_k_questions: int = 5, lambda_unk: float = 0.1) -> float:
     """IA(审问攻击,对齐官方 ali7naseh/RAG_MIA 流程):
 
       1) attacker 生成 summary;
@@ -436,6 +507,68 @@ def score_ia(text: str, svc: Services, n_questions: int = 30, top_k_questions: i
 
 
 # ---- DCMI:差分校准。base 用 S2(s) 同口径 BLEU 重叠,扰动用反义词替换(对齐官方 perturb.py) ----
+def score_ia(
+    text: str,
+    svc: Services,
+    n_questions: int | None = None,
+    top_k_questions: int | None = None,
+    lambda_unk: float = 0.1,
+) -> float:
+    """Score IA from frozen attacker-side artifacts, then make five victim calls."""
+
+    if n_questions is not None or top_k_questions is not None:
+        return score_ia_legacy(
+            text,
+            svc,
+            n_questions=30 if n_questions is None else n_questions,
+            top_k_questions=5 if top_k_questions is None else top_k_questions,
+            lambda_unk=lambda_unk,
+        )
+
+    if not svc.dataset or not svc.ia_shadow_manifest_dir:
+        raise RuntimeError("IA requires a frozen v21 shadow manifest directory")
+    target = svc.scope_target()
+    bundle = load_source_bundle(
+        svc.ia_shadow_manifest_dir,
+        svc.dataset,
+        {**target, "text": text},
+    )
+    summary = str(bundle["summary"])
+    pairs = list(bundle["selected_pairs"])
+    scores: list[float] = []
+    victim_answers: list[dict[str, Any]] = []
+    for pair in pairs:
+        question = str(pair["question"])
+        ground_truth = _ia_yn(str(pair["shadow_answer"]))
+        prediction = _ia_yn(svc.rag_answer(_ia_attack_query(summary, question)))
+        victim_answers.append(
+            {
+                "question_id": pair["question_id"],
+                "candidate_rank": pair["candidate_rank"],
+                "shadow_answer": pair["shadow_answer"],
+                "victim_answer_class": prediction,
+            }
+        )
+        if prediction == ground_truth:
+            scores.append(1.0)
+        elif prediction in (-1, -999):
+            scores.append(-lambda_unk)
+        else:
+            scores.append(0.0)
+    svc.set_scope_diagnostics(
+        {
+            "ia": {
+                "query_hash": bundle["query_hash"],
+                "bundle_hash": bundle["bundle_hash"],
+                "shadow_model": pairs[0]["shadow_model"],
+                "shadow_model_version": pairs[0]["shadow_model_version"],
+                "victim_answers": victim_answers,
+            }
+        }
+    )
+    return sum(scores) / len(scores)
+
+
 def _dcmi_perturb_prompt(text: str) -> str:
     word_count = len(text.split())
     replace_count = int(0.03 * word_count) or 1
@@ -469,6 +602,14 @@ def score_dcmi(text: str, svc: Services) -> float:
     return base - perturbed_base
 
 
+def score_menta(text: str, svc: Services) -> float:
+    """MEntA: five frozen broad queries scored by local NLI entailment."""
+
+    if svc.menta_runtime is None:
+        raise RuntimeError("MEntA runtime is not configured")
+    return float(svc.menta_runtime.score_target(text, svc))
+
+
 @dataclass
 class BaselineSpec:
     """一个 baseline 的注册项。"""
@@ -482,8 +623,9 @@ BASELINES: dict[str, BaselineSpec] = {
     "RAG-MIA": BaselineSpec(score_rag_mia, needs_attacker=False, victim_calls_hint="1"),
     "S2MIA": BaselineSpec(score_s2mia, needs_attacker=False, victim_calls_hint="1"),
     "MBA": BaselineSpec(score_mba, needs_attacker=False, victim_calls_hint="1"),
-    "IA": BaselineSpec(score_ia, needs_attacker=True, victim_calls_hint="~top_k(默认5)"),
+    "IA": BaselineSpec(score_ia, needs_attacker=False, victim_calls_hint="5"),
     "DCMI": BaselineSpec(score_dcmi, needs_attacker=True, victim_calls_hint="2"),
+    "MEntA": BaselineSpec(score_menta, needs_attacker=False, victim_calls_hint="5"),
 }
 
 
@@ -533,8 +675,7 @@ def aggregate_baseline_source_scores(rows: list[dict[str, Any]]) -> list[dict[st
     source_rows: list[dict[str, Any]] = []
     for source_key, source_chunks in sorted(buckets.items()):
         first = source_chunks[0]
-        source_rows.append(
-            {
+        source_row = {
                 "baseline": first.get("baseline"),
                 "source_key": source_key,
                 "source_id": first.get("source_id"),
@@ -544,7 +685,10 @@ def aggregate_baseline_source_scores(rows: list[dict[str, Any]]) -> list[dict[st
                 "victim_calls": sum(int(row.get("victim_calls", 0)) for row in source_chunks),
                 "attacker_calls": sum(int(row.get("attacker_calls", 0)) for row in source_chunks),
             }
-        )
+        diagnostics = [row.get("diagnostics") for row in source_chunks if row.get("diagnostics")]
+        if diagnostics:
+            source_row["diagnostics"] = diagnostics[0] if len(diagnostics) == 1 else diagnostics
+        source_rows.append(source_row)
     return source_rows
 
 
@@ -587,13 +731,14 @@ def run_one_baseline(
         """给单个目标打分(工作线程执行:只读共享 services,不碰 rows/磁盘)。返回一行结果。"""
         score: float | None = None
         error: str | None = None
-        services.begin_scope()
+        services.begin_scope(t)
         try:
             score = float(spec.fn(t["text"], services))
         except Exception as exc:  # 非 API 异常仍记录失败,避免缺依赖/代码错误无限空等
             error = str(exc)
             LOGGER.warning("%s failed on doc_id=%s: %s", name, t["doc_id"], error)
         victim_calls, attacker_calls = services.scope_counts()
+        diagnostics = services.scope_diagnostics()
         return {
             "baseline": name,
             "doc_id": t["doc_id"],
@@ -604,6 +749,7 @@ def run_one_baseline(
             "error": error,
             "victim_calls": victim_calls,
             "attacker_calls": attacker_calls,
+            "diagnostics": diagnostics or None,
         }
 
     def _consume(row: dict[str, Any]) -> None:
@@ -652,18 +798,29 @@ def _chat_fn_from_profile(
     """由一个已解析的 profile 字典造通用对话函数。"""
     from ..llm.openai_compatible import OpenAICompatibleChatClient
 
+    effective_temperature = float(profile.get("temperature", temperature))
+    effective_timeout = float(profile.get("timeout", timeout))
+    effective_max_tokens = int(profile.get("max_tokens", max_tokens))
     chat = OpenAICompatibleChatClient(
         base_url=str(profile.get("base_url", "")),
         model=str(profile.get("model", "")),
         api_key_env=str(profile.get("api_key_env", "")),
         system_prompt="",  # attacker 用通用对话,不挂专用 system prompt
-        timeout=float(profile.get("timeout", timeout)),
+        timeout=effective_timeout,
+        max_retries=int(profile.get("max_retries", 0)),
+        retry_backoff_base=float(profile.get("retry_backoff_base", 2.0)),
+        retry_backoff_max=float(profile.get("retry_backoff_max", 30.0)),
         stream=bool(profile.get("stream", False)),  # 继承 profile 的流式开关(绕 524),与 victim 一致
         extra_body=dict(profile.get("extra_body", {}) or {}),
     )
 
     def _chat(prompt: str) -> str:
-        return chat.chat(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+        return chat.chat(
+            prompt,
+            temperature=effective_temperature,
+            timeout=effective_timeout,
+            max_tokens=effective_max_tokens,
+        )
 
     return _chat
 

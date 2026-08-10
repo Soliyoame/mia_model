@@ -57,6 +57,10 @@ def main() -> int:
     dev_root = resolve_path(config["paths"]["retrieval_dev_indexes_dir"])
     query_root = resolve_path(config["paths"]["queries_dir"])
     benchmark_root = resolve_path(config["paths"]["benchmark_dir"])
+    query_hashes = {
+        dataset: sha256_file(query_root / f"{dataset}_paired_queries.jsonl")
+        for dataset in args.datasets
+    }
     if args.fallback_large:
         gate = config["retrieval"]["offline_gate"]
         chunk_candidates = [{
@@ -94,6 +98,7 @@ def main() -> int:
             "completed": False,
             "fallback_run": bool(args.fallback_large),
         }
+    report["query_hashes"] = query_hashes
     dense_for_ranking: dict[str, dict[str, dict]] = {}
     for dataset in args.datasets:
         queries = list(read_jsonl(query_root / f"{dataset}_paired_queries.jsonl"))

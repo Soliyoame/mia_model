@@ -203,6 +203,10 @@ def rates_at_threshold(
         "FPR-Spoofed_Non_Member": safe_div(spoof_hits, spoof_total),# 伪造非成员(对照组)的误报率
         "Detection Rate": safe_div(predicted, total),               # 总体被判为成员的比例
         "predicted_member_count": predicted,
+        "true_positive_count": tp,
+        "false_positive_count": fp,
+        "positive_count": pos_total,
+        "negative_count": negative,
     }
 
 
@@ -244,6 +248,34 @@ def tpr_at_fpr(curve: list[dict[str, Any]], target: float) -> float | None:
     return float(max(feasible, key=lambda row: row["TPR"])["TPR"])
 
 
+def tpr_at_fpr_details(
+    curve: list[dict[str, Any]], target: float
+) -> dict[str, Any] | None:
+    """Return the conservative empirical operating point without interpolation."""
+
+    feasible = [row for row in curve if float(row["FPR"]) <= target]
+    if not feasible:
+        return None
+    selected = max(
+        feasible,
+        key=lambda row: (
+            float(row["TPR"]),
+            -float(row["FPR"]),
+            float(row["threshold"]),
+        ),
+    )
+    return {
+        "target_fpr": float(target),
+        "TPR": float(selected["TPR"]),
+        "achieved_FPR": float(selected["FPR"]),
+        "threshold": float(selected["threshold"]),
+        "false_positive_count": int(selected.get("false_positive_count") or 0),
+        "negative_count": int(selected.get("negative_count") or 0),
+        "tie_policy": "score_greater_or_equal_threshold",
+        "interpolation": False,
+    }
+
+
 def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pcv_score", threshold: float = 0.3) -> dict[str, Any]:
     """把上面各指标打包成一份完整的"成员推理评测摘要"。
 
@@ -268,10 +300,13 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
             "Detection Rate": None,
             "predicted_member_count": None,
             "Oracle Accuracy@best": None,
+            "Oracle TPR@0.5%FPR": None,
             "Oracle TPR@1%FPR": None,
             "Oracle TPR@5%FPR": None,
             "Attack Advantage": None,
             "Accuracy@best": None,
+            "TPR@0.5%FPR": None,
+            "TPR@0.5%FPR_details": None,
             "TPR@1%FPR": None,
             "TPR@5%FPR": None,
             "threshold_curve": [],
@@ -281,6 +316,7 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
     # Accuracy@best:扫所有阈值能达到的最高准确率(=攻击正确判定成员/非成员的最高比率)。
     # 注意是"最优阈值下"的准确率,严格比较时该用独立验证集定阈,这里作方向性参考。
     best_acc = max((float(r["Accuracy"]) for r in curve), default=0.0)
+    oracle_tpr_05 = tpr_at_fpr(curve, 0.005)
     oracle_tpr_1 = tpr_at_fpr(curve, 0.01)
     oracle_tpr_5 = tpr_at_fpr(curve, 0.05)
     attack_advantage = max(
@@ -293,11 +329,14 @@ def summarize_membership_scores(rows: list[dict[str, Any]], score_key: str = "pc
         "AUC": roc_auc(rows, score_key=score_key),
         **fixed,
         "Oracle Accuracy@best": best_acc,
+        "Oracle TPR@0.5%FPR": oracle_tpr_05,
         "Oracle TPR@1%FPR": oracle_tpr_1,
         "Oracle TPR@5%FPR": oracle_tpr_5,
         "Attack Advantage": attack_advantage,
         # 旧字段保留兼容，但新报告必须显示 Oracle 前缀。
         "Accuracy@best": best_acc,
+        "TPR@0.5%FPR": oracle_tpr_05,
+        "TPR@0.5%FPR_details": tpr_at_fpr_details(curve, 0.005),
         "TPR@1%FPR": oracle_tpr_1,
         "TPR@5%FPR": oracle_tpr_5,
         "threshold_curve": curve,

@@ -4,13 +4,13 @@
 ========
 对应流水线第 12 步「跑 baseline 对照」。本版**真正执行**各 baseline 的受害查询:
 对同一批目标 chunk(kb_member=成员 / true_non_member=非成员)、同一个 KB 索引、同一个
-victim 模型、同一套指标,逐个跑 RAG-MIA / S2MIA(s) / MBA / IA / DCMI,并把 PCV-MIA
+victim 模型、同一套指标,逐个跑 RAG-MIA / S2MIA(s) / MBA / IA / DCMI / MEntA,并把 PCV-MIA
 (从第 11 步分数读)一并拉进同一张对照表。
 
 infra(索引/切分/profile/生成参数)读 rag_config.yaml;方法列表/阈值/输出目录读 baseline_config.yaml。
-IA / DCMI 需要 attacker LLM(sibling profile);其余三个纯靠 victim。
+IA / DCMI 需要 runtime attacker LLM(sibling profile);MEntA 使用离线冻结的 sibling queries。
 
-成本提示(每目标 victim 调用):RAG-MIA/S2MIA/MBA=1,DCMI=2,IA≈top_k(默认5)。
+成本提示(每目标 victim 调用):RAG-MIA/S2MIA/MBA=1,DCMI=2,IA≈top_k(默认5),MEntA=5。
 提速(对齐第 10 步):rag_config 的 generation.requests_per_minute>0 时启用【全局令牌桶+并发】
 (max_workers 跨目标并行,抗端点间歇卡顿);=0 时回退旧的固定间隔(--request-interval)。
 试跑用 --max-targets 限目标数。
@@ -31,14 +31,17 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.baselines.victim_harness import (
     BASELINES,
     Services,
+    _chat_fn_from_profile,
     balanced_sample,
-    build_attacker_chat,
+    resolve_attacker_rate_limits,
     run_one_baseline,
 )
+from src.baselines.menta import MEntARuntime
 from src.baselines.representative import load_representative_targets
 from src.evaluation.metrics import paired_bootstrap_metric_delta, summarize_membership_scores
 from src.llm.factory import (
     build_victim_client,
+    llm_profile_identity,
     load_llm_profiles,
     resolve_effective_llm_profile,
     resolve_llm_profile_name,
@@ -114,9 +117,9 @@ def _baseline_budget_rows(chunk_rows: list[dict], budget: int) -> list[dict]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RAG-MIA baselines (real victim queries).")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "baseline_config.yaml"))
+    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "baseline_config_v21.yaml"))
     # infra(索引/切分/profile/生成参数)来自 rag_config。
-    parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
+    parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config_v21.yaml"))
     parser.add_argument(
         "--retriever-backend",
         choices=["dense", "bm25", "hybrid"],
@@ -128,13 +131,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-targets", type=int, default=None, help="只跑前 N 个目标(两类均衡,省 API 试跑)")
     parser.add_argument("--request-interval", type=float, default=None, help="每次 victim 调用后睡眠秒数(限速)")
     parser.add_argument("--victim-profile", default=None)
-    parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
+    parser.add_argument("--generator-family", default=None)
     parser.add_argument("--sibling-profile", default=None)
     parser.add_argument("--attacker", choices=["sibling", "victim"], default="sibling",
                         help="IA/DCMI 的 attacker 用哪个模型:sibling(默认,需 PCV_SIBLING_API_KEY)或 victim(复用受害模型,免配 sibling key)")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     return parser.parse_args()
+
+
+def _assert_baseline_resume_identity(
+    existing: dict[str, Any],
+    current: dict[str, Any],
+) -> None:
+    if existing != current:
+        raise RuntimeError("Baseline experiment identity drift; resume refused")
 
 
 def main() -> int:
@@ -184,22 +195,40 @@ def main() -> int:
 
     need_attacker = any(BASELINES[m].needs_attacker for m in methods)
     attacker_chat = None
+    attacker_profile: dict[str, Any] | None = None
+    attacker_identity: dict[str, Any] | None = None
     if need_attacker:
         if args.attacker == "victim":
-            # 复用 victim profile 当 attacker(免配 sibling key);attacker 侧离线生成用什么模型都行。
-            from src.baselines.victim_harness import _chat_fn_from_profile
+            attacker_profile = victim_profile
             attacker_chat = _chat_fn_from_profile(
-                victim_profile,
+                attacker_profile,
                 timeout=float(gen_cfg.get("timeout", 60.0)),
                 max_tokens=int(gen_cfg.get("max_tokens", 512)),
             )
+            attacker_identity = {
+                "role": "victim_reuse",
+                "profile": llm_profile_identity(attacker_profile),
+            }
             logger.info("Attacker 使用 victim 模型(--attacker victim)")
         else:
-            attacker_chat = build_attacker_chat(
-                profiles, args.sibling_profile,
+            sibling_name = resolve_llm_profile_name(
+                "sibling",
+                cli_profile=args.sibling_profile,
+            )
+            attacker_profile = resolve_effective_llm_profile(
+                profiles,
+                "sibling",
+                profile_name=sibling_name,
+            )
+            attacker_chat = _chat_fn_from_profile(
+                attacker_profile,
                 timeout=float(gen_cfg.get("timeout", 60.0)),
                 max_tokens=int(gen_cfg.get("max_tokens", 512)),
             )
+            attacker_identity = {
+                "role": "sibling",
+                "profile": llm_profile_identity(attacker_profile),
+            }
 
     retriever_backend = args.retriever_backend or str(
         config.get("baseline", {}).get("retriever_backend", "dense")
@@ -246,6 +275,53 @@ def main() -> int:
         / f"{args.dataset}_attack_benchmark.jsonl"
     )
     code_commit = require_clean_release_commit(git_snapshot())
+    menta_runtime = None
+    method_identities: dict[str, dict] = {}
+    ia_shadow_root = resolve_path(
+        config.get("paths", {}).get(
+            "ia_shadow_answers_dir", "artifacts/v21/ia_shadow_answers"
+        )
+    )
+    ia_shadow_identity: dict[str, Any] | None = None
+    if "IA" in methods:
+        ia_dataset_manifest_path = ia_shadow_root / args.dataset / "dataset_manifest.json"
+        if not ia_dataset_manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Frozen IA dataset manifest missing: {ia_dataset_manifest_path}. "
+                "Run scripts/29_prepare_ia_shadow_answers.py before any IA victim call."
+            )
+        ia_dataset_manifest = read_json(ia_dataset_manifest_path)
+        if ia_dataset_manifest.get("status") != "frozen":
+            raise RuntimeError("IA shadow dataset manifest is not frozen")
+        if int(ia_dataset_manifest.get("source_count") or 0) != len(targets):
+            raise RuntimeError("IA shadow source count does not match victim targets")
+        ia_shadow_identity = {
+            "protocol_version": ia_dataset_manifest.get("protocol_version"),
+            "query_hash": ia_dataset_manifest.get("query_hash"),
+            "ia_shadow_manifest_hash": ia_dataset_manifest.get(
+                "ia_shadow_manifest_hash"
+            ),
+            "ia_shadow_model_version": ia_dataset_manifest.get(
+                "ia_shadow_model_version"
+            ),
+            "manifest_file_hash": sha256_file(ia_dataset_manifest_path),
+        }
+        if not all(str(value or "").strip() for value in ia_shadow_identity.values()):
+            raise RuntimeError("IA shadow dataset identity is incomplete")
+        method_identities["IA"] = ia_shadow_identity
+    if "MEntA" in methods:
+        menta_cfg = dict(config.get("baseline", {}).get("menta") or {})
+        if not menta_cfg:
+            raise RuntimeError("MEntA is selected but baseline.menta is not configured")
+        menta_runtime = MEntARuntime.from_config(
+            dataset=args.dataset,
+            config=menta_cfg,
+            representative_manifest_hash=representative_manifest[
+                "representative_chunk_manifest_hash"
+            ],
+        )
+        menta_runtime.validate_targets(targets)
+        method_identities["MEntA"] = menta_runtime.identity
     baseline_identity = {
         "protocol_version": "pcv-mia-v20",
         "dataset": args.dataset,
@@ -268,11 +344,16 @@ def main() -> int:
             "source_chunk_binding_hash"
         ],
         "methods": methods,
+        "method_identities": method_identities,
+        "attacker_identity": attacker_identity,
+        "ia_shadow_identity": ia_shadow_identity,
     }
     identity_path = out_dir / "baseline_experiment_identity.json"
     if identity_path.exists() and not args.force:
-        if read_json(identity_path) != baseline_identity:
-            raise RuntimeError("Baseline experiment identity drift; resume refused")
+        _assert_baseline_resume_identity(
+            read_json(identity_path),
+            baseline_identity,
+        )
     else:
         write_json(baseline_identity, identity_path)
 
@@ -280,8 +361,14 @@ def main() -> int:
     # requests_per_minute>0 启用全局令牌桶(全局速率恒 ≤ RPM);配合 max_workers>1,某目标卡在
     # 慢 victim 调用时别的目标继续发,把 RPM 管道填满。=0 时回退 request_interval_seconds 固定 sleep。
     rpm = float(gen_cfg.get("requests_per_minute", 0.0))
-    # sibling(attacker)是另一把 key/端点 → 用它自己的 RPM 独立限速;未配则回退成与 victim 同 RPM。
-    sibling_rpm = float(gen_cfg.get("sibling_requests_per_minute", 0.0)) or rpm
+    # sibling profile 优先于 generation；显式 0 会禁用本地令牌桶和固定 sleep。
+    sibling_rpm, attacker_interval = resolve_attacker_rate_limits(
+        gen_cfg,
+        attacker_profile,
+        attacker_role=args.attacker,
+        victim_requests_per_minute=rpm,
+        victim_request_interval_seconds=interval,
+    )
     max_workers = int(gen_cfg.get("max_workers", 1))
     victim_bucket = TokenBucket(rpm) if rpm > 0 else None
     if args.attacker == "victim":
@@ -306,6 +393,7 @@ def main() -> int:
             max_tokens=int(gen_cfg.get("max_tokens", 512)),
             timeout=float(gen_cfg.get("timeout", 60.0)),
             request_interval_seconds=interval,
+            attacker_request_interval_seconds=attacker_interval,
             # 重试退避:吸收瞬时 HTTP 524/5xx(对齐第 10 步 runner)。
             retries=int(gen_cfg.get("retries", 3)),
             retry_backoff_base=float(gen_cfg.get("retry_backoff_base", 2.0)),
@@ -316,6 +404,9 @@ def main() -> int:
             # 令牌桶(抗卡顿):rpm=0 时为 None,自动回退到 request_interval_seconds 固定 sleep。
             victim_bucket=victim_bucket,
             attacker_bucket=attacker_bucket,
+            menta_runtime=(menta_runtime if name == "MEntA" else None),
+            dataset=args.dataset,
+            ia_shadow_manifest_dir=(ia_shadow_root if name == "IA" else None),
         )
         res = run_one_baseline(
             name, targets, svc,
@@ -485,12 +576,15 @@ def main() -> int:
             name: int(results_by_method[name]["victim_calls"])
             for name in methods
         },
+        "method_identities": method_identities,
         "adaptation_disclosure": {
             "shared_representative_chunk": True,
             "selection": "max BGE cosine over six frozen PCV queries",
             "official_implementation_difference": (
-                "All five methods use one preregistered source-level chunk and "
-                "the common OpenAI-compatible victim/RAG harness."
+                "All six methods use one preregistered source-level chunk and "
+                "the common OpenAI-compatible victim/RAG harness. MEntA is a "
+                "source-level adaptation with five offline sibling-generated "
+                "queries and local NLI scoring, not an official-dataset reproduction."
             ),
         },
     }
@@ -498,9 +592,9 @@ def main() -> int:
     logger.info("Step 12 finished: %s", table_path)
     # 控制台打印一张精简对照表
     print(f"\n=== Baseline 对照({args.dataset},KB={n_kb}/TN={n_tn}) ===")
-    print(f"{'method':22s} {'AUC':>7} {'Acc@best':>9} {'TPR@1%':>8} {'TPR@5%':>8} {'victim':>7}")
+    print(f"{'method':22s} {'AUC':>7} {'Acc@best':>9} {'TPR@0.5%':>9} {'TPR@1%':>8} {'TPR@5%':>8} {'victim':>7}")
     for r in comparison:
-        print(f"{r['baseline']:22s} {_f(r['AUC']):>7} {_f(r['Accuracy@best']):>9} "
+        print(f"{r['baseline']:22s} {_f(r['AUC']):>7} {_f(r['Accuracy@best']):>9} {_f(r['TPR@0.5%FPR']):>9} "
               f"{_f(r['TPR@1%FPR']):>8} {_f(r['TPR@5%FPR']):>8} {str(r['victim_calls'] or '-'):>7}")
     return 0
 
@@ -511,6 +605,7 @@ def _table_row(name: str, res: dict) -> dict:
         "baseline": name,
         "AUC": m.get("AUC"),
         "Accuracy@best": m.get("Accuracy@best"),
+        "TPR@0.5%FPR": m.get("TPR@0.5%FPR"),
         "TPR@1%FPR": m.get("TPR@1%FPR"),
         "TPR@5%FPR": m.get("TPR@5%FPR"),
         "scored": res.get("scored"),

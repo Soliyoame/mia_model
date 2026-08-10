@@ -1,0 +1,95 @@
+formal_dataset_role_scope_version: pcv_formal_dataset_role_scope_v21_r2_capacity_qualified_primary
+
+standard_primary_datasets:
+  - edgar
+  - pubmed
+
+capacity_qualified_primary_datasets:
+  - enron
+
+main_table_datasets:
+  - edgar
+  - enron
+  - pubmed
+
+audit_allowed_datasets:
+  - edgar
+  - enron
+  - pubmed
+
+fresh_formal_scan_allowed_datasets:
+  - edgar
+  - pubmed
+
+capacity_promotion_allowed_datasets:
+  - enron
+
+report_identities:
+  replay:
+    edgar: 07a108f19a627bd013103e4587547408b6a5edeb2dfa7afac13bcb3a2f47a60c
+    enron: fbac0df34bc915d1e8c869d24cf84477da1d4cd02660f4cc1c2761545ae0bacc
+    pubmed: 1a3a9b1d1918dce9d4e650c04825eb5d76d44563ee876dfbcd82aba9a0eba723
+  pilot:
+    edgar: 9a125e6a3a7da44ea9342e88dbfbc219357c40eaaa0b46211f14c6541ceba7c5
+    enron: dcb1322cbd0ee4726dc4ba5bed596e20aebfff195854b74d1a4227b1dea2607e
+    pubmed: ff79c46e7dd89d81c288e9703132faacd1ac57e6cd6c50ea6742cbd4dae95021
+
+required_status_by_role:
+  replay:
+    standard_primary: passed
+    capacity_qualified_primary: passed
+  pilot:
+    standard_primary: passed
+    capacity_qualified_primary: failed
+
+capacity_qualification_evidence:
+  enron:
+    source_artifact_role: boundary_stress_test
+    promoted_role: capacity_qualified_primary
+    main_table_disclosure_required: true
+    prior_pilot_status: failed
+    role_protocol_version: pcv_enron_capacity_role_v21_r2
+    role_protocol_sha256: 3c8b8fb45b6b31cb265dd70d69a55e176a0eba548d451a5fb060c9866fef6b10
+    pilot_report_path: artifacts/v21/entity_policy_r1/pilots/cohort_A/enron/pilot_report.json
+    pilot_report_identity_sha256: dcb1322cbd0ee4726dc4ba5bed596e20aebfff195854b74d1a4227b1dea2607e
+    capacity_protocol: v21_enron_capacity_study_fixed_pool_r2
+    capacity_finalization_manifest_path: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron/enron_finalization_manifest.json
+    capacity_finalization_manifest_sha256: 0aad7190e5ccc82dafab6e265b03ea1c9082554b24addec5d3b3ae335bba5f2f
+    capacity_finalization_identity_sha256: ee11296e88656f2c1c39aa7919401151b1f46e9b9636396380daf16c897ea0dd
+    capacity_scan_plan_sha256: c8fcd26c48b40d4c8bf7da31d8f7d48ec49fbd0bc33d54341688fb57b19ce983
+    capacity_checkpoint_path: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron/checkpoints/checkpoint_0140.json
+    capacity_checkpoint_sha256: 82a2f7d3962185aef21eb9abb1611fbbf63dd18de2eabbd28beb5666bd25fbe1
+    query_eligibility_sha256: 7f3be4e292967c13630cd27816b8cb9d92a8443323789b9b29301dfbac3cdd9a
+    capacity_status: passed
+    scanned_source_count: 35000
+    eligible_source_count: 3786
+    required_source_count: 2250
+    required_output_names:
+      - benchmark
+      - facts
+      - claims
+      - queries
+      - stealth
+      - stealth_rejected
+      - claim_eligibility
+      - query_eligibility
+      - stealth_manifest
+
+capacity_promotion:
+  protocol: v21_enron_capacity_qualified_primary_promotion_v1
+  dataset: enron
+  selection_seed: 42
+  selection_method: sha256(scope_version,selection_seed,dataset,source_key)
+  required_formal_sources: 2250
+  output_path: artifacts/v21/entity_policy_r2/enron_capacity_promotion/enron_capacity_qualified_primary_manifest.json
+
+main_table_reporting:
+  datasets:
+    - edgar
+    - enron
+    - pubmed
+  report_per_dataset_results: true
+  report_all_three_macro: true
+  report_standard_primary_sensitivity: true
+  disclose_enron_failed_pilot: true
+  disclose_enron_eligibility_yield: true

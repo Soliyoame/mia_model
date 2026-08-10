@@ -22,13 +22,19 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
 
 from src.baselines import victim_harness as vh
 from src.baselines.MBA.mba_highdiff import MBAHighDiff
-from src.baselines.victim_harness import BASELINES, Services, run_one_baseline
+from src.baselines.victim_harness import (
+    BASELINES,
+    Services,
+    resolve_attacker_rate_limits,
+    run_one_baseline,
+)
 from src.rag.runner import TokenBucket
 from src.utils.io import read_jsonl
 
@@ -221,6 +227,36 @@ class RateLimitTests(unittest.TestCase):
         # 允许 20% 宽容(调度抖动),但必须证明确实被限速(不是一拥而上)。
         self.assertGreaterEqual(elapsed, min_expected * 0.8,
                                 f"victim 速率未被令牌桶限制:{len(stamps)} 次仅用 {elapsed:.2f}s")
+
+    def test_local_sibling_explicit_zero_disables_bucket_and_interval(self) -> None:
+        rpm, interval = resolve_attacker_rate_limits(
+            {"sibling_requests_per_minute": 4},
+            {
+                "requests_per_minute": 0,
+                "request_interval_seconds": 0,
+            },
+            attacker_role="sibling",
+            victim_requests_per_minute=4,
+            victim_request_interval_seconds=20,
+        )
+        self.assertEqual(rpm, 0)
+        self.assertEqual(interval, 0)
+        victim_bucket = TokenBucket(4)
+        attacker_bucket = TokenBucket(rpm) if rpm > 0 else None
+        self.assertIsNotNone(victim_bucket)
+        self.assertIsNone(attacker_bucket)
+
+        svc = Services(
+            retriever=_FakeRetriever(),
+            victim=_DetVictim(),
+            attacker_chat=lambda _prompt: "ok",
+            request_interval_seconds=20,
+            attacker_request_interval_seconds=interval,
+            attacker_bucket=None,
+        )
+        with patch("src.baselines.victim_harness.time.sleep") as sleep:
+            self.assertEqual(svc.attacker("prompt"), "ok")
+        sleep.assert_not_called()
 
 
 class ApiRetryUntilSuccessTests(unittest.TestCase):

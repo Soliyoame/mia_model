@@ -16,7 +16,7 @@ from src.paired_claims.validator import (
     validate_query_pair,
 )
 from src.query_generation.paired_query_builder import generate_paired_queries_file
-from src.utils.io import read_jsonl, write_jsonl
+from src.utils.io import read_json, read_jsonl, write_jsonl
 
 
 class ClaimValidatorTests(unittest.TestCase):
@@ -1047,6 +1047,106 @@ class ValidatorIntegrationTests(unittest.TestCase):
                     facts_path,
                     output_path,
                     max_pairs_per_fact=2,
+                    resume=True,
+                )
+
+    def test_claim_generator_resume_compares_json_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts_path = root / "facts.jsonl"
+            benchmark_path = root / "benchmark.jsonl"
+            output_path = root / "claims.jsonl"
+            write_jsonl(
+                [
+                    {
+                        "fact_id": "f-json-roundtrip",
+                        "audit_id": "a-json-roundtrip",
+                        "dataset": "toy",
+                        "group": "KB_Member",
+                        "source_id": "source-json-roundtrip",
+                        "source_key": "::source-json-roundtrip",
+                        "object_entity": "$48,720",
+                        "entity_type": "MONEY",
+                        "factual_claim": "Delta Logistics paid $48,720 for the service.",
+                    }
+                ],
+                facts_path,
+            )
+            write_jsonl(
+                [
+                    {
+                        "audit_id": "a-json-roundtrip",
+                        "source_id": "source-json-roundtrip",
+                        "source_key": "::source-json-roundtrip",
+                        "text": "Delta Logistics paid $48,720 for the service.",
+                    }
+                ],
+                benchmark_path,
+            )
+            metadata = SimpleNamespace(
+                enabled=True,
+                to_dict=lambda: {
+                    "enabled": True,
+                    "protocol": "test",
+                    "models": ({"model_id": "frozen-model"},),
+                },
+            )
+            with patch(
+                "src.paired_claims.claim_generator.load_semantic_entity_resolver",
+                return_value=(object(), metadata),
+            ):
+                generate_paired_claims_file(
+                    facts_path,
+                    output_path,
+                    benchmark_path=benchmark_path,
+                    source_corpus_path=benchmark_path,
+                    semantic_resolver_config={"enabled": True},
+                    dataset="toy",
+                    force=True,
+                )
+                stored_manifest = read_json(
+                    output_path.with_suffix(".manifest.json")
+                )
+                self.assertIsInstance(
+                    stored_manifest["semantic_entity_resolver"]["models"],
+                    list,
+                )
+                resumed = generate_paired_claims_file(
+                    facts_path,
+                    output_path,
+                    benchmark_path=benchmark_path,
+                    source_corpus_path=benchmark_path,
+                    semantic_resolver_config={"enabled": True},
+                    dataset="toy",
+                    resume=True,
+                )
+            self.assertTrue(resumed["skipped_existing"])
+            mismatched_metadata = SimpleNamespace(
+                enabled=True,
+                to_dict=lambda: {
+                    "enabled": True,
+                    "protocol": "test",
+                    "models": ({"model_id": "different-model"},),
+                },
+            )
+            with (
+                patch(
+                    "src.paired_claims.claim_generator."
+                    "load_semantic_entity_resolver",
+                    return_value=(object(), mismatched_metadata),
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "semantic_entity_resolver",
+                ),
+            ):
+                generate_paired_claims_file(
+                    facts_path,
+                    output_path,
+                    benchmark_path=benchmark_path,
+                    source_corpus_path=benchmark_path,
+                    semantic_resolver_config={"enabled": True},
+                    dataset="toy",
                     resume=True,
                 )
 

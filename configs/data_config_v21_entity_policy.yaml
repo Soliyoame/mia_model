@@ -1,0 +1,47 @@
+logging: {level: INFO, file: artifacts/v21/formal_entity_policy_r1/logs/preprocess.log}
+paths:
+  processed_dir: artifacts/v21/processed
+  splits_dir: artifacts/v21/formal_entity_policy_r1/splits
+  benchmark_dir: artifacts/v21/formal_entity_policy_r1/benchmarks
+dataset_paths:
+  edgar: {splits_dir: artifacts/v21/formal_entity_policy_r1/splits/edgar}
+  enron: {splits_dir: artifacts/v21/formal_entity_policy_r1/splits/enron}
+  pubmed: {splits_dir: artifacts/v21/formal_entity_policy_r1/splits/pubmed}
+preprocess:
+  min_chars: 300
+  max_chars: 2000
+  target_chars: 1000
+  require_entity: true
+  require_numeric: false
+  min_entities: 2
+split:
+  seed: 42
+  source_exclusive: true
+  scale: formal
+  formal:
+    target_unit: sources
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Spoof_Seed: 0
+    Reserve: 250
+    per_source_cap: null
+datasets:
+  edgar:
+    input_path: datasets/raw/extracted/edgar/raw.jsonl
+    limit: null
+    source_limit: 5480
+    source_eligibility_path: artifacts/v21/formal_entity_policy_r1/eligibility/cap_5/edgar/edgar_query_eligible_sources.json
+    membership_unit: filing
+  enron:
+    input_path: datasets/raw/extracted/enron
+    limit: null
+    source_limit: 60000
+    scan_increment: 20000
+    source_eligibility_path: artifacts/v21/formal_entity_policy_r1/eligibility/cap_5/enron/enron_query_eligible_sources.json
+    membership_unit: complete_email
+  pubmed:
+    input_path: datasets/raw/extracted/pmc/raw.jsonl
+    limit: null
+    source_limit: 50000
+    source_eligibility_path: artifacts/v21/formal_entity_policy_r1/eligibility/cap_5/pubmed/pubmed_query_eligible_sources.json
+    membership_unit: pmcid_article

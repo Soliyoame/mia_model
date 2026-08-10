@@ -16,12 +16,15 @@ the concrete API key, base URL, and model name to be switched from ``.env``.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from .sibling_client import OpenAICompatibleSiblingClient, SiblingClient
 from .victim_client import OpenAICompatibleVictimClient, VictimClient
 from ..utils.env import env_str
+from ..utils.hash import sha256_obj
 from ..utils.io import load_yaml, resolve_path
+from ..utils.rate_limit import TokenBucket
 
 
 # 默认的 profile 配置文件路径。
@@ -30,6 +33,7 @@ DEFAULT_PROFILE_PATH = "configs/llm_profiles.yaml"
 ENV_PROFILE_VARS = {
     "sibling": "PCV_SIBLING_PROFILE",
     "victim": "PCV_VICTIM_PROFILE",
+    "ia_shadow": "PCV_IA_SHADOW_PROFILE",
 }
 # 每个角色的"具体凭据"可由哪些环境变量覆盖(密钥变量名/接口地址/模型名)。
 ROLE_ENV_VARS = {
@@ -45,7 +49,38 @@ ROLE_ENV_VARS = {
         "model": ("PCV_VICTIM_MODEL",),
         "model_version": ("PCV_VICTIM_MODEL_VERSION",),
     },
+    "ia_shadow": {
+        "api_key": ("PCV_IA_SHADOW_API_KEY",),
+        "base_url": ("PCV_IA_SHADOW_BASE_URL",),
+        "model": ("PCV_IA_SHADOW_MODEL",),
+        "model_version": ("PCV_IA_SHADOW_MODEL_VERSION",),
+    },
 }
+
+PROFILE_IDENTITY_FIELDS = (
+    "profile_name",
+    "provider",
+    "base_url",
+    "model",
+    "model_version",
+    "api_key_env",
+    "system_prompt",
+    "timeout",
+    "temperature",
+    "max_tokens",
+    "max_retries",
+    "retry_backoff_base",
+    "retry_backoff_max",
+    "stream",
+    "extra_body",
+    "request_interval_seconds",
+    "requests_per_minute",
+)
+
+_OLLAMA_SIBLING_PROFILE = "ollama_qwen3_4b"
+_OLLAMA_SIBLING_MODEL = "pcv-qwen3-4b:q4km-8k"
+_OLLAMA_SIBLING_BASE_URL = "http://127.0.0.1:11434/v1"
+_OLLAMA_VERSION_RE = re.compile(r"ollama:[0-9a-fA-F]{12,64}")
 
 
 def load_llm_profiles(pipeline_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -186,15 +221,22 @@ def _apply_role_env_overrides(role: str, profile: dict[str, Any]) -> dict[str, A
     # 复制一份再改，避免污染传入的原始配置。
     updated = dict(profile)
     role_env = ROLE_ENV_VARS[role]
+    allow_standard_role_env = bool(updated.get("allow_role_env_overrides", True))
 
     # base_url：先看 profile 里自定义的变量名,再看该角色的标准变量名,取第一个有值的。
-    base_url_names = [_first_nonempty(updated.get("base_url_env")), *role_env["base_url"]]
+    base_url_names = [
+        _first_nonempty(updated.get("base_url_env")),
+        *(role_env["base_url"] if allow_standard_role_env else ()),
+    ]
     _, base_url = _first_env_value([name for name in base_url_names if name])
     if base_url:
         updated["base_url"] = base_url
 
     # model：同理。
-    model_names = [_first_nonempty(updated.get("model_env")), *role_env["model"]]
+    model_names = [
+        _first_nonempty(updated.get("model_env")),
+        *(role_env["model"] if allow_standard_role_env else ()),
+    ]
     _, model = _first_env_value([name for name in model_names if name])
     if model:
         updated["model"] = model
@@ -203,18 +245,47 @@ def _apply_role_env_overrides(role: str, profile: dict[str, Any]) -> dict[str, A
     # without changing the model argument sent to an OpenAI-compatible API.
     model_version_names = [
         _first_nonempty(updated.get("model_version_env")),
-        *role_env["model_version"],
+        *(role_env["model_version"] if allow_standard_role_env else ()),
     ]
     _, model_version = _first_env_value([name for name in model_version_names if name])
     if model_version:
         updated["model_version"] = model_version
 
     # api_key：注意这里存的是"变量名"而不是 key 本身;选出实际有值的那个变量名。
-    api_key_env_names = [_first_nonempty(updated.get("api_key_env")), *role_env["api_key"]]
+    api_key_env_names = [
+        _first_nonempty(updated.get("api_key_env")),
+        *(role_env["api_key"] if allow_standard_role_env else ()),
+    ]
     selected_api_key_env, _ = _first_env_value([name for name in api_key_env_names if name])
     # 没有任何变量有值时,退而记录第一个候选变量名(供底层报"未设置该变量")。
     updated["api_key_env"] = selected_api_key_env or _first_nonempty(*api_key_env_names)
+    _validate_local_sibling_profile(role, updated)
     return updated
+
+
+def _validate_local_sibling_profile(role: str, profile: dict[str, Any]) -> None:
+    """本地 Ollama profile 必须绑定真实摘要和冻结的运行参数。"""
+
+    if role != "sibling" or profile.get("profile_name") != _OLLAMA_SIBLING_PROFILE:
+        return
+    if str(profile.get("model") or "") != _OLLAMA_SIBLING_MODEL:
+        raise ValueError("Local sibling model alias drift")
+    if str(profile.get("base_url") or "").rstrip("/") != _OLLAMA_SIBLING_BASE_URL:
+        raise ValueError("Local sibling base URL drift")
+    model_version = str(profile.get("model_version") or "")
+    if _OLLAMA_VERSION_RE.fullmatch(model_version) is None:
+        raise ValueError(
+            "PCV_SIBLING_MODEL_VERSION must be ollama:<actual 12-64 hex model ID>"
+        )
+    if float(profile.get("requests_per_minute", -1)) != 0:
+        raise ValueError("Local sibling token bucket must be disabled")
+    if float(profile.get("request_interval_seconds", -1)) != 0:
+        raise ValueError("Local sibling fixed request interval must be disabled")
+    if bool(profile.get("stream", False)):
+        raise ValueError("Local sibling streaming must be disabled")
+    extra_body = _profile_extra_body(profile)
+    if extra_body.get("reasoning_effort") != "none" or extra_body.get("seed") != 42:
+        raise ValueError("Local sibling reasoning and seed parameters drifted")
 
 
 def resolve_effective_llm_profile(
@@ -229,6 +300,17 @@ def resolve_effective_llm_profile(
     return _apply_role_env_overrides(role, profile)
 
 
+def llm_profile_identity(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return a secret-free, hash-bound snapshot of an effective LLM profile."""
+
+    identity = {
+        key: profile.get(key)
+        for key in PROFILE_IDENTITY_FIELDS
+    }
+    identity["profile_hash"] = sha256_obj(identity)
+    return identity
+
+
 def _profile_extra_body(profile: dict[str, Any]) -> dict[str, Any]:
     """取出 profile 里的 extra_body(额外请求参数);为空返回空字典,类型不对则报错。"""
     extra_body = profile.get("extra_body", {})
@@ -237,6 +319,17 @@ def _profile_extra_body(profile: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(extra_body, dict):
         raise ValueError("LLM profile extra_body must be a mapping.")
     return dict(extra_body)
+
+
+def request_rate_limiter_from_profile(
+    profile: dict[str, Any],
+) -> TokenBucket | None:
+    """按 effective profile 构造独立令牌桶；0 表示关闭。"""
+
+    rpm = float(profile.get("requests_per_minute") or 0.0)
+    if rpm < 0:
+        raise ValueError("LLM profile requests_per_minute must be non-negative")
+    return TokenBucket(rpm) if rpm > 0 else None
 
 
 def build_sibling_client(
@@ -272,8 +365,12 @@ def build_sibling_client(
             system_prompt=str(profile.get("system_prompt", "")),
             timeout=float(profile.get("timeout", 60.0)),
             max_tokens=int(profile.get("max_tokens", 1024)),
+            max_retries=int(profile.get("max_retries", 2)),
+            retry_backoff_base=float(profile.get("retry_backoff_base", 2.0)),
+            retry_backoff_max=float(profile.get("retry_backoff_max", 30.0)),
             stream=bool(profile.get("stream", False)),
             extra_body=_profile_extra_body(profile),
+            request_rate_limiter=request_rate_limiter_from_profile(profile),
         ), profile
     raise ValueError(f"Unsupported sibling provider: {provider}")
 
@@ -310,7 +407,51 @@ def build_victim_client(
             stream=bool(profile.get("stream", False)),
             extra_body=_profile_extra_body(profile),
         ), profile
+    if provider == "huggingface_local":
+        from .huggingface_local import HuggingFaceLocalVictimClient
+
+        return HuggingFaceLocalVictimClient(
+            model=str(profile.get("model", "")),
+            revision=str(profile.get("model_version") or profile.get("revision") or ""),
+            system_prompt=str(profile.get("system_prompt", "")),
+            local_files_only=bool(profile.get("local_files_only", True)),
+            device=str(profile.get("device", "cuda")),
+            dtype=str(profile.get("dtype", "bfloat16")),
+            quantization=str(profile.get("quantization", "none")),
+            batch_size=int(profile.get("batch_size", 1)),
+            trust_remote_code=bool(profile.get("trust_remote_code", False)),
+        ), profile
     raise ValueError(f"Unsupported victim provider: {provider}")
+
+
+def build_role_chat_client(
+    profiles_config: dict[str, Any],
+    role: str,
+    *,
+    profile_name: str | None = None,
+):
+    """Build a metadata-preserving OpenAI-compatible client for an auxiliary role."""
+
+    from .openai_compatible import OpenAICompatibleChatClient
+
+    _, profile = _get_profile(profiles_config, role, profile_name, None)
+    profile = _apply_role_env_overrides(role, profile)
+    if str(profile.get("provider") or "").casefold() != "openai_compatible":
+        raise ValueError(f"Unsupported {role} provider: {profile.get('provider')}")
+    client = OpenAICompatibleChatClient(
+        base_url=str(profile.get("base_url", "")),
+        model=str(profile.get("model", "")),
+        api_key_env=str(profile.get("api_key_env", "")),
+        system_prompt=str(profile.get("system_prompt", "")),
+        timeout=float(profile.get("timeout", 60.0)),
+        max_retries=int(profile.get("max_retries", 0)),
+        retry_backoff_base=float(profile.get("retry_backoff_base", 2.0)),
+        retry_backoff_max=float(profile.get("retry_backoff_max", 30.0)),
+        stream=bool(profile.get("stream", False)),
+        extra_body=_profile_extra_body(profile),
+        request_rate_limiter=request_rate_limiter_from_profile(profile),
+    )
+    return client, profile
 
 
 def profile_config_path(pipeline_config: dict[str, Any] | None = None) -> Path:

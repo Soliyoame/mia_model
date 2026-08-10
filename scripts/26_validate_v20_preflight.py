@@ -14,6 +14,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import load_yaml, read_json, read_jsonl, write_json  # noqa: E402
+from src.paired_claims.validator import validate_query_pair  # noqa: E402
+from src.query_generation.diverse_slot_questions import (  # noqa: E402
+    PROTOCOL_VERSION as DIVERSE_QUERY_PROTOCOL,
+    QUERY_TYPE as DIVERSE_QUERY_TYPE,
+)
 
 
 DATASETS = ("edgar", "enron", "pubmed")
@@ -26,6 +31,7 @@ FORMAL_QUERY_ROOT = PROJECT_ROOT / "artifacts" / "v6_3" / "stealth_filtered_quer
 SPLIT_ROOT = PROJECT_ROOT / "artifacts" / "v6_3" / "splits"
 PILOT_ROOT = PROJECT_ROOT / "artifacts" / "v6_3" / "query_controls"
 V20_ROOT = PROJECT_ROOT / "artifacts" / "v20"
+PAIRED_QUERY_ROOT = PROJECT_ROOT / "artifacts" / "v6_3" / "paired_queries"
 MODEL_SLUG = "llama-3.1-70b-instruct-pilot"
 EXPECTED_MODEL = "meta/llama-3.1-70b-instruct"
 
@@ -131,11 +137,68 @@ def validate_splits_and_queries(dataset: str) -> tuple[dict[str, set[str]], dict
     )
 
     query_path = FORMAL_QUERY_ROOT / f"{dataset}_paired_queries.jsonl"
+    generated_query_path = PAIRED_QUERY_ROOT / f"{dataset}_paired_queries.jsonl"
+    generation_manifest = read_json(generated_query_path.with_suffix(".manifest.json"))
+    filter_manifest = read_json(query_path.with_suffix(".manifest.json"))
+    benchmark_path = (
+        PROJECT_ROOT
+        / "artifacts"
+        / "v6_3"
+        / "benchmarks"
+        / f"{dataset}_attack_benchmark.jsonl"
+    )
+    benchmark_hash = sha256_file(benchmark_path)
+    require(
+        generation_manifest.get("query_generation_protocol") == DIVERSE_QUERY_PROTOCOL,
+        f"{dataset}: Step 08 diverse query protocol is not frozen",
+    )
+    require(
+        generation_manifest.get("query_type") == DIVERSE_QUERY_TYPE,
+        f"{dataset}: Step 08 query type drift",
+    )
+    require(
+        generation_manifest.get("input_benchmark_hash") == benchmark_hash,
+        f"{dataset}: Step 08 benchmark binding drift",
+    )
+    require(
+        filter_manifest.get("lexical_copy_protocol")
+        == "entity_masked_query_vs_original_chunk",
+        f"{dataset}: Step 09 lexical-copy protocol is not frozen",
+    )
+    require(
+        filter_manifest.get("embedding_role") == "diagnostic_only",
+        f"{dataset}: Step 09 embedding must be diagnostic-only",
+    )
+    require(
+        filter_manifest.get("input_benchmark_hash") == benchmark_hash,
+        f"{dataset}: Step 09 benchmark binding drift",
+    )
+    require(
+        filter_manifest.get("input_queries_hash") == sha256_file(generated_query_path),
+        f"{dataset}: Step 09 input-query binding drift",
+    )
     by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     query_ids: set[str] = set()
     for row in read_jsonl(query_path):
         query_id = str(row.get("query_id") or "")
         require(query_id and query_id not in query_ids, f"{dataset}: duplicate query_id")
+        require(
+            row.get("query_type") == DIVERSE_QUERY_TYPE,
+            f"{dataset}: legacy query leaked into formal matrix",
+        )
+        require(
+            row.get("query_generation_protocol") == DIVERSE_QUERY_PROTOCOL,
+            f"{dataset}: query protocol provenance drift",
+        )
+        require(
+            str(row.get("question_template") or "").count("{ENTITY}") == 1,
+            f"{dataset}: invalid entity-slot template",
+        )
+        require(
+            8 <= int(row.get("question_word_count") or 0) <= 45
+            and str(row.get("query") or "").endswith("?"),
+            f"{dataset}: formal query structure/naturalness drift",
+        )
         query_ids.add(query_id)
         by_source[source_key(row)].append(row)
     expected_sources = set().union(*groups.values())
@@ -145,6 +208,32 @@ def validate_splits_and_queries(dataset: str) -> tuple[dict[str, set[str]], dict
         all(len(rows) == 6 for rows in by_source.values()),
         f"{dataset}: every source must have exactly six queries",
     )
+    for source_rows in by_source.values():
+        by_pair: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in source_rows:
+            by_pair[str(row.get("pair_id") or "")].append(row)
+        require(len(by_pair) == 3, f"{dataset}: every source must retain three pairs")
+        for pair_rows in by_pair.values():
+            require(len(pair_rows) == 2, f"{dataset}: incomplete query pair")
+            true_row = next(
+                (row for row in pair_rows if row.get("claim_type") == "true"),
+                None,
+            )
+            counterfactual_row = next(
+                (row for row in pair_rows if row.get("claim_type") == "counterfactual"),
+                None,
+            )
+            require(
+                true_row is not None and counterfactual_row is not None,
+                f"{dataset}: claim-type pair drift",
+            )
+            validation = validate_query_pair(
+                str(true_row["query"]),
+                str(counterfactual_row["query"]),
+                str(true_row["original_entity"]),
+                str(true_row["paired_counterfactual_entity"]),
+            )
+            require(validation.valid, f"{dataset}: Q+/Q- minimal-difference invariant failed")
     query_group_sources = Counter(str(rows[0].get("group")) for rows in by_source.values())
     require(
         query_group_sources == Counter(
@@ -157,6 +246,10 @@ def validate_splits_and_queries(dataset: str) -> tuple[dict[str, set[str]], dict
         "split_hashes": split_hashes,
         "query_count": len(query_ids),
         "query_hash": sha256_file(query_path),
+        "query_generation_manifest_hash": sha256_file(
+            generated_query_path.with_suffix(".manifest.json")
+        ),
+        "stealth_filter_manifest_hash": sha256_file(query_path.with_suffix(".manifest.json")),
     }
 
 
@@ -225,6 +318,11 @@ def validate_pilot(dataset: str, groups: dict[str, set[str]]) -> dict[str, Any]:
     budget = read_json(root / "budget.json")
     rows = list(read_jsonl(root / "queries.jsonl"))
     require(budget.get("generator_id") == EXPECTED_MODEL, f"{dataset}: Pilot model drift")
+    require(
+        budget.get("input_queries_hash")
+        == sha256_file(FORMAL_QUERY_ROOT / f"{dataset}_paired_queries.jsonl"),
+        f"{dataset}: Pilot is not bound to the rebuilt formal queries",
+    )
     require(len(rows) == 150, f"{dataset}: Pilot must contain 150 queries")
     require(
         len({str(row.get("query_id") or "") for row in rows}) == 150,
@@ -232,6 +330,11 @@ def validate_pilot(dataset: str, groups: dict[str, set[str]]) -> dict[str, Any]:
     )
     by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
+        require(
+            row.get("query_type") == DIVERSE_QUERY_TYPE
+            and row.get("query_generation_protocol") == DIVERSE_QUERY_PROTOCOL,
+            f"{dataset}: Pilot contains legacy query protocol",
+        )
         by_source[source_key(row)].append(row)
     require(len(by_source) == 25, f"{dataset}: Pilot must contain 25 sources")
     require(
@@ -260,7 +363,11 @@ def validate_pilot(dataset: str, groups: dict[str, set[str]]) -> dict[str, Any]:
     }
 
 
-def validate_representatives(dataset: str, groups: dict[str, set[str]]) -> dict[str, Any]:
+def validate_representatives(
+    dataset: str,
+    groups: dict[str, set[str]],
+    query_hash: str,
+) -> dict[str, Any]:
     root = V20_ROOT / "release_controls" / "representative_chunks"
     path = root / f"{dataset}_representative_chunks.jsonl"
     manifest = read_json(root / f"{dataset}_representative_chunks.manifest.json")
@@ -273,6 +380,10 @@ def validate_representatives(dataset: str, groups: dict[str, set[str]]) -> dict[
     require(
         sha256_file(path) == manifest.get("representative_chunk_manifest_hash"),
         f"{dataset}: representative manifest hash drift",
+    )
+    require(
+        (manifest.get("input_hashes") or {}).get("queries") == query_hash,
+        f"{dataset}: representative chunks are not bound to rebuilt queries",
     )
     require(manifest.get("shared_across_methods") is True, f"{dataset}: chunks not shared")
     return {
@@ -370,12 +481,16 @@ def validate_schedule(query_hashes: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def validate_retrieval_gate() -> dict[str, Any]:
+def validate_retrieval_gate(query_hashes: dict[str, str]) -> dict[str, Any]:
     report = read_json(V20_ROOT / "retrieval_gate" / "retrieval_gate_report.json")
     require(report.get("completed") is True, "retrieval gate is incomplete")
     require(report.get("completed_candidate_count") == 9, "retrieval gate candidate count drift")
     require(report.get("selection_uses_attack_metrics") is False, "gate used attack metrics")
     require(report.get("base_bge_gate_passed") is True, "base BGE gate did not pass")
+    require(
+        report.get("query_hashes") == query_hashes,
+        "retrieval gate is not bound to the rebuilt formal queries",
+    )
     selected = report.get("selected_chunk_config") or {}
     require(
         selected.get("chunk_config_id") == "tokens-128-overlap-32",
@@ -385,6 +500,34 @@ def validate_retrieval_gate() -> dict[str, Any]:
         "completed_candidate_count": 9,
         "selected_chunk_config": selected,
         "base_bge_gate_passed": True,
+    }
+
+
+def validate_query_rewrite_shadow_gate() -> dict[str, Any]:
+    path = V20_ROOT / "query_rewrite_shadow" / "promotion_gate.json"
+    report = read_json(path)
+    require(report.get("passed") is True, "diverse-query shadow promotion gate did not pass")
+    require(
+        report.get("gate_protocol") == "diverse_query_shadow_noninferiority_v1",
+        "diverse-query shadow gate protocol drift",
+    )
+    audit = report.get("audit") or {}
+    require(
+        int(audit.get("logical_victim_calls") or 0) == 7_200,
+        "diverse-query shadow victim budget drift",
+    )
+    require(
+        audit.get("neutral_prompt_robustness_cell") is False,
+        "neutral prompt robustness cell is outside the paper protocol",
+    )
+    require(not report.get("failures"), "diverse-query shadow gate contains failures")
+    return {
+        "gate_report_hash": sha256_file(path),
+        "gate_identity_hash": report.get("gate_identity_hash"),
+        "macro_auc_difference_ci95": (
+            report.get("auc_noninferiority") or {}
+        ).get("macro_difference_ci95"),
+        "lexical": report.get("lexical"),
     }
 
 
@@ -406,6 +549,7 @@ def main() -> int:
         "api_calls_made": 0,
         "environment": validate_environment(),
         "generator": validate_registry(),
+        "query_rewrite_shadow": validate_query_rewrite_shadow_gate(),
         "datasets": {},
     }
     query_hashes: dict[str, str] = {}
@@ -415,14 +559,18 @@ def main() -> int:
         dataset_report["benchmark"] = validate_benchmark(dataset)
         dataset_report["reserve_roles"] = validate_reserve_roles(dataset, groups)
         dataset_report["pilot"] = validate_pilot(dataset, groups)
-        dataset_report["representative_chunks"] = validate_representatives(dataset, groups)
+        dataset_report["representative_chunks"] = validate_representatives(
+            dataset,
+            groups,
+            dataset_report["query_hash"],
+        )
         dataset_report["indexes"] = {
             "dense": validate_index(dataset, groups, "dense"),
             "bm25": validate_index(dataset, groups, "bm25"),
         }
         report["datasets"][dataset] = dataset_report
     report["execution_schedule"] = validate_schedule(query_hashes)
-    report["retrieval_gate"] = validate_retrieval_gate()
+    report["retrieval_gate"] = validate_retrieval_gate(query_hashes)
     report["response_state"] = validate_no_responses()
 
     release = read_json(V20_ROOT / "release_controls" / "release_controls_manifest.json")

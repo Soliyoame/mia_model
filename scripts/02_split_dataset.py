@@ -20,8 +20,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.prepare.splitter import split_dataset_pcv_mia  # noqa: E402
 from src.prepare.eligibility_scan import (  # noqa: E402
+    ENRON_CAPACITY_PROMOTION_PROTOCOL,
+    ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
     configured_release_protocol,
     validate_formal_eligibility_manifest,
+)
+from src.prepare.enron_capacity_promotion import (  # noqa: E402
+    validate_enron_capacity_promotion,
 )
 from src.utils.dataset_paths import resolve_dataset_dir, resolve_processed_path  # noqa: E402
 from src.utils.hash import sha256_file  # noqa: E402
@@ -86,6 +91,14 @@ def main() -> int:
     if eligibility_path_value and str(sizes.get("target_unit", "records")) == "sources":
         eligibility_path = resolve_path(eligibility_path_value)
         eligibility = read_json(eligibility_path)
+        if (
+            eligibility.get("scan_protocol")
+            == ENRON_CAPACITY_PROMOTION_PROTOCOL
+        ):
+            eligibility = validate_enron_capacity_promotion(
+                eligibility_path,
+                require_current_runtime=True,
+            )
         if str(eligibility.get("dataset")) != args.dataset:
             raise RuntimeError(f"Claim eligibility dataset mismatch: {eligibility.get('dataset')!r}")
         eligible_source_keys = {
@@ -93,7 +106,15 @@ def main() -> int:
             for value in eligibility.get("eligible_source_keys", [])
         }
         scan_cfg = config.get("eligibility_scan")
-        if isinstance(scan_cfg, dict) or args.eligibility_path:
+        requires_formal_validation = eligibility.get("scan_protocol") in {
+            ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+            ENRON_CAPACITY_PROMOTION_PROTOCOL,
+        }
+        if (
+            isinstance(scan_cfg, dict)
+            or args.eligibility_path
+            or requires_formal_validation
+        ):
             if isinstance(scan_cfg, dict) and not args.eligibility_path:
                 expected_protocol = configured_release_protocol(scan_cfg)
                 if eligibility.get("scan_protocol") != expected_protocol:

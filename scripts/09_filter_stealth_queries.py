@@ -8,8 +8,8 @@
 
 判定逻辑在 `src.query_generation.stealth_filter` 里,本脚本只负责读配置、设随机种子,
 并把若干阈值传进去:自然度下限(min_naturalness)、上下文探针上限(max_context_probe)、
-提示注入上限(max_prompt_injection),以及查询与原文的相似度区间(min/max_similarity,
-太低说明跑题、太高说明几乎照抄原文)。输入输出都是配对查询 jsonl。
+提示注入上限(max_prompt_injection)，以及实体遮蔽后的 5-gram/最长连续公共 token 串。
+embedding 只记录 query--claim 与 query--chunk 的语义诊断，不参与拒绝。输入输出都是配对查询 jsonl。
 """
 
 from __future__ import annotations
@@ -58,15 +58,22 @@ def main() -> int:
     manifest = filter_stealth_queries(
         queries_path=resolve_path(config["paths"]["paired_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
         output_path=out_dir / f"{args.dataset}_paired_queries.jsonl",
+        benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
         # 配置没给 embedding_model 时退回默认模型,用于计算查询与原文的语义相似度。
         embedding_model=str(stealth_cfg.get("embedding_model", DEFAULT_EMBEDDING_MODEL)),
         embedding_local_files_only=bool(stealth_cfg.get("embedding_local_files_only", False)),
         min_naturalness=float(stealth_cfg.get("min_naturalness", 0.55)),
         max_context_probe=float(stealth_cfg.get("max_context_probe", 0.5)),
         max_prompt_injection=float(stealth_cfg.get("max_prompt_injection", 0.5)),
-        # 相似度需落在区间内:太低=跑题,太高=几乎照抄原文,都不利于隐蔽攻击。
-        min_similarity=float(stealth_cfg.get("min_similarity", 0.03)),
-        max_similarity=float(stealth_cfg.get("max_similarity", 0.97)),
+        # 隐蔽性使用实体遮蔽后的字面复制指标；embedding 只保留语义诊断。
+        max_five_gram_containment=float(stealth_cfg.get("max_five_gram_containment", 0.35)),
+        max_longest_common_token_run=int(stealth_cfg.get("max_longest_common_token_run", 8)),
+        max_dataset_duplicate_template_rate=float(
+            stealth_cfg.get("max_dataset_duplicate_template_rate", 0.01)
+        ),
+        max_dataset_opening_4gram_rate=float(
+            stealth_cfg.get("max_dataset_opening_4gram_rate", 0.15)
+        ),
         embedding_batch_size=int(stealth_cfg.get("embedding_batch_size", 256)),
         pairs_per_source=(
             int(stealth_cfg["pairs_per_source"])

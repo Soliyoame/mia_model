@@ -32,6 +32,10 @@ except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
 from ..attack.entity_extractor import EXTRACTOR_VERSION, EntityExtractor
+from ..attack.entity_type_policy import (
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+)
 from ..attack.local_ner import load_local_ner_model
 from ..attack.semantic_entity_resolver import (
     SemanticResolverRuntime,
@@ -241,6 +245,20 @@ def extract_facts_file(
                 "Existing facts do not match the v19 extractor protocol: "
                 f"expected extractor_version={EXTRACTOR_VERSION!r}, "
                 f"actual={existing.get('extractor_version')!r}. Rebuild Step 06 with --force."
+            )
+        policy_expected = {
+            "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+            "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
+        }
+        policy_mismatches = {
+            key: {"expected": value, "actual": existing.get(key)}
+            for key, value in policy_expected.items()
+            if existing.get(key) != value
+        }
+        if policy_mismatches:
+            raise RuntimeError(
+                "Existing facts do not match the frozen entity policy: "
+                f"{policy_mismatches}. Rebuild Step 06 with --force."
             )
         if semantic_enabled:
             expected = {
@@ -463,6 +481,8 @@ def extract_facts_file(
                     "selection_tier": cf["tier"],
                     "entity_metadata": ent,
                     "extractor_version": EXTRACTOR_VERSION,
+                    "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                    "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                 }
                 facts.append(fact)
                 by_group[group] += 1
@@ -497,6 +517,8 @@ def extract_facts_file(
         "max_facts_per_doc": max_facts_per_doc,
         "guarantee_min_facts": guarantee_min_facts,
         "extractor_version": EXTRACTOR_VERSION,
+        "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+        "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
         "dataset": str(dataset or ""),
         "input_benchmark_hash": benchmark_hash,
         "semantic_resolver_config_hash": semantic_config_hash,

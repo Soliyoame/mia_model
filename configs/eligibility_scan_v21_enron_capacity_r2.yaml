@@ -1,0 +1,29 @@
+eligibility_scan:
+  protocol: v21_enron_capacity_study_fixed_pool_r2
+  dataset: enron
+  capacity_role_protocol_version: pcv_enron_capacity_role_v21_r2
+  capacity_role_protocol_sha256: 3c8b8fb45b6b31cb265dd70d69a55e176a0eba548d451a5fb060c9866fef6b10
+  manual_execution_mode: user_owned_long_task
+  manual_execution_acknowledgement_required: true
+  selection_seed: 42
+  wave_size: 250
+  candidate_pool_multiplier: null
+  candidate_pool_target_sources: 35000
+  candidate_pool_shortfall_policy: fail
+  scan_full_candidate_pool: true
+  exact_target_stop: false
+  target_query_eligible_sources: 2250
+  required_formal_sources: 2250
+  max_chunks_per_source: 5
+  fallback_chunk_caps: []
+  minimum_valid_claims: 3
+  minimum_stealth_pairs: 3
+  deduplicate_complete_sources: true
+  sampling_manifest_path: artifacts/v21/enron_full/sampling/enron_sampling_manifest.json
+  output_dir: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron
+  upstream_processed:
+    path: artifacts/v21/enron_full/processed/enron.jsonl
+    sha256: 47ef7d2fee45d519618dddc9a1be4be6aafcf69d862cd64f35a109081419a19e
+    manifest_path: artifacts/v21/enron_full/processed/enron.manifest.json
+    manifest_sha256: d4dbecb2c7c842485b230c9ecb50a8f297413292d48e00754080ee0854079aa6
+    unique_source_count: 62384

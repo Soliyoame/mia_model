@@ -1,6 +1,6 @@
 # v20 Llama 主 suite 预注册。只有完整冻结并通过门禁的 cell 才能晋升 canonical。
 suite_id: pcv-mia-v20-llama-primary
-status: preregistered
+status: query_protocol_rebuild_required
 selection_rule: first_preregistered_run_passing_all_gates
 release_commit: null
 
@@ -9,7 +9,7 @@ protocol:
   method_version: pcv-rag-only-source-v20
   threat_model_version: strict-blackbox-v1
   metrics_version: source-conformal-bootstrap-v2
-  dataset_status: pre_response_frozen_canonical
+  dataset_status: facts_claims_splits_indexes_frozen_queries_unfrozen
   reserve_role: retriever_dev_and_conformal
   conformal_source_count: 245
   conformal_alphas: [0.01, 0.05]
@@ -27,10 +27,18 @@ protocol:
   strong_retriever: bge-base-en-v1.5+bm25+rrf+bge-reranker-base
   pairs_per_source: 3
   queries_per_source_per_cell: 6
+  query_type: diverse_slotted_verification
+  query_generation_protocol: diverse_slotted_verification_v1
+  stealth_protocol: entity_masked_query_vs_original_chunk
+  embedding_stealth_role: diagnostic_only
+  neutral_prompt_robustness_cell: false
+  shadow_noninferiority_gate_required: true
+  shadow_logical_victim_calls: 7200
+  formal_query_variants: [diverse_slotted_verification]
   execution: source_block_interleaved
   baseline_method_policy:
     full_generator: meta/llama-3.1-70b-instruct
-    full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI]
+    full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI, MEntA]
     extension_methods: []
   defense_representative_cells:
     - {dataset: edgar, generator_family: llama, concrete_model: meta/llama-3.1-70b-instruct, retriever_backend: dense}

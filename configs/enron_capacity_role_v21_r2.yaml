@@ -1,0 +1,57 @@
+protocol_version: pcv_enron_capacity_role_v21_r2
+dataset: enron
+
+entity_policy:
+  version: pcv_entity_policy_v21_r1
+  sha256: e867112519b5ee952b740ba58f3ffec046c5a0a710297dc06d8c677cc670b00e
+
+formal_evidence_scope:
+  version: pcv_formal_evidence_scope_v21_r1
+  sha256: 4fe92ea49f442aedf0c29bbf280fd31a98e97686a211ee01c824a116e67154be
+
+role:
+  formal_role: boundary_stress_test
+  primary_canonical: false
+  capacity_pass_effect: permits_boundary_evaluation_only
+  capacity_failure_effect: stop_enron_downstream_work
+
+prior_applicability:
+  protocol: v21_entity_policy_pilot_v1
+  cohort: A
+  status: failed
+  report_path: artifacts/v21/entity_policy_r1/pilots/cohort_A/enron/pilot_report.json
+  report_identity_sha256: dcb1322cbd0ee4726dc4ba5bed596e20aebfff195854b74d1a4227b1dea2607e
+  scanned_sources: 500
+  eligible_sources: 49
+  eligible_rate: 0.098
+  wilson_95_lower: 0.07492354740061162
+  gates:
+    minimum_eligible_sources: 50
+    minimum_eligible_rate: 0.10
+    minimum_wilson_95_lower: 0.075
+  conclusion_immutable: true
+
+capacity_study:
+  protocol: v21_enron_capacity_study_fixed_pool_r2
+  purpose: source_capacity_feasibility
+  selection_seed: 42
+  selection_method: sha256(seed,dataset,canonical_source_key)
+  candidate_pool_target_sources: 35000
+  candidate_pool_shortfall_policy: fail
+  scan_full_candidate_pool: true
+  exact_target_stop: false
+  required_eligible_sources: 2250
+  max_chunks_per_source: 5
+  fallback_chunk_caps: []
+  minimum_valid_claims: 3
+  minimum_stealth_pairs: 3
+  conservative_rate_basis: pilot_wilson_95_lower
+  applicability_gate_disposition: report_prior_failure_unchanged
+
+execution:
+  enabled: false
+  long_task_owner: user
+  agent_may_execute_long_task: false
+  api_calls_allowed: false
+  victim_calls_allowed: false
+  retriever_runs_allowed: false

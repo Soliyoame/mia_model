@@ -1,0 +1,32 @@
+# Shadow-only promotion gate for diverse slotted verification questions.
+datasets: [enron, edgar, pubmed]
+variants: [legacy_literal_verification, diverse_slotted_verification]
+sources_per_dataset:
+  shadow_member: 100
+  shadow_non_member: 100
+pairs_per_source: 3
+queries_per_source: 6
+logical_victim_calls: 7200
+victim_generator: meta/llama-3.1-70b-instruct
+rag_retriever: BGE
+offline_retrievers: [BGE, BM25, hybrid]
+neutral_prompt_robustness_cell: false
+near_duplicate_exclusion_required: true
+
+bootstrap:
+  iterations: 2000
+  seed: 42
+
+promotion_thresholds:
+  macro_auc_difference_ci95_lower: -0.01
+  max_dataset_auc_drop: 0.03
+  max_recall_at_5_drop: 0.02
+  min_five_gram_median_reduction: 0.50
+
+paths:
+  sources: artifacts/v20/query_rewrite_shadow/shadow_sources.jsonl
+  scores: artifacts/v20/query_rewrite_shadow/source_scores.jsonl
+  retrieval: artifacts/v20/query_rewrite_shadow/retrieval_at_5.jsonl
+  lexical: artifacts/v20/query_rewrite_shadow/lexical_overlap.jsonl
+  audit: artifacts/v20/query_rewrite_shadow/protocol_audit.json
+  output: artifacts/v20/query_rewrite_shadow/promotion_gate.json

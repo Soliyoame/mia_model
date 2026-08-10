@@ -37,15 +37,20 @@ from ..attack.perturbation_generator import (
     infer_attack_subtype,
     requires_definite_article,
 )
+from ..attack.entity_type_policy import (
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+    SEMANTIC_TARGET_TYPES,
+    entity_type_policy,
+)
 from ..attack.semantic_entity_resolver import (
     SEMANTIC_RESOLVER_PROTOCOL,
     SEMANTIC_SCHEMA_SHA256,
-    SEMANTIC_TARGET_TYPES,
     semantic_format_compatible,
 )
 
 
-VALIDATOR_VERSION = "local_claim_pair_v6_3_attack_first_rc2"
+VALIDATOR_VERSION = "local_claim_pair_v21_entity_policy_r1"
 
 _TRAILING_FRAGMENT_RE = re.compile(
     r"(?:[,;:]|\b(?:and|or|but|because|which|that|of|the|to|in|with|as|for|be|been|being))\s*$",
@@ -471,11 +476,52 @@ def _org_span_has_incomplete_boundary(text: str, span: tuple[int, int]) -> bool:
     return _ORG_CORPORATE_DESIGNATOR_RE.fullmatch(parts[1]) is None
 
 
-def _surface_matches_type(value: str, entity_type: str) -> bool:
+def _accepted_semantic_resolution(
+    resolution: object,
+    entity_type: str,
+) -> bool:
+    """仅允许完整绑定的新策略 semantic 结果覆盖旧表面 heuristic。"""
+
+    kind = str(entity_type or "").upper()
+    if kind not in SEMANTIC_TARGET_TYPES or not isinstance(resolution, dict):
+        return False
+    policy = entity_type_policy(kind)
+    subtype = str(resolution.get("subtype") or "")
+    return bool(
+        resolution.get("accepted")
+        and resolution.get("protocol") == SEMANTIC_RESOLVER_PROTOCOL
+        and resolution.get("schema_sha256") == SEMANTIC_SCHEMA_SHA256
+        and resolution.get("entity_policy_version")
+        in {None, ENTITY_TYPE_POLICY_VERSION}
+        and resolution.get("entity_policy_sha256")
+        in {None, ENTITY_TYPE_POLICY_SHA256}
+        and str(resolution.get("entity_type") or "").upper() == kind
+        and subtype in policy.allowed_subtypes
+    )
+
+
+def _semantic_surface_is_complete(value: str) -> bool:
+    compact = " ".join((value or "").split())
+    return bool(
+        compact
+        and re.search(r"[A-Za-z0-9]", compact)
+        and not _NAMED_ENTITY_TRAILING_BOUNDARY_RE.search(compact)
+        and not _NAMED_ENTITY_ENCODING_RE.search(compact)
+    )
+
+
+def _surface_matches_type(
+    value: str,
+    entity_type: str,
+    *,
+    semantic_resolution: object = None,
+) -> bool:
     compact = " ".join((value or "").split())
     kind = (entity_type or "").upper()
     if not compact:
         return False
+    if _accepted_semantic_resolution(semantic_resolution, kind):
+        return _semantic_surface_is_complete(compact)
     if kind == "NUMERIC_VALUE":
         return re.fullmatch(r"\d+(?:,\d{3})*(?:\.\d+)?", compact) is not None
     if kind in _STRUCTURED_PATTERNS:
@@ -590,6 +636,10 @@ def _metadata_semantic_failure_reasons(
     compact = " ".join((value or "").split())
     kind = (entity_type or "").upper()
     reasons: list[str] = []
+    semantic_authoritative = _accepted_semantic_resolution(
+        entity_metadata.get("semantic_resolution"),
+        kind,
+    )
     if kind in _NAMED_TYPES:
         if _NAMED_ENTITY_TRAILING_BOUNDARY_RE.search(compact):
             reasons.append("named_entity_trailing_boundary")
@@ -602,6 +652,15 @@ def _metadata_semantic_failure_reasons(
     before = claim[max(0, start - 120) : start]
     after = claim[end : min(len(claim), end + 120)]
     window = claim[max(0, start - 180) : min(len(claim), end + 180)]
+
+    if semantic_authoritative:
+        sources = {
+            str(item).casefold()
+            for item in (entity_metadata.get("candidate_sources") or [])
+        }
+        if not sources:
+            reasons.append("semantic_entity_missing_extractor_provenance")
+        return tuple(dict.fromkeys(reasons))
 
     if kind == "PERSON":
         if _PERSON_NONHUMAN_SUFFIX_RE.match(after):
@@ -653,13 +712,13 @@ def _metadata_semantic_failure_reasons(
     # The metadata is part of the protocol binding even when surface/context
     # rules make the decision.  A formal named entity must originate from the
     # frozen local extractor rather than an untracked caller.
-    if kind in _NAMED_TYPES:
+    if kind in SEMANTIC_TARGET_TYPES:
         sources = {
             str(item).casefold()
             for item in (entity_metadata.get("candidate_sources") or [])
         }
         if not sources:
-            reasons.append("named_entity_missing_extractor_provenance")
+            reasons.append("semantic_entity_missing_extractor_provenance")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -676,6 +735,7 @@ def _semantic_resolution_failure_reasons(
     if kind not in SEMANTIC_TARGET_TYPES:
         return ()
     reasons: list[str] = []
+    policy = entity_type_policy(kind)
     original_resolution = entity_metadata.get("semantic_resolution")
     if not isinstance(original_resolution, dict):
         if required:
@@ -690,6 +750,18 @@ def _semantic_resolution_failure_reasons(
         reasons.append("original_semantic_resolution_rejected")
     if str(original_resolution.get("entity_type") or "").upper() != kind:
         reasons.append("original_semantic_type_mismatch")
+    if str(original_resolution.get("subtype") or "") not in policy.allowed_subtypes:
+        reasons.append("original_semantic_subtype_not_allowed")
+    if original_resolution.get("entity_policy_version") not in {
+        None,
+        ENTITY_TYPE_POLICY_VERSION,
+    }:
+        reasons.append("original_semantic_entity_policy_version_mismatch")
+    if original_resolution.get("entity_policy_sha256") not in {
+        None,
+        ENTITY_TYPE_POLICY_SHA256,
+    }:
+        reasons.append("original_semantic_entity_policy_hash_mismatch")
 
     if not isinstance(counterfactual_resolution, dict):
         if required:
@@ -709,6 +781,21 @@ def _semantic_resolution_failure_reasons(
             )
     if str(counterfactual_resolution.get("entity_type") or "").upper() != kind:
         reasons.append("counterfactual_semantic_type_mismatch")
+    if (
+        str(counterfactual_resolution.get("subtype") or "")
+        not in policy.allowed_subtypes
+    ):
+        reasons.append("counterfactual_semantic_subtype_not_allowed")
+    if counterfactual_resolution.get("entity_policy_version") not in {
+        None,
+        ENTITY_TYPE_POLICY_VERSION,
+    }:
+        reasons.append("counterfactual_semantic_entity_policy_version_mismatch")
+    if counterfactual_resolution.get("entity_policy_sha256") not in {
+        None,
+        ENTITY_TYPE_POLICY_SHA256,
+    }:
+        reasons.append("counterfactual_semantic_entity_policy_hash_mismatch")
     if (
         original_resolution.get("subtype")
         != counterfactual_resolution.get("subtype")
@@ -744,6 +831,24 @@ def validate_claim_pair(
     """Apply every canonical claim-pair hard gate locally."""
 
     reasons: list[str] = []
+    kind = (entity_type or "").upper()
+    original_resolution = (
+        entity_metadata.get("semantic_resolution")
+        if isinstance(entity_metadata, dict)
+        else None
+    )
+    original_semantic_authoritative = _accepted_semantic_resolution(
+        original_resolution,
+        kind,
+    )
+    counterfactual_semantic_authoritative = _accepted_semantic_resolution(
+        counterfactual_semantic_resolution,
+        kind,
+    )
+    semantic_pair_authoritative = bool(
+        original_semantic_authoritative
+        and counterfactual_semantic_authoritative
+    )
     true_spans = find_entity_spans(true_claim, original_entity)
     counterfactual_spans = find_entity_spans(counterfactual_claim, counterfactual_entity)
     if not true_spans:
@@ -752,9 +857,17 @@ def validate_claim_pair(
         reasons.append("counterfactual_entity_boundary_not_found")
     if _normalise(original_entity) == _normalise(counterfactual_entity):
         reasons.append("counterfactual_entity_unchanged")
-    if not _surface_matches_type(original_entity, entity_type):
+    if not _surface_matches_type(
+        original_entity,
+        entity_type,
+        semantic_resolution=original_resolution,
+    ):
         reasons.append("original_entity_type_mismatch")
-    if not _surface_matches_type(counterfactual_entity, entity_type):
+    if not _surface_matches_type(
+        counterfactual_entity,
+        entity_type,
+        semantic_resolution=counterfactual_semantic_resolution,
+    ):
         reasons.append("counterfactual_entity_type_mismatch")
 
     aligned = _aligned_substitution_spans(
@@ -766,7 +879,6 @@ def validate_claim_pair(
     if aligned is None:
         reasons.append("not_single_slot_substitution")
 
-    kind = (entity_type or "").upper()
     if kind == "ORG":
         original_spans = [aligned[0]] if aligned else true_spans
         counterfactual_org_spans = [aligned[1]] if aligned else counterfactual_spans
@@ -779,7 +891,7 @@ def validate_claim_pair(
             reasons.append("counterfactual_entity_context_boundary_mismatch")
     original_context_spans = [aligned[0]] if aligned else true_spans
     counterfactual_context_spans = [aligned[1]] if aligned else counterfactual_spans
-    if original_context_spans:
+    if original_context_spans and not original_semantic_authoritative:
         original_failures = [
             entity_context_failure_reasons(true_claim, span, kind)
             for span in original_context_spans
@@ -787,7 +899,7 @@ def validate_claim_pair(
         if all(original_failures):
             reasons.append("original_entity_context_mismatch")
             reasons.extend(f"original_{reason}" for reason in original_failures[0])
-    if counterfactual_context_spans:
+    if counterfactual_context_spans and not counterfactual_semantic_authoritative:
         counterfactual_failures = [
             entity_context_failure_reasons(counterfactual_claim, span, kind)
             for span in counterfactual_context_spans
@@ -800,18 +912,27 @@ def validate_claim_pair(
             reasons.append("counterfactual_year_subtype_mismatch")
     if kind == "DURATION" and not _duration_number_agrees(counterfactual_entity):
         reasons.append("counterfactual_duration_number_agreement")
-    if kind == "LOCATION" and _requires_definite_article(original_entity) != _requires_definite_article(counterfactual_entity):
+    if (
+        kind == "LOCATION"
+        and not semantic_pair_authoritative
+        and _requires_definite_article(original_entity)
+        != _requires_definite_article(counterfactual_entity)
+    ):
         reasons.append("counterfactual_location_article_class_mismatch")
-    reasons.extend(
-        _attack_subtype_failure_reasons(
-            original_entity,
-            counterfactual_entity,
-            kind,
-            true_claim,
-            counterfactual_claim,
+    if not semantic_pair_authoritative:
+        reasons.extend(
+            _attack_subtype_failure_reasons(
+                original_entity,
+                counterfactual_entity,
+                kind,
+                true_claim,
+                counterfactual_claim,
+            )
         )
-    )
-    if _obvious_generic_entity(original_entity, kind, true_claim):
+    if (
+        not original_semantic_authoritative
+        and _obvious_generic_entity(original_entity, kind, true_claim)
+    ):
         reasons.append("original_entity_obvious_generic")
     if _indefinite_article_mismatch(
         counterfactual_claim,

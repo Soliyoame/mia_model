@@ -85,7 +85,31 @@ paired_claims:
   max_pairs_per_fact: 1
 
 paired_queries:
-  query_types: [compressed_verification]
+  query_types: [diverse_slotted_verification]
+  pairs_per_source: 3
+  sibling_profile: openai_api
+  naturalization:
+    candidates_per_pair: 3
+    correction_retries: 2
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 120
+    embedding_model: sentence-transformers/all-MiniLM-L6-v2
+    embedding_local_files_only: true
+    min_question_proposition_similarity: 0.80
+    max_five_gram_containment: 0.35
+    max_longest_common_token_run: 8
+    max_dataset_duplicate_template_rate: 0.01
+    max_dataset_opening_4gram_rate: 0.15
+  nli:
+    model_id: tasksource/deberta-base-long-nli
+    revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+    snapshot_dir: models/menta/deberta-base-long-nli
+    local_files_only: true
+    device: cuda
+    require_cuda: true
+    batch_size: 16
+    max_length: 1280
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
@@ -95,8 +119,10 @@ stealth_filter:
   min_naturalness: 0.55
   max_context_probe: 0.5
   max_prompt_injection: 0.5
-  min_similarity: 0.03
-  max_similarity: 0.97
+  max_five_gram_containment: 0.35
+  max_longest_common_token_run: 8
+  max_dataset_duplicate_template_rate: 0.01
+  max_dataset_opening_4gram_rate: 0.15
 
 scoring:
   unknown_lambda: 0.5

@@ -4,22 +4,22 @@
 # ---------------- 日志 ----------------
 logging:
   level: INFO                      # 日志详细程度：INFO=常规；排错可改 DEBUG
-  file: artifacts/v20/logs/rag.log
+  file: artifacts/v21/logs/rag.log
 
 # 大模型 profile 定义文件（接口风格、system prompt、默认模型名都在这里）。
 # 真实 key/base_url/model 仍由 .env 的 PCV_VICTIM_* / PCV_SIBLING_* 覆盖。
 llm_profiles_path: configs/llm_profiles.yaml
-generator_registry_path: configs/generator_families.yaml
-generator_family: llama
+generator_registry_path: configs/generator_families_v21.yaml
+generator_family: gemma
 
 experiment_protocol:
-  protocol_version: pcv-mia-v20
-  method_version: pcv-rag-only-source-v20
-  dataset_status: pre_response_frozen_canonical
-  metrics_version: source-conformal-bootstrap-v2
+  protocol_version: pcv-mia-v21
+  method_version: pcv-rag-only-source-v21
+  dataset_status: rebuild_pending
+  metrics_version: source-bootstrap-low-fpr-v21
   reserve_role: retriever_dev_and_conformal
   conformal_source_count: 245
-  conformal_alphas: [0.01, 0.05]
+  conformal_alphas: [0.005, 0.01, 0.05]
   execution: source_block_interleaved
   pairs_per_source: 3
   logical_victim_calls_per_source_per_mode: 6
@@ -116,7 +116,7 @@ retrieval:
 # ---------------- 生成（第 10 步调 victim 大模型回答问题）----------------
 generation:
   run_llm_only: false             # 默认只跑 RAG；论文归因/阴性对照实验时显式开启
-  victim_profile: null            # 用哪个 profile：null=按 .env/llm_profiles.yaml 的默认（openai_api）
+  victim_profile: gemma2_2b_primary
   temperature: 0.0                # 采样温度：0=确定性输出（注：实测 qwen3.5-flash temp=0 仍有~15%不复现）
   max_tokens: 512                 # 单次回答最多生成 512 token
   timeout: 60                     # 单次请求超时 60 秒（从 120 下调：撞卡顿时快速失败，别干耗）
@@ -133,9 +133,9 @@ generation:
   # 并发【不是】为了超过 RPM，是为了在抖动下【仍能达到】RPM。实测卡顿会把每条均摊到 ~72–96s，
   # 而 4 RPM 理论只该 15s/条，本机制目标是把实际耗时拉回接近理论地板（潜在 ~4–5×）。
   # ⚠️ 必须设成你 key 的真实 RPM 上限（这里=4）。设 0 则回退到 request_interval_seconds 旧方式。
-  requests_per_minute: 4          # victim key 的每分钟请求上限（令牌桶按此匀速放行）
+  requests_per_minute: 0          # local Hugging Face victim，不使用 API 令牌桶
   # sibling(attacker)是【另一把 key、另一个端点】→ 给它【单独一只令牌桶】按自己的 RPM 放行,
   # 不跟 victim 抢速率(仅 --attacker sibling 生效;--attacker victim 时两路合用 victim 桶)。
   # 0 或不填 = 回退成与 victim 同 RPM。
   sibling_requests_per_minute: 4  # sibling key(windhub 等)的每分钟请求上限
-  max_workers: 4                  # 并发线程数：令牌桶模式下需 >1 才能在卡顿时填满管道（建议 3~4）
+  max_workers: 1                  # Gemma 本地 BF16，冻结 batch_size=1

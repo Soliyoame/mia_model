@@ -8,7 +8,7 @@
 > 源码的用途是**当"精确实现的标准答案"**：抠出每个攻击的「①发什么 query ②怎么打分」，
 > 在本项目流水线里重写成"攻击打分器"。
 
-## 五个 baseline 一览
+## 六个 baseline 一览
 
 | 名称 | 论文 | 源码来源 | 纯黑盒? | 本目录形态 |
 |---|---|---|---|---|
@@ -17,6 +17,7 @@
 | **MBA** | [2410.20142](https://arxiv.org/abs/2410.20142) | ❌ 无官方 → 第三方 [MIRABEL](https://github.com/nonalcohol-park/MIRABEL) | ✓ | `MBA/`（抽取）+ `MIRABEL/`（整仓） |
 | **S²MIA** | [2406.19234](https://arxiv.org/abs/2406.19234) | ❌ 无官方 → 第三方 [MIRABEL](https://github.com/nonalcohol-park/MIRABEL) | (s)✓ / (s&p)✗ | `S2MIA/`（抽取）+ `MIRABEL/` |
 | **RAG-MIA**（地板线） | [2405.20446](https://arxiv.org/abs/2405.20446) | ❌ 无官方（一句 prompt） | ✓ | `RAG_MIA/`（据论文重写） |
+| **MEntA**（Membership Entailment Attack） | [2605.24312](https://arxiv.org/abs/2605.24312) | 论文流程适配 | ✓ | `menta.py`（source-level adapted） |
 
 附：`MIRABEL/` = EMNLP'25 防御研究仓（[2505.22061](https://arxiv.org/abs/2505.22061)），一处含 MBA+S2+IA+防御+一站式脚本，是 MBA/S²MIA 的源。
 
@@ -29,7 +30,8 @@
 - `MBA/mba_reference.py` — MIRABEL 随机 mask 版（简化，保留备查/消融）。
 - `S2MIA/s2mia_reference.py` — 从 MIRABEL 抽取的自包含 S²MIA（含 S2Prompt）。
 - `RAG_MIA/rag_mia_reference.py` — 据论文重写的直接询问攻击。
-- `victim_harness.py` — **真实受害查询 harness**：目标枚举 + 通用 RAG 作答 + 5 个适配器（RAG-MIA/S2MIA/MBA/IA/DCMI）+ attacker 构造 + per-target 打分 + 指标。第 12 步实际调用它。
+- `menta.py` — MEntA 冻结 query 校验、专用 RAG prompt、atomic claim、DeBERTa NLI 和拒答扣分。
+- `victim_harness.py` — **真实受害查询 harness**：目标枚举 + RAG 作答 + 6 个适配器（RAG-MIA/S2MIA/MBA/IA/DCMI/MEntA）+ attacker 构造 + per-target 打分 + 指标。第 12 步实际调用它。
 
 ## 怎么跑
 
@@ -38,7 +40,11 @@
 python scripts/12_run_baselines.py --dataset edgar --max-targets 20 --request-interval 15
 # 只跑便宜三件套（不需 attacker）
 python scripts/12_run_baselines.py --dataset edgar --methods RAG-MIA,S2MIA,MBA
-# 全量五个（IA/DCMI 需 sibling profile 作 attacker；贵）
+# 下载并校验 MEntA 的冻结 NLI snapshot（不调用 Generator API）
+python scripts/download_frozen_menta_nli.py
+# 用 sibling 离线生成并冻结 summary+5 queries（不调用 victim）
+python scripts/27_prepare_menta_inputs.py --dataset edgar
+# 全量六个（IA/DCMI 需 runtime attacker；MEntA query 已离线冻结）
 python scripts/12_run_baselines.py --dataset edgar
 ```
 输出：`outputs/baselines/edgar/edgar_<method>_scores.jsonl`（每目标分数）+ `edgar_baseline_comparison.jsonl`（含 PCV-MIA 的对照表）。支持断点续跑。
@@ -47,7 +53,7 @@ python scripts/12_run_baselines.py --dataset edgar
 
 - PCV-MIA = **纯黑盒 + chunk 级**；所有 baseline 同此口径。
 - **S²MIA(s&p) 困惑度变体需 logprob/本地 GPT-2 → 非纯黑盒**：主表只用 **S²MIA(s) 相似度版**，(s&p) 附录单列并标注。
-- 其余（IA / DCMI / MBA / RAG-MIA）均纯黑盒。MBA 的 proxy LM 只在 attacker 侧**离线选词**，victim 仍只看填空 prompt 的黑盒输出。
+- 其余（IA / DCMI / MBA / RAG-MIA / MEntA）均纯黑盒。MBA 的 proxy LM 只在 attacker 侧**离线选词**；MEntA 的 sibling 只离线生成查询，本地 NLI 只对黑盒回答打分。
 
 ## 忠实度现状（方案一落地后）
 
@@ -60,6 +66,7 @@ python scripts/12_run_baselines.py --dataset edgar
 | MBA | **proxy LM 按 rank 挑高难词遮蔽**→填空→填对率，移植 IA 官方 `mba.py` | 高（跳过拼写纠正并标注；弃 MIRABEL 随机版） |
 | IA | summary+30 问（官方 prompt，保留缩写）→**同源检索器筛 top_k 区分度**→一致率 | 高（用同源检索分代替 ElectraScorer，免 pyterrier 重依赖） |
 | DCMI | base=S²(s) 同口径 BLEU 重叠；扰动=**反义词替换 3%**（对齐官方 `perturb.py`）；差分+阈值 | 中-高（扰动/差分/阈值忠实；base 为重叠近似，官方 base 藏 flashrag 未完整开源） |
+| MEntA | summary+5 个自然问题→5 次 RAG→回答 atomic claims→DeBERTa entailment/refusal→均值 | source-level adapted（共享代表 chunk 与统一 harness，不冒充官方数据集复现） |
 
 统一「记忆复现」尺子 = `lexical_overlap`（BLEU method4），S²MIA 与 DCMI base 共用，审稿口径一致。
 
@@ -75,6 +82,7 @@ python scripts/12_run_baselines.py --dataset edgar
 
 ## 状态
 
-- ✅ 方案一落地：5 适配器忠实度提升 + 差分测试 14/14 + mock 端到端冒烟（零 API）全绿。
+- ✅ 六个适配器已接入；MEntA 的 query/NLI/harness mock 测试零 API 全绿。
+- ⚠ MEntA 正式运行前必须先生成三数据集 query manifest，并下载 revision `04dcf11f...99d5` 的本地 NLI snapshot；任一 hash 漂移都会拒绝 resume。
 - ⚠ MBA 首次跑会下载 proxy LM（默认 gpt2，~0.5G）；CPU 可跑，但选词慢（每候选词一次前向）。
 - ⏳ 待真跑：先 `--max-targets` 小规模验证，再 small 全量 → formal。IA/DCMI 贵，按需限速。

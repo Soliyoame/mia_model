@@ -6,11 +6,30 @@
 #   PCV_VICTIM_API_KEY  / PCV_VICTIM_BASE_URL  / PCV_VICTIM_MODEL
 
 active:
-  sibling: dashscope_qwen
-  victim: llama_primary
+  sibling: luna_query_generator
+  victim: gemma2_2b_primary
+  ia_shadow: qwen3_4b_ia_shadow
 
 sibling:
   profiles:
+    luna_query_generator:
+      provider: openai_compatible
+      api_key_env: PCV_SIBLING_API_KEY
+      base_url_env: PCV_SIBLING_BASE_URL
+      model_env: PCV_SIBLING_MODEL
+      model_version_env: PCV_SIBLING_MODEL_VERSION
+      base_url: ""
+      model: gpt-5.6-luna
+      model_version: ""
+      timeout: 120
+      temperature: 0
+      max_tokens: 2048
+      max_retries: 2
+      request_interval_seconds: 0
+      requests_per_minute: 4
+      stream: false
+      extra_body: {seed: 42}
+      system_prompt: "Follow the requested schema exactly; do not add prose."
     openai_api:
       provider: openai_compatible
       api_key_env: PCV_SIBLING_API_KEY
@@ -20,6 +39,8 @@ sibling:
       model: gpt-4.1-mini
       timeout: 60
       max_tokens: 1024
+      request_interval_seconds: 0
+      requests_per_minute: 4
       system_prompt: "You are a sibling model for data generation. Return concise, valid JSON only."
     dashscope_qwen:
       provider: openai_compatible
@@ -33,9 +54,66 @@ sibling:
       extra_body:
         enable_thinking: false
       system_prompt: "You are a sibling model for data generation. Return concise, valid JSON only."
+    ollama_qwen3_4b:
+      provider: openai_compatible
+      api_key_env: PCV_SIBLING_API_KEY
+      base_url_env: PCV_SIBLING_BASE_URL
+      model_env: PCV_SIBLING_MODEL
+      model_version_env: PCV_SIBLING_MODEL_VERSION
+      base_url: http://127.0.0.1:11434/v1
+      model: pcv-qwen3-4b:q4km-8k
+      model_version: ""  # 必须由 PCV_SIBLING_MODEL_VERSION 提供实际 Ollama 模型 ID
+      timeout: 180
+      temperature: 0
+      max_tokens: 1024
+      max_retries: 2
+      retry_backoff_base: 2
+      retry_backoff_max: 30
+      stream: false
+      request_interval_seconds: 0
+      requests_per_minute: 0
+      extra_body:
+        reasoning_effort: none
+        seed: 42
+      system_prompt: "You are a sibling model for data generation. Return concise, valid JSON only."
+
+ia_shadow:
+  profiles:
+    qwen3_4b_ia_shadow:
+      provider: openai_compatible
+      allow_role_env_overrides: false
+      api_key_env: ""
+      base_url: http://127.0.0.1:11434/v1
+      model: pcv-qwen3-4b:q4km-8k
+      model_version: ollama:39297c75a309
+      context_length: 8192
+      quantization: Q4_K_M
+      timeout: 180
+      temperature: 0
+      max_tokens: 16
+      max_retries: 2
+      stream: false
+      request_interval_seconds: 0
+      requests_per_minute: 0
+      extra_body: {reasoning_effort: none, seed: 42}
+      system_prompt: "Use only the supplied document and return exactly Yes, No, or I don't know."
 
 victim:
   profiles:
+    gemma2_2b_primary:
+      provider: huggingface_local
+      allow_role_env_overrides: false
+      model: google/gemma-2-2b-it
+      model_version: 9b78bb926a2a249dd297e27b043019eb0666ce82
+      local_files_only: true
+      device: cuda
+      dtype: bfloat16
+      quantization: none
+      batch_size: 1
+      context_length: 8192
+      temperature: 0
+      timeout: 600
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
     llama_primary:
       provider: openai_compatible
       api_key_env: PCV_VICTIM_API_KEY

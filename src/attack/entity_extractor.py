@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover
 from ..data.filter import CONTRACT_TERM_RE, DATE_RE, EMAIL_RE, MEDICAL_VALUE_RE, MONEY_RE, NUMERIC_RE, ORG_RE, PERCENT_RE, TEMPLATE_RE
 from ..utils.io import read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from .entity_type_policy import SUPPORTED_ENTITY_TYPES
 
 
 LOGGER = get_logger(__name__)
@@ -103,7 +104,7 @@ BOILERPLATE_RE = re.compile(
 HEADER_FOOTER_RE = re.compile(r"^\s*(?:from|to|cc|bcc|subject|sent|date|regards|thanks|sincerely)\s*:?\s*$", re.IGNORECASE)
 
 # 抽取器版本号,写进每条结果便于追溯是哪版规则产出的。
-EXTRACTOR_VERSION = "attackability_v6_3_precision_cascade_rc1"
+EXTRACTOR_VERSION = "attackability_v21_entity_policy_r1"
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,14 @@ PATTERN_REGISTRY: tuple[PatternSpec, ...] = (
     PatternSpec("PERSON", "named_entity", PERSON_RE, _scores(0.70, 0.70, 0.82), 68),
     PatternSpec("NUMERIC_VALUE", "structured_numeric", NUMERIC_RE, _scores(0.60, 0.65, 0.55), 10),
 )
+
+_EXTRACTOR_ENTITY_TYPES = frozenset(spec.entity_type for spec in PATTERN_REGISTRY)
+if _EXTRACTOR_ENTITY_TYPES != SUPPORTED_ENTITY_TYPES:
+    raise RuntimeError(
+        "Extractor/entity-policy type coverage mismatch: "
+        f"missing={sorted(SUPPORTED_ENTITY_TYPES - _EXTRACTOR_ENTITY_TYPES)} "
+        f"extra={sorted(_EXTRACTOR_ENTITY_TYPES - SUPPORTED_ENTITY_TYPES)}"
+    )
 
 # 由登记表派生:实体类型 → (家族, 基础分, 优先级)，给 NER 候选查默认值用。
 TYPE_DEFAULTS: dict[str, tuple[str, dict[str, float], int]] = {

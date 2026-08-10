@@ -25,6 +25,10 @@ from src.attack.entity_extractor import (  # noqa: E402
     EXTRACTOR_VERSION,
     EntityExtractor,
 )
+from src.attack.entity_type_policy import (  # noqa: E402
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+)
 from src.attack.semantic_entity_resolver import (  # noqa: E402
     SEMANTIC_RESOLVER_PROTOCOL,
     SEMANTIC_SCHEMA_SHA256,
@@ -45,6 +49,30 @@ from src.query_generation.stealth_filter import (  # noqa: E402
 )
 from src.utils.hash import sha256_file, sha256_obj, sha256_text  # noqa: E402
 from src.prepare.splitter import deduplicate_complete_sources  # noqa: E402
+from src.prepare.entity_policy_release import (  # noqa: E402
+    FORMAL_SCAN_PROTOCOL as ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+    validate_release_gate as validate_entity_policy_release_gate,
+)
+from src.prepare.formal_evidence_scope import (  # noqa: E402
+    FORMAL_EVIDENCE_SCOPE_SHA256,
+    FORMAL_EVIDENCE_SCOPE_VERSION,
+)
+from src.prepare.formal_dataset_role_scope import (  # noqa: E402
+    ENRON_CAPACITY_PROMOTION_PROTOCOL,
+    FORMAL_DATASET_ROLE_SCOPE_SHA256,
+    FORMAL_DATASET_ROLE_SCOPE_VERSION,
+    FORMAL_SCAN_ALLOWED_DATASETS,
+    validate_primary_formal_dataset,
+)
+from src.prepare.enron_capacity_role import (  # noqa: E402
+    ENRON_CAPACITY_ROLE_SHA256,
+    ENRON_CAPACITY_ROLE_VERSION,
+    ENRON_CAPACITY_STUDY_PROTOCOL,
+    enron_capacity_role_metadata,
+    enron_capacity_role_payload,
+    validate_bound_enron_pilot_report,
+    validate_enron_capacity_role_metadata,
+)
 from src.utils.io import (  # noqa: E402
     ensure_dir,
     load_yaml,
@@ -59,9 +87,19 @@ from src.utils.io import (  # noqa: E402
 
 V3_SCAN_PROTOCOL = "v6_3_precision_cascade_fixed_double_pool_v3"
 V4_SCAN_PROTOCOL = "v6_3_precision_cascade_ranked_expandable_pool_v4"
+V21_SCAN_PROTOCOL = "v21_full_rescan"
+V21_ENRON_FULL_SCAN_PROTOCOL = "v21_enron_full_corpus_fixed_pool_v1"
+ENRON_CAPACITY_SCAN_PROTOCOL = ENRON_CAPACITY_STUDY_PROTOCOL
 BUDGET6_RELEASE_SCAN_PROTOCOL = "v6_3_rc1_budget6_release_v1"
 ATTACK_FIRST_RC2_RELEASE_SCAN_PROTOCOL = (
     "v6_3_attack_first_rc2_budget6_release_v1"
+)
+ENTITY_POLICY_FORMAL_CLAIM_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_claim_eligibility_v21_entity_policy_r1"
+)
+ENTITY_POLICY_FORMAL_QUERY_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_query_eligibility_v21_entity_policy_r1_"
+    "unique_query_text"
 )
 SCAN_PROTOCOL = V3_SCAN_PROTOCOL
 V3_CLAIM_ELIGIBILITY_PROTOCOL = (
@@ -79,6 +117,24 @@ V4_CLAIM_ELIGIBILITY_PROTOCOL = (
 V4_QUERY_ELIGIBILITY_PROTOCOL = (
     "pre_split_local_query_eligibility_v6_3_precision_cascade_"
     "ranked_expandable_pool_v4_unique_query_text"
+)
+V21_CLAIM_ELIGIBILITY_PROTOCOL = "pre_split_local_claim_eligibility_v21"
+V21_QUERY_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_query_eligibility_v21_unique_query_text"
+)
+V21_ENRON_FULL_CLAIM_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_claim_eligibility_v21_enron_full_fixed_pool_v1"
+)
+V21_ENRON_FULL_QUERY_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_query_eligibility_v21_enron_full_"
+    "fixed_pool_v1_unique_query_text"
+)
+ENRON_CAPACITY_CLAIM_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_claim_eligibility_v21_enron_capacity_fixed_pool_r2"
+)
+ENRON_CAPACITY_QUERY_ELIGIBILITY_PROTOCOL = (
+    "pre_split_local_query_eligibility_v21_enron_capacity_"
+    "fixed_pool_r2_unique_query_text"
 )
 BUDGET6_RELEASE_CLAIM_ELIGIBILITY_PROTOCOL = (
     "pre_split_local_claim_eligibility_v6_3_rc1_budget6_release_v1"
@@ -135,6 +191,21 @@ def _eligibility_protocols(scan_protocol: str) -> tuple[str, str]:
             V4_CLAIM_ELIGIBILITY_PROTOCOL,
             V4_QUERY_ELIGIBILITY_PROTOCOL,
         )
+    if scan_protocol == V21_SCAN_PROTOCOL:
+        return (
+            V21_CLAIM_ELIGIBILITY_PROTOCOL,
+            V21_QUERY_ELIGIBILITY_PROTOCOL,
+        )
+    if scan_protocol == V21_ENRON_FULL_SCAN_PROTOCOL:
+        return (
+            V21_ENRON_FULL_CLAIM_ELIGIBILITY_PROTOCOL,
+            V21_ENRON_FULL_QUERY_ELIGIBILITY_PROTOCOL,
+        )
+    if scan_protocol == ENRON_CAPACITY_SCAN_PROTOCOL:
+        return (
+            ENRON_CAPACITY_CLAIM_ELIGIBILITY_PROTOCOL,
+            ENRON_CAPACITY_QUERY_ELIGIBILITY_PROTOCOL,
+        )
     if scan_protocol == BUDGET6_RELEASE_SCAN_PROTOCOL:
         return (
             BUDGET6_RELEASE_CLAIM_ELIGIBILITY_PROTOCOL,
@@ -145,6 +216,16 @@ def _eligibility_protocols(scan_protocol: str) -> tuple[str, str]:
             ATTACK_FIRST_RC2_RELEASE_CLAIM_ELIGIBILITY_PROTOCOL,
             ATTACK_FIRST_RC2_RELEASE_QUERY_ELIGIBILITY_PROTOCOL,
         )
+    if scan_protocol == ENTITY_POLICY_FORMAL_SCAN_PROTOCOL:
+        return (
+            ENTITY_POLICY_FORMAL_CLAIM_ELIGIBILITY_PROTOCOL,
+            ENTITY_POLICY_FORMAL_QUERY_ELIGIBILITY_PROTOCOL,
+        )
+    if scan_protocol == ENRON_CAPACITY_PROMOTION_PROTOCOL:
+        return (
+            ENRON_CAPACITY_PROMOTION_PROTOCOL,
+            ENRON_CAPACITY_PROMOTION_PROTOCOL,
+        )
     raise RuntimeError(f"Unsupported eligibility scan protocol: {scan_protocol}")
 
 
@@ -152,12 +233,17 @@ def _validate_dataset_protocol(dataset: str, scan_protocol: str) -> None:
     allowed = {
         V3_SCAN_PROTOCOL: {"edgar", "pubmed"},
         V4_SCAN_PROTOCOL: {"enron"},
+        V21_SCAN_PROTOCOL: {"edgar", "enron", "pubmed"},
+        V21_ENRON_FULL_SCAN_PROTOCOL: {"enron"},
+        ENRON_CAPACITY_SCAN_PROTOCOL: {"enron"},
         BUDGET6_RELEASE_SCAN_PROTOCOL: {"edgar", "enron", "pubmed"},
         ATTACK_FIRST_RC2_RELEASE_SCAN_PROTOCOL: {
             "edgar",
             "enron",
             "pubmed",
         },
+        ENTITY_POLICY_FORMAL_SCAN_PROTOCOL: set(FORMAL_SCAN_ALLOWED_DATASETS),
+        ENRON_CAPACITY_PROMOTION_PROTOCOL: {"enron"},
     }
     if dataset not in allowed.get(scan_protocol, set()):
         raise RuntimeError(
@@ -178,6 +264,10 @@ def validate_formal_eligibility_manifest(
     if manifest.get("dataset") != dataset:
         raise RuntimeError("Eligibility dataset mismatch")
     scan_protocol = str(manifest.get("scan_protocol") or "")
+    if scan_protocol == ENRON_CAPACITY_SCAN_PROTOCOL:
+        raise RuntimeError(
+            "Enron capacity boundary evidence cannot enter formal promotion"
+        )
     _validate_dataset_protocol(dataset, scan_protocol)
     _, query_protocol = _eligibility_protocols(scan_protocol)
     if manifest.get("protocol") != query_protocol:
@@ -201,8 +291,21 @@ def validate_formal_eligibility_manifest(
         or sha256_obj(sorted(eligible)) != manifest.get("whitelist_hash")
     ):
         raise RuntimeError("Eligibility whitelist integrity/capacity failed")
-    if scan_protocol in {
+    if scan_protocol == ENRON_CAPACITY_PROMOTION_PROTOCOL:
+        if (
+            manifest.get("dataset_role") != "capacity_qualified_primary"
+            or manifest.get("main_table_eligible") is not True
+            or manifest.get("main_table_disclosure_required") is not True
+            or manifest.get("prior_pilot_status") != "failed"
+            or int(manifest.get("capacity_eligible_source_count", -1))
+            < required_sources
+            or len(eligible) != required_sources
+        ):
+            raise RuntimeError("Enron capacity promotion role gate failed")
+    elif scan_protocol in {
         V3_SCAN_PROTOCOL,
+        V21_SCAN_PROTOCOL,
+        V21_ENRON_FULL_SCAN_PROTOCOL,
         BUDGET6_RELEASE_SCAN_PROTOCOL,
         ATTACK_FIRST_RC2_RELEASE_SCAN_PROTOCOL,
     }:
@@ -282,6 +385,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--processed-path", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
+        "--release-gate",
+        default=None,
+        help=(
+            "Passed v21 entity-policy release gate. Required only by "
+            f"{ENTITY_POLICY_FORMAL_SCAN_PROTOCOL}."
+        ),
+    )
+    parser.add_argument(
         "--cap",
         type=int,
         choices=[5, 8, 12],
@@ -308,6 +419,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Operational pause after this many newly completed waves; resume "
             "continues the same preregistered prefix."
+        ),
+    )
+    parser.add_argument(
+        "--manual-user-owned-capacity-run",
+        action="store_true",
+        help=(
+            "Explicitly acknowledge that a v21_r2 Enron capacity command is "
+            "a user-owned local long task."
         ),
     )
     return parser.parse_args()
@@ -1148,6 +1267,115 @@ def _validate_scan_config(
             "minimum_stealth_pairs": 3,
             "deduplicate_complete_sources": True,
         }
+    elif protocol == V21_SCAN_PROTOCOL:
+        required = {
+            "protocol": V21_SCAN_PROTOCOL,
+            "selection_seed": 42,
+            "wave_size": 250,
+            "candidate_pool_multiplier": 2,
+            "candidate_pool_target_sources": 4500,
+            "candidate_pool_shortfall_policy": "fail",
+            "scan_full_candidate_pool": True,
+            "target_query_eligible_sources": 2250,
+            "required_formal_sources": 2250,
+            "max_chunks_per_source": 5,
+            "fallback_chunk_caps": [8, 12],
+            "minimum_valid_claims": 3,
+            "minimum_stealth_pairs": 3,
+            "deduplicate_complete_sources": True,
+        }
+    elif protocol == V21_ENRON_FULL_SCAN_PROTOCOL:
+        required = {
+            "protocol": V21_ENRON_FULL_SCAN_PROTOCOL,
+            "selection_seed": 42,
+            "wave_size": 250,
+            "candidate_pool_multiplier": None,
+            "candidate_pool_target_sources": 30000,
+            "candidate_pool_shortfall_policy": "fail",
+            "scan_full_candidate_pool": True,
+            "target_query_eligible_sources": 2250,
+            "required_formal_sources": 2250,
+            "max_chunks_per_source": 5,
+            "fallback_chunk_caps": [],
+            "minimum_valid_claims": 3,
+            "minimum_stealth_pairs": 3,
+            "deduplicate_complete_sources": True,
+            "sampling_manifest_path": (
+                "artifacts/v21/enron_full/sampling/"
+                "enron_sampling_manifest.json"
+            ),
+        }
+    elif protocol == ENRON_CAPACITY_SCAN_PROTOCOL:
+        required = {
+            "protocol": ENRON_CAPACITY_SCAN_PROTOCOL,
+            "dataset": "enron",
+            "capacity_role_protocol_version": ENRON_CAPACITY_ROLE_VERSION,
+            "capacity_role_protocol_sha256": ENRON_CAPACITY_ROLE_SHA256,
+            "manual_execution_mode": "user_owned_long_task",
+            "manual_execution_acknowledgement_required": True,
+            "selection_seed": 42,
+            "wave_size": 250,
+            "candidate_pool_multiplier": None,
+            "candidate_pool_target_sources": 35000,
+            "candidate_pool_shortfall_policy": "fail",
+            "scan_full_candidate_pool": True,
+            "exact_target_stop": False,
+            "target_query_eligible_sources": 2250,
+            "required_formal_sources": 2250,
+            "max_chunks_per_source": 5,
+            "fallback_chunk_caps": [],
+            "minimum_valid_claims": 3,
+            "minimum_stealth_pairs": 3,
+            "deduplicate_complete_sources": True,
+            "sampling_manifest_path": (
+                "artifacts/v21/enron_full/sampling/"
+                "enron_sampling_manifest.json"
+            ),
+            "output_dir": (
+                "artifacts/v21/enron_capacity_r2/eligibility/"
+                "cap_5/enron"
+            ),
+            "upstream_processed": {
+                "path": "artifacts/v21/enron_full/processed/enron.jsonl",
+                "sha256": (
+                    "47ef7d2fee45d519618dddc9a1be4be6aafcf69d862cd64f35a109081419a19e"
+                ),
+                "manifest_path": (
+                    "artifacts/v21/enron_full/processed/"
+                    "enron.manifest.json"
+                ),
+                "manifest_sha256": (
+                    "d4dbecb2c7c842485b230c9ecb50a8f297413292d48e00754080ee0854079aa6"
+                ),
+                "unique_source_count": 62384,
+            },
+        }
+    elif protocol == ENTITY_POLICY_FORMAL_SCAN_PROTOCOL:
+        dataset = str(config.get("dataset") or "")
+        validate_primary_formal_dataset(dataset)
+        required = {
+            "protocol": ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+            "dataset": dataset,
+            "selection_seed": 42,
+            "wave_size": 250,
+            "candidate_pool_multiplier": None,
+            "candidate_pool_target_sources": 4500,
+            "candidate_pool_shortfall_policy": "fail",
+            "scan_full_candidate_pool": False,
+            "exact_target_stop": True,
+            "target_query_eligible_sources": 2250,
+            "required_formal_sources": 2250,
+            "max_chunks_per_source": 5,
+            "fallback_chunk_caps": [],
+            "minimum_valid_claims": 3,
+            "minimum_stealth_pairs": 3,
+            "deduplicate_complete_sources": True,
+            "sampling_manifest_path": None,
+            "output_dir": (
+                "artifacts/v21/formal_entity_policy_r2/eligibility/"
+                f"cap_5/{dataset}"
+            ),
+        }
     elif protocol == V4_SCAN_PROTOCOL:
         required = {
             "protocol": V4_SCAN_PROTOCOL,
@@ -1212,15 +1440,32 @@ def _validate_scan_config(
             "Deduplicated eligibility target must equal formal source count"
         )
     if (
-        int(actual["candidate_pool_target_sources"])
+        protocol
+        not in {
+            V21_ENRON_FULL_SCAN_PROTOCOL,
+            ENRON_CAPACITY_SCAN_PROTOCOL,
+            ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+        }
+        and int(actual["candidate_pool_target_sources"])
         != int(actual["candidate_pool_multiplier"])
         * int(actual["required_formal_sources"])
     ):
         raise RuntimeError(
             "Candidate pool target must equal multiplier times formal sources"
         )
-    if protocol == V4_SCAN_PROTOCOL and selected_cap != 5:
-        raise RuntimeError("Enron v4 fixes max_chunks_per_source to cap=5")
+    if (
+        protocol
+        in {
+            V4_SCAN_PROTOCOL,
+            V21_ENRON_FULL_SCAN_PROTOCOL,
+            ENRON_CAPACITY_SCAN_PROTOCOL,
+            ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+        }
+        and selected_cap != 5
+    ):
+        raise RuntimeError(
+            "This Enron protocol fixes max_chunks_per_source to cap=5"
+        )
     validated = {
         **actual,
         "max_chunks_per_source": int(selected_cap),
@@ -1237,7 +1482,64 @@ def _validate_scan_config(
             if not value:
                 raise RuntimeError(f"Enron v4 scan config is missing {field}")
             validated[field] = value
+    if protocol in {
+        ENRON_CAPACITY_SCAN_PROTOCOL,
+        ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+    }:
+        validated["output_dir"] = str(actual["output_dir"])
     return validated
+
+
+def _sampling_frame_identity(
+    scan_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate and bind the frozen Enron sampling-frame artifact."""
+
+    protocol = scan_config.get("protocol")
+    is_enron_full = protocol == V21_ENRON_FULL_SCAN_PROTOCOL
+    is_enron_capacity = protocol == ENRON_CAPACITY_SCAN_PROTOCOL
+    if not (is_enron_full or is_enron_capacity):
+        return {}
+    manifest_path = resolve_path(scan_config["sampling_manifest_path"])
+    if not manifest_path.is_file():
+        raise FileNotFoundError(manifest_path)
+    manifest = read_json(manifest_path)
+    required = {
+        "status": "passed",
+        "protocol": "enron_full_csv_hash_sample_v1",
+        "selection_seed": 42,
+        "expected_raw_records": 517401,
+        "raw_record_count": 517401,
+        "expected_mailbox_users": 150,
+        "raw_mailbox_user_count": 150,
+        "raw_screening_target_sources": 150000,
+        "selected_source_count": 150000,
+        "selection_method": "sha256(seed,dataset,message_sha256)",
+        "exact_message_deduplication": True,
+    }
+    actual = {key: manifest.get(key) for key in required}
+    if actual != required:
+        raise RuntimeError(
+            "Enron sampling-frame manifest gate failed: "
+            f"expected={required!r} actual={actual!r}"
+        )
+    sampled_path = Path(str(manifest.get("selected_jsonl_path") or ""))
+    if not sampled_path.is_file():
+        raise FileNotFoundError(sampled_path)
+    sampled_sha256 = sha256_file(sampled_path)
+    if sampled_sha256 != manifest.get("selected_jsonl_sha256"):
+        raise RuntimeError("Enron sampled JSONL hash drift")
+    return {
+        "sampling_frame_manifest_path": str(manifest_path.resolve()),
+        "sampling_frame_manifest_sha256": sha256_file(manifest_path),
+        "sampling_frame_selected_jsonl_path": str(sampled_path.resolve()),
+        "sampling_frame_selected_jsonl_sha256": sampled_sha256,
+        "sampling_frame_raw_csv_sha256": manifest.get("raw_csv_sha256"),
+        "sampling_frame_raw_mailbox_user_count": 150,
+        "sampling_frame_selected_mailbox_user_count": int(
+            manifest.get("selected_mailbox_user_count", -1)
+        ),
+    }
 
 
 def _calibration_identity(
@@ -1273,6 +1575,8 @@ def _calibration_identity(
     if actual_thresholds_hash != semantic.get("thresholds_sha256"):
         raise RuntimeError("Semantic threshold decision-surface hash drift")
     summary_path = resolve_path(semantic.get("calibration_summary_path"))
+    if not summary_path.is_file():
+        return _recovered_calibration_identity(semantic)
     summary = read_json(summary_path)
     selected = summary.get("selected") or {}
     if (
@@ -1315,12 +1619,389 @@ def _calibration_identity(
     }
 
 
+def _recovered_calibration_identity(
+    semantic: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the explicit v21 recovery record for a deleted v20 summary.
+
+    Recovery is permitted only for the named v21 mode.  The record itself is
+    hash-frozen by config and must independently match the retained cleanup
+    inventory, the exact research evidence excerpt, threshold surface, and
+    semantic model lock.  It never pretends that the deleted summary exists.
+    """
+
+    if semantic.get("calibration_identity_mode") != "v21_inventory_recovery":
+        raise FileNotFoundError(
+            f"Calibration summary is missing: {semantic.get('calibration_summary_path')}"
+        )
+    provenance_path = resolve_path(semantic.get("calibration_provenance_path"))
+    expected_provenance_hash = str(
+        semantic.get("calibration_provenance_sha256") or ""
+    )
+    if not provenance_path.is_file():
+        raise FileNotFoundError(
+            f"Calibration provenance recovery is missing: {provenance_path}"
+        )
+    if expected_provenance_hash in {"", "pending_after_recovery"}:
+        raise RuntimeError("Calibration provenance recovery hash is not frozen")
+    actual_provenance_hash = sha256_file(provenance_path)
+    if actual_provenance_hash != expected_provenance_hash:
+        raise RuntimeError("Calibration provenance recovery hash drift")
+
+    record = read_json(provenance_path)
+    if (
+        record.get("protocol")
+        != "pcv_mia_v21_calibration_provenance_recovery_v1"
+        or record.get("status")
+        != "verified_from_immutable_inventory_and_research_record"
+    ):
+        raise RuntimeError("Calibration provenance recovery status mismatch")
+    legacy = record.get("legacy_calibration") or {}
+    expected_legacy_path = Path(
+        str(semantic.get("calibration_summary_path"))
+    ).as_posix()
+    if legacy.get("path") != expected_legacy_path:
+        raise RuntimeError("Recovered legacy calibration path mismatch")
+
+    inventory_path = resolve_path(legacy.get("inventory_path"))
+    inventory_hash = sha256_file(inventory_path)
+    if inventory_hash != legacy.get("inventory_sha256"):
+        raise RuntimeError("Recovered calibration inventory hash drift")
+    inventory_matches: list[dict[str, Any]] = []
+    for row in read_jsonl(inventory_path):
+        if row.get("path") == expected_legacy_path:
+            inventory_matches.append(row)
+    if len(inventory_matches) != 1:
+        raise RuntimeError("Recovered calibration inventory identity is ambiguous")
+    inventory_entry = inventory_matches[0]
+    if (
+        inventory_entry.get("sha256") != legacy.get("sha256")
+        or int(inventory_entry.get("size", -1)) != int(legacy.get("size", -2))
+    ):
+        raise RuntimeError("Recovered legacy calibration inventory entry drift")
+
+    evidence = record.get("research_evidence") or {}
+    excerpt = str(evidence.get("excerpt") or "")
+    if not excerpt or sha256_text(excerpt) != evidence.get("excerpt_sha256"):
+        raise RuntimeError("Recovered calibration research excerpt hash drift")
+    notes_path = resolve_path(evidence.get("path"))
+    if excerpt not in notes_path.read_text(encoding="utf-8"):
+        raise RuntimeError("Recovered calibration research excerpt is no longer present")
+
+    selected = record.get("selected") or {}
+    overall = selected.get("overall") or {}
+    if (
+        selected.get("gate_passed") is not True
+        or int(selected.get("rows", 0)) != 206
+        or int(overall.get("false_accepts", -1)) != 0
+        or overall.get("precision") is None
+        or float(overall["precision"]) < 0.97
+        or record.get("semantic_thresholds_sha256")
+        != semantic.get("thresholds_sha256")
+    ):
+        raise RuntimeError("Recovered 206-row calibration gate is invalid")
+    by_type = selected.get("by_entity_type") or {}
+    required_types = {
+        "PERSON",
+        "ORG",
+        "LOCATION",
+        "PRODUCT",
+        "PROJECT_NAME",
+        "CONTRACT_TERM",
+    }
+    if set(by_type) != required_types or any(
+        metrics.get("precision") is None
+        or float(metrics["precision"]) < 0.95
+        for metrics in by_type.values()
+    ):
+        raise RuntimeError("Recovered calibration per-type gate is invalid")
+
+    model_lock_path = resolve_path(semantic.get("model_lock_path"))
+    model_lock = record.get("model_lock") or {}
+    if (
+        model_lock.get("path") != model_lock_path.relative_to(PROJECT_ROOT).as_posix()
+        or model_lock.get("sha256") != sha256_file(model_lock_path)
+    ):
+        raise RuntimeError("Recovered calibration model lock drift")
+    return {
+        "semantic_protocol": semantic["protocol"],
+        "semantic_schema_sha256": SEMANTIC_SCHEMA_SHA256,
+        "semantic_thresholds_sha256": semantic["thresholds_sha256"],
+        "calibration_identity_mode": "v21_inventory_recovery",
+        "calibration_summary_path": str(provenance_path),
+        "calibration_summary_sha256": actual_provenance_hash,
+        "legacy_calibration_summary_path": expected_legacy_path,
+        "legacy_calibration_summary_sha256": legacy["sha256"],
+        "model_lock_path": str(model_lock_path),
+        "model_lock_sha256": sha256_file(model_lock_path),
+    }
+
+
 def _plan_paths(output_dir: Path) -> dict[str, Path]:
     return {
         "plan": output_dir / "scan_plan.json",
         "source_order": output_dir / "scan_source_order.json",
         "candidates": output_dir / "scan_candidate_benchmark.jsonl",
         "quality_ranking": output_dir / "scan_source_quality.jsonl",
+    }
+
+
+def _enforce_candidate_pool_capacity(
+    scan_protocol: str,
+    pool_stats: dict[str, Any],
+    *,
+    candidate_pool_target_sources: int,
+) -> None:
+    """Fail before plan creation when the Enron full pool is undersized."""
+
+    if (
+        scan_protocol
+        in {
+            V21_ENRON_FULL_SCAN_PROTOCOL,
+            ENRON_CAPACITY_SCAN_PROTOCOL,
+            ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+        }
+        and int(pool_stats["effective_candidate_pool_source_count"])
+        != int(candidate_pool_target_sources)
+    ):
+        raise RuntimeError(
+            "Processed source universe is below the preregistered "
+            f"{candidate_pool_target_sources:,}-source candidate pool; "
+            "do not create a reduced plan"
+        )
+
+
+def _attack_entity_policy_identity(
+    attack_config: dict[str, Any],
+) -> dict[str, Any]:
+    configured_policy = (
+        attack_config.get("fact_extraction", {}).get(
+            "entity_type_policy",
+            {},
+        )
+    )
+    expected_policy = {
+        "protocol": ENTITY_TYPE_POLICY_VERSION,
+        "config_path": "configs/entity_type_policy_v21_r1.yaml",
+        "sha256": ENTITY_TYPE_POLICY_SHA256,
+    }
+    actual_policy = {
+        key: configured_policy.get(key) for key in expected_policy
+    }
+    if actual_policy != expected_policy:
+        raise RuntimeError(
+            "Attack config entity policy mismatch: "
+            f"expected={expected_policy!r} actual={actual_policy!r}"
+        )
+    return {
+        "entity_type_policy_version": ENTITY_TYPE_POLICY_VERSION,
+        "entity_type_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
+        "formal_evidence_scope_version": FORMAL_EVIDENCE_SCOPE_VERSION,
+        "formal_evidence_scope_sha256": FORMAL_EVIDENCE_SCOPE_SHA256,
+    }
+
+
+def _enron_capacity_role_identity(
+    *,
+    scan_config: dict[str, Any],
+    attack_config: dict[str, Any],
+    manual_execution_acknowledged: bool,
+) -> dict[str, Any]:
+    """绑定边界角色、失败 pilot 和用户手动执行确认。"""
+
+    protocol = str(scan_config.get("protocol") or "")
+    if protocol != ENRON_CAPACITY_SCAN_PROTOCOL:
+        if manual_execution_acknowledged:
+            raise RuntimeError(
+                "--manual-user-owned-capacity-run is capacity-study only"
+            )
+        return {}
+    if not manual_execution_acknowledged:
+        raise RuntimeError(
+            "Enron capacity study requires "
+            "--manual-user-owned-capacity-run"
+        )
+    if (
+        scan_config.get("capacity_role_protocol_version")
+        != ENRON_CAPACITY_ROLE_VERSION
+        or scan_config.get("capacity_role_protocol_sha256")
+        != ENRON_CAPACITY_ROLE_SHA256
+    ):
+        raise RuntimeError("Enron capacity role binding drift")
+
+    role_metadata = enron_capacity_role_metadata()
+    role_payload = enron_capacity_role_payload()
+    prior = dict(role_payload["prior_applicability"])
+    report_path = PROJECT_ROOT / str(prior["report_path"])
+    validate_bound_enron_pilot_report(report_path)
+    return {
+        **_attack_entity_policy_identity(attack_config),
+        "enron_capacity_role": role_metadata,
+        "enron_capacity_prior_pilot_report_path": str(
+            report_path.resolve()
+        ),
+        "enron_capacity_prior_pilot_report_sha256": sha256_file(
+            report_path
+        ),
+        "enron_capacity_manual_execution_acknowledged": True,
+    }
+
+
+def _enron_capacity_artifact_identity(
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the immutable boundary-only identity for capacity artifacts."""
+
+    if plan.get("protocol") != ENRON_CAPACITY_SCAN_PROTOCOL:
+        return {}
+    validate_enron_capacity_role_metadata(
+        plan.get("enron_capacity_role")
+    )
+    if plan.get("enron_capacity_manual_execution_acknowledged") is not True:
+        raise RuntimeError(
+            "Enron capacity plan is missing manual execution acknowledgement"
+        )
+    return {
+        "enron_capacity_role": plan["enron_capacity_role"],
+        "formal_role": "boundary_stress_test",
+        "primary_canonical": False,
+        "capacity_pass_effect": "permits_boundary_evaluation_only",
+        "prior_applicability_status": "failed",
+    }
+
+
+def _validate_capacity_cli_overrides(
+    scan_config: dict[str, Any],
+    *,
+    processed_path_override: str | None,
+    output_dir_override: str | None,
+) -> None:
+    """Keep the capacity study on its frozen input and isolated output."""
+
+    if (
+        scan_config.get("protocol") == ENRON_CAPACITY_SCAN_PROTOCOL
+        and (processed_path_override or output_dir_override)
+    ):
+        raise RuntimeError(
+            "Enron capacity study forbids processed/output path overrides"
+        )
+
+
+def _enron_capacity_upstream_identity(
+    *,
+    scan_config: dict[str, Any],
+    data_config: dict[str, Any],
+    processed_path: Path,
+    processed_manifest_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """验证只读 processed 上游和隔离输出目录。"""
+
+    if scan_config.get("protocol") != ENRON_CAPACITY_SCAN_PROTOCOL:
+        return {}
+    binding = dict(scan_config["upstream_processed"])
+    expected_processed = resolve_path(binding["path"])
+    expected_manifest = resolve_path(binding["manifest_path"])
+    expected_output = resolve_path(scan_config["output_dir"])
+    configured_output = resolve_path(
+        data_config["datasets"]["enron"]["source_eligibility_path"]
+    ).parent
+    if (
+        processed_path.resolve() != expected_processed.resolve()
+        or processed_manifest_path.resolve() != expected_manifest.resolve()
+        or output_dir.resolve() != expected_output.resolve()
+        or configured_output.resolve() != expected_output.resolve()
+        or data_config["datasets"]["enron"].get("membership_unit")
+        != "complete_email"
+    ):
+        raise RuntimeError("Enron capacity runtime path isolation drift")
+    processed_hash = sha256_file(processed_path)
+    manifest_hash = sha256_file(processed_manifest_path)
+    if (
+        processed_hash != binding["sha256"]
+        or manifest_hash != binding["manifest_sha256"]
+    ):
+        raise RuntimeError("Enron capacity processed upstream hash drift")
+    manifest = read_json(processed_manifest_path)
+    required_manifest = {
+        "dataset": "enron",
+        "membership_unit": "complete_email",
+        "cleaner_version": "enron_cleaner_v2_preserve_forwarded_body",
+        "chunk_limit": None,
+        "source_limit": None,
+        "raw_unique_source_count": 150000,
+        "unique_source_count": int(binding["unique_source_count"]),
+    }
+    actual_manifest = {
+        key: manifest.get(key) for key in required_manifest
+    }
+    if actual_manifest != required_manifest:
+        raise RuntimeError("Enron capacity processed manifest drift")
+    if int(binding["unique_source_count"]) < int(
+        scan_config["candidate_pool_target_sources"]
+    ):
+        raise RuntimeError("Enron capacity processed universe is below 35k")
+    return {
+        "enron_capacity_upstream_processed_path": str(
+            processed_path.resolve()
+        ),
+        "enron_capacity_upstream_processed_sha256": processed_hash,
+        "enron_capacity_upstream_manifest_path": str(
+            processed_manifest_path.resolve()
+        ),
+        "enron_capacity_upstream_manifest_sha256": manifest_hash,
+        "enron_capacity_upstream_unique_source_count": int(
+            binding["unique_source_count"]
+        ),
+        "enron_capacity_output_dir": str(output_dir.resolve()),
+    }
+
+
+def _entity_policy_release_identity(
+    *,
+    scan_config: dict[str, Any],
+    attack_config: dict[str, Any],
+    release_gate_path: str | None,
+) -> dict[str, Any]:
+    """Require and bind the audited release gate for the new formal protocol."""
+
+    protocol = str(scan_config.get("protocol") or "")
+    if protocol != ENTITY_POLICY_FORMAL_SCAN_PROTOCOL:
+        if release_gate_path:
+            raise RuntimeError(
+                "--release-gate is only valid for the entity-policy formal scan"
+            )
+        return {}
+    if not release_gate_path:
+        raise RuntimeError(
+            "Entity-policy formal scan requires --release-gate; "
+            "replay, pilot, and audit must pass first"
+        )
+    dataset = str(scan_config.get("dataset") or "")
+    validate_primary_formal_dataset(dataset)
+    gate_path = Path(release_gate_path).resolve()
+    gate = validate_entity_policy_release_gate(
+        gate_path,
+        project_root=PROJECT_ROOT,
+        require_current_runtime=True,
+    )
+    return {
+        **_attack_entity_policy_identity(attack_config),
+        "entity_policy_release_gate_path": str(gate_path),
+        "entity_policy_release_gate_sha256": sha256_file(gate_path),
+        "entity_policy_release_gate_identity_sha256": gate[
+            "release_gate_identity_sha256"
+        ],
+        "entity_policy_release_runtime_tree_sha256": gate[
+            "runtime_tree_sha256"
+        ],
+        "formal_dataset_role_scope_version": (
+            FORMAL_DATASET_ROLE_SCOPE_VERSION
+        ),
+        "formal_dataset_role_scope_sha256": (
+            FORMAL_DATASET_ROLE_SCOPE_SHA256
+        ),
+        "formal_dataset_role": "standard_primary",
     }
 
 
@@ -1434,6 +2115,13 @@ def create_scan_plan(
                 ),
             )
         )
+    _enforce_candidate_pool_capacity(
+        scan_protocol,
+        pool_stats,
+        candidate_pool_target_sources=int(
+            scan_config["candidate_pool_target_sources"]
+        ),
+    )
     stats = {
         "input_row_count": universe_stats["input_row_count"],
         "source_count": len(source_order),
@@ -1495,9 +2183,15 @@ def create_scan_plan(
         "deduplicated_input_row_count": len(deduplicated_rows),
         "source_deduplication": deduplication,
     }
-    if scan_protocol == V4_SCAN_PROTOCOL:
+    if scan_protocol in {
+        V4_SCAN_PROTOCOL,
+        ENRON_CAPACITY_SCAN_PROTOCOL,
+        ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+    }:
         if scan_config_path is None:
-            raise RuntimeError("Enron v4 requires an independent scan config")
+            raise RuntimeError(
+                "This scan protocol requires an independent scan config"
+            )
         identity.update(
             {
                 "scan_config_path": str(scan_config_path.resolve()),
@@ -1563,17 +2257,24 @@ def validate_scan_plan(
         "source_order_sha256": sha256_obj(source_order),
         "candidate_benchmark_sha256": sha256_file(candidate_path),
     }
-    if scan_protocol == V4_SCAN_PROTOCOL:
+    if scan_protocol in {
+        V4_SCAN_PROTOCOL,
+        ENRON_CAPACITY_SCAN_PROTOCOL,
+        ENTITY_POLICY_FORMAL_SCAN_PROTOCOL,
+    }:
         if scan_config_path is None:
-            raise RuntimeError("Enron v4 requires an independent scan config")
-        quality_path = Path(str(plan.get("quality_ranking_path") or ""))
+            raise RuntimeError(
+                "This scan protocol requires an independent scan config"
+            )
         current.update(
             {
                 "scan_config_path": str(scan_config_path.resolve()),
                 "scan_config_sha256": sha256_file(scan_config_path),
-                "quality_ranking_sha256": sha256_file(quality_path),
             }
         )
+    if scan_protocol == V4_SCAN_PROTOCOL:
+        quality_path = Path(str(plan.get("quality_ranking_path") or ""))
+        current["quality_ranking_sha256"] = sha256_file(quality_path)
     mismatches = {
         key: {"expected": plan.get(key), "actual": value}
         for key, value in current.items()
@@ -1756,10 +2457,8 @@ def run_pipeline_wave(
     query_manifest = generate_paired_queries_file(
         paired_claims_path=paths["claims"],
         output_path=paths["queries"],
-        query_types=query_cfg.get(
-            "query_types",
-            ["compressed_verification"],
-        ),
+        # Eligibility 只做零 API 结构容量探针；正式 query protocol 在冻结 source 后由 Step 08 生成。
+        query_types=["compressed_verification"],
         resume=False,
         force=False,
     )
@@ -1784,12 +2483,11 @@ def run_pipeline_wave(
         max_prompt_injection=float(
             stealth_cfg.get("max_prompt_injection", 0.5)
         ),
-        min_similarity=float(
-            stealth_cfg.get("min_similarity", 0.03)
-        ),
-        max_similarity=float(
-            stealth_cfg.get("max_similarity", 0.97)
-        ),
+        # 结构容量探针使用旧零 API 查询，不执行正式字面复制门禁。
+        max_five_gram_containment=1.0,
+        max_longest_common_token_run=1_000_000,
+        max_dataset_duplicate_template_rate=1.0,
+        max_dataset_opening_4gram_rate=1.0,
         pairs_per_source=int(plan["minimum_stealth_pairs"]),
         resume=False,
         force=False,
@@ -1845,6 +2543,17 @@ def run_pipeline_wave(
         "status": "complete",
         "protocol": plan["protocol"],
         "scan_plan_sha256": plan["scan_plan_sha256"],
+        "entity_type_policy_version": (
+            plan.get("entity_type_policy_version")
+            or plan.get("entity_policy_version")
+        ),
+        "entity_type_policy_sha256": (
+            plan.get("entity_type_policy_sha256")
+            or plan.get("entity_policy_sha256")
+        ),
+        "entity_policy_release_gate_identity_sha256": plan.get(
+            "entity_policy_release_gate_identity_sha256"
+        ),
         "dataset": dataset,
         "wave_index": wave_index,
         "source_start": source_start,
@@ -1966,6 +2675,14 @@ def load_latest_checkpoint(
             raise RuntimeError(
                 f"Eligibility checkpoint identity drift: {path}"
             )
+        capacity_identity = _enron_capacity_artifact_identity(plan)
+        if any(
+            payload.get(key) != value
+            for key, value in capacity_identity.items()
+        ):
+            raise RuntimeError(
+                f"Enron capacity checkpoint role identity drift: {path}"
+            )
         expected_previous_path = (
             str(previous_path.resolve())
             if previous_path is not None
@@ -2039,6 +2756,7 @@ def write_checkpoint(
         "api_calls_performed": 0,
         "retriever_runs": 0,
     }
+    identity.update(_enron_capacity_artifact_identity(plan))
     if bool(plan.get("exact_target_stop", False)):
         identity.update(
             {
@@ -2147,6 +2865,14 @@ def _validate_finalization_manifest(
         != manifest.get("finalization_identity_sha256")
     ):
         raise RuntimeError("Existing finalization manifest identity drift")
+    capacity_identity = _enron_capacity_artifact_identity(plan)
+    if any(
+        manifest.get(key) != value
+        for key, value in capacity_identity.items()
+    ):
+        raise RuntimeError(
+            "Enron capacity finalization role identity drift"
+        )
     for output in (manifest.get("outputs") or {}).values():
         path = Path(str(output.get("path") or ""))
         if sha256_file(path) != output.get("sha256"):
@@ -2287,6 +3013,15 @@ def finalize_scan(
     common_scan = {
         "scan_protocol": plan["protocol"],
         "scan_plan_sha256": plan["scan_plan_sha256"],
+        "entity_type_policy_version": plan.get(
+            "entity_type_policy_version"
+        ),
+        "entity_type_policy_sha256": plan.get(
+            "entity_type_policy_sha256"
+        ),
+        "entity_policy_release_gate_identity_sha256": plan.get(
+            "entity_policy_release_gate_identity_sha256"
+        ),
         "scan_checkpoint_path": str(checkpoint_path.resolve()),
         "scan_checkpoint_sha256": checkpoint_hash,
         "source_order_sha256": plan["source_order_sha256"],
@@ -2340,6 +3075,7 @@ def finalize_scan(
         "api_calls_performed": 0,
         "retriever_runs": 0,
     }
+    common_scan.update(_enron_capacity_artifact_identity(plan))
     if bool(plan.get("exact_target_stop", False)):
         common_scan.update(
             {
@@ -2495,9 +3231,10 @@ def finalize_scan(
         "query_text_uniqueness_enforced": True,
         "claim_validator_version": VALIDATOR_VERSION,
         "extractor_version": EXTRACTOR_VERSION,
-        "query_types": query_cfg.get(
+        "query_types": ["compressed_verification"],
+        "formal_query_types": query_cfg.get(
             "query_types",
-            ["compressed_verification"],
+            ["diverse_slotted_verification"],
         ),
         "embedding_model": stealth_cfg.get("embedding_model"),
         "embedding_local_files_only": bool(
@@ -2513,11 +3250,11 @@ def finalize_scan(
             "max_prompt_injection": float(
                 stealth_cfg.get("max_prompt_injection", 0.5)
             ),
-            "min_similarity": float(
-                stealth_cfg.get("min_similarity", 0.03)
+            "max_five_gram_containment": float(
+                stealth_cfg.get("max_five_gram_containment", 0.35)
             ),
-            "max_similarity": float(
-                stealth_cfg.get("max_similarity", 0.97)
+            "max_longest_common_token_run": int(
+                stealth_cfg.get("max_longest_common_token_run", 8)
             ),
         },
         "processed_path": plan["processed_path"],
@@ -2564,6 +3301,7 @@ def finalize_scan(
         "scan_plan_sha256": plan["scan_plan_sha256"],
         "scan_checkpoint_sha256": sha256_file(checkpoint_path),
         "retained_source_end": retained_source_end,
+        **_enron_capacity_artifact_identity(plan),
         "outputs": {
             name: {
                 "path": str(canonical_paths[name].resolve()),
@@ -2667,7 +3405,36 @@ def main() -> int:
         dict(raw_scan_config),
         selected_cap=int(args.cap),
     )
-    calibration = _calibration_identity(attack_config)
+    if (
+        scan_config.get("dataset") is not None
+        and scan_config.get("dataset") != args.dataset
+    ):
+        raise RuntimeError(
+            "Eligibility scan config/dataset mismatch: "
+            f"config={scan_config.get('dataset')!r} "
+            f"cli={args.dataset!r}"
+        )
+    _validate_capacity_cli_overrides(
+        scan_config,
+        processed_path_override=args.processed_path,
+        output_dir_override=args.output_dir,
+    )
+    calibration = {
+        **_calibration_identity(attack_config),
+        **_sampling_frame_identity(scan_config),
+        **_enron_capacity_role_identity(
+            scan_config=scan_config,
+            attack_config=attack_config,
+            manual_execution_acknowledged=bool(
+                args.manual_user_owned_capacity_run
+            ),
+        ),
+        **_entity_policy_release_identity(
+            scan_config=scan_config,
+            attack_config=attack_config,
+            release_gate_path=args.release_gate,
+        ),
+    }
     processed_path, processed_manifest, output_dir = (
         _resolve_runtime_paths(args, data_config, scan_config)
     )
@@ -2679,6 +3446,15 @@ def main() -> int:
     ):
         if not required_path.is_file():
             raise FileNotFoundError(required_path)
+    calibration.update(
+        _enron_capacity_upstream_identity(
+            scan_config=scan_config,
+            data_config=data_config,
+            processed_path=processed_path,
+            processed_manifest_path=processed_manifest,
+            output_dir=output_dir,
+        )
+    )
     plan_path = _plan_paths(output_dir)["plan"]
 
     if args.resume:

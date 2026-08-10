@@ -1,0 +1,98 @@
+policy_version: pcv_entity_policy_v21_r1
+
+types:
+  URL: {family: identifier, semantic_required: false, surface_rule: url, context_rule: url_context, replacement_strategy: perturb_url, format_rule: url}
+  EMAIL: {family: identifier, semantic_required: false, surface_rule: email, context_rule: email_context, replacement_strategy: perturb_email, format_rule: email}
+  PHONE: {family: identifier, semantic_required: false, surface_rule: phone, context_rule: phone_context, replacement_strategy: perturb_phone, format_rule: phone}
+  SECTION_ID: {family: identifier, semantic_required: false, surface_rule: section_id, context_rule: section_context, replacement_strategy: bump_section_id, format_rule: section_id}
+  IDENTIFIER: {family: identifier, semantic_required: false, surface_rule: identifier, context_rule: identifier_context, replacement_strategy: perturb_identifier, format_rule: identifier}
+  MONEY: {family: structured_numeric, semantic_required: false, surface_rule: money, context_rule: financial_context, replacement_strategy: shift_number, format_rule: money}
+  MEDICAL_VALUE: {family: structured_numeric, semantic_required: false, surface_rule: medical_value, context_rule: medical_context, replacement_strategy: shift_number, format_rule: counted_unit}
+  PERCENT: {family: structured_numeric, semantic_required: false, surface_rule: percent, context_rule: percent_context, replacement_strategy: shift_number, format_rule: percent}
+  NUMERIC_VALUE: {family: structured_numeric, semantic_required: false, surface_rule: numeric_value, context_rule: numeric_context, replacement_strategy: shift_number, format_rule: numeric}
+  DATE: {family: date_time, semantic_required: false, surface_rule: date, context_rule: date_context, replacement_strategy: shift_date, format_rule: date}
+  TIME: {family: date_time, semantic_required: false, surface_rule: time, context_rule: time_context, replacement_strategy: shift_time, format_rule: time}
+  DURATION: {family: date_time, semantic_required: false, surface_rule: duration, context_rule: duration_context, replacement_strategy: shift_duration, format_rule: duration}
+  PERSON:
+    family: named_entity
+    semantic_required: true
+    allowed_subtypes: [initialed_person_name, titled_person_name, single_person_name, multi_token_person_name]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+  ORG:
+    family: named_entity
+    semantic_required: true
+    allowed_subtypes: [corporate_organization, academic_or_medical_organization, government_organization, named_organization]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+  LOCATION:
+    family: named_entity
+    semantic_required: true
+    allowed_subtypes: [compound_geographic_location, definite_article_location, named_geographic_location]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+  PRODUCT:
+    family: domain_term
+    semantic_required: true
+    allowed_subtypes: [versioned_or_numbered_product, software_or_service_product, named_product]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+  PROJECT_NAME:
+    family: domain_term
+    semantic_required: true
+    allowed_subtypes: [acronym_project_name, titled_project_name]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+  CONTRACT_TERM:
+    family: domain_term
+    semantic_required: true
+    allowed_subtypes: [named_agreement, contractual_plan_or_policy, defined_contract_term]
+    surface_rule: semantic_authoritative
+    context_rule: frozen_semantic_resolution
+    replacement_strategy: semantic_subtype_pool
+    format_rule: semantic_format_signature
+
+semantic_schema:
+  target_types:
+    PERSON: "A specific natural person or a person's full or abbreviated name; exclude roles, liabilities, plans, methods, products, and organizations."
+    ORG: "A specific company, government body, university, laboratory, nonprofit, or other named organization; exclude methods, metrics, proteins, cell lines, document headings, legal plans, and generic departments."
+    LOCATION: "A named geographic place such as a country, state, province, city, county, region, or physical geographic site; exclude methods, organizations, financial concepts, and product names."
+    PRODUCT: "A specific named commercial product, software product, platform, device, or service; exclude organizations, scientific methods, biological entities, legal doctrines, and generic common nouns."
+    PROJECT_NAME: "The proper name of a specific research, engineering, business, or public project, programme, initiative, study, or named operation; exclude paper headings, methods, organizations, products, and generic activities."
+    CONTRACT_TERM: "A specific legal agreement name, defined contractual term, covenant, clause, plan governed by a contract, or named legal instrument; exclude ordinary common nouns, accounting metrics, document headings, and roles."
+  target_subtypes:
+    COMMERCIAL_PRODUCT: "A specific branded commercial product, model, platform, device, or marketed service with a proper name."
+    SOFTWARE_OR_OPERATIONAL_SYSTEM: "A specific named software system, reporting system, control system, detection system, ordering system, enterprise platform, or operational information service; exclude generic methods and unnamed infrastructure."
+    NAMED_SERVICE: "A specific proper-named service offering or information service, not a generic activity, organization, legal service category, or method."
+    NAMED_DEVICE_OR_TOOL: "A specific named device, instrument, toolkit, console, or operational tool; exclude assays, algorithms, proteins, and generic equipment."
+
+semantic_replacement_candidates:
+  initialed_person_name: [J. Ellis, T. Morgan, A. Carter, R. Bennett]
+  titled_person_name: [Dr. Jordan Ellis, Prof. Taylor Morgan, Dr. Alex Carter]
+  single_person_name: [Jordan, Taylor, Morgan, Riley, Avery]
+  multi_token_person_name: [Jordan Ellis, Taylor Morgan, Alex Carter, Morgan Lee, Casey Brooks, Riley Bennett, Avery Sinclair, Dakota Reyes, Quinn Harper, Sawyer Bishop]
+  corporate_organization: [Orion Services Inc, Northstar Logistics LLC, Summit Data Corp, Vanta Industries Ltd]
+  academic_or_medical_organization: [Northbridge University, Harborview Medical Institute, Cedarline Research Hospital, Summit Technical College]
+  government_organization: [Northland Regulatory Commission, Westbridge Public Health Agency, Cedar State Department, Harbor County Authority]
+  named_organization: [Orion Services Inc, Northstar Logistics LLC, Harborview Group, Summit Data Corp, Cedarline Partners, Vanta Industries, Brightpeak Holdings, Ironwood Associates]
+  compound_geographic_location: ["Austin, Texas", "Toronto, Canada", "Dublin, Ireland", "Sydney, Australia"]
+  definite_article_location: [United Kingdom, United Arab Emirates, Netherlands, Philippines]
+  named_geographic_location: [California, Texas, New York, London, Canada, Germany, Singapore, Tokyo, Sydney, Toronto, Paris, Dublin]
+  versioned_or_numbered_product: [Atlas 4, Beacon X2, Meridian 7, Nova 3]
+  software_or_service_product: [Atlas Platform, Beacon Service, Meridian Software, Nova Suite]
+  named_product: [Atlas Platform, Beacon System, Meridian Service, Nova Device, Helix Suite, Quanta Engine, Lumen Toolkit, Vertex Console]
+  acronym_project_name: [ATLAS, BEACON, MERIDIAN, NOVA]
+  titled_project_name: [Project Atlas, Project Beacon, Program Meridian, Initiative Nova, Project Helix, Program Vega, Initiative Lumen, Project Vertex]
+  named_agreement: [Northstar Services Agreement, Harborview License Agreement, Cedarline Supply Contract, Summit Facility Lease]
+  contractual_plan_or_policy: [Northstar Incentive Plan, Harborview Retention Plan, Cedarline Compensation Policy, Summit Benefit Plan]
+  defined_contract_term: [Renewal Period, Termination Event, Permitted Transfer, Notice Period]

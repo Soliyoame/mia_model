@@ -15,13 +15,13 @@ from src.paired_claims.validator import (
 
 
 class AttackFirstCounterfactualTests(unittest.TestCase):
-    def test_protocol_versions_are_frozen_as_rc2(self) -> None:
+    def test_protocol_versions_are_frozen_as_entity_policy_r1(self) -> None:
         self.assertEqual(
-            "v6_3_attack_first_counterfactual_rc2",
+            "v21_entity_policy_counterfactual_r1",
             ATTACK_FIRST_GENERATION_PROTOCOL,
         )
         self.assertEqual(
-            "local_claim_pair_v6_3_attack_first_rc2",
+            "local_claim_pair_v21_entity_policy_r1",
             VALIDATOR_VERSION,
         )
 

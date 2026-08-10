@@ -14,9 +14,11 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from itertools import islice
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 try:
@@ -26,16 +28,18 @@ except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
 from ..rag.embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model, cosine_similarity
-from ..utils.hash import sha256_obj
+from ..utils.hash import sha256_file, sha256_obj, sha256_text
 from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from .diverse_slot_questions import QUERY_TYPE as DIVERSE_QUERY_TYPE
+from .lexical_overlap import diversity_statistics, lexical_copy_scores, normalized_tokens
 
 
 LOGGER = get_logger(__name__)
 
 
 def _select_text_unique_pairs(
-    ranked: list[tuple[tuple[float, float, float, str], str, list[dict[str, Any]]]],
+    ranked: list[tuple[tuple[Any, ...], str, list[dict[str, Any]]]],
     required: int,
 ) -> tuple[list[int], int]:
     """Return the best-ranked compatible pair indices and duplicate count."""
@@ -107,7 +111,7 @@ def select_fixed_pairs_per_source(
     selected_pair_ids: list[str] = []
     duplicate_query_text_pairs = 0
     for source_key, source_pairs in sorted(by_source.items()):
-        ranked: list[tuple[tuple[float, float, float, str], str, list[dict[str, Any]]]] = []
+        ranked: list[tuple[tuple[Any, ...], str, list[dict[str, Any]]]] = []
         for pair_key, members in source_pairs.items():
             claim_types = sorted(str(member.get("claim_type")) for member in members)
             if claim_types != ["counterfactual", "true"]:
@@ -118,8 +122,21 @@ def select_fixed_pairs_per_source(
                 continue
             quality = min(float(member.get("quality_weight") or 0.0) for member in members)
             naturalness = min(float(member.get("naturalness_score") or 0.0) for member in members)
-            similarity = sum(float(member.get("query_doc_similarity") or 0.0) for member in members) / 2.0
-            ranked.append(((-quality, -naturalness, abs(similarity - 0.5), pair_key), pair_key, members))
+            lexical_copy = max(
+                float(member.get("five_gram_containment") or 0.0)
+                for member in members
+            )
+            semantic_relevance = min(
+                float(member.get("query_chunk_similarity") or member.get("query_doc_similarity") or 0.0)
+                for member in members
+            )
+            ranked.append(
+                (
+                    (-quality, -naturalness, lexical_copy, -semantic_relevance, pair_key),
+                    pair_key,
+                    members,
+                )
+            )
         ranked.sort(key=lambda item: item[0])
         selected_indices, source_duplicate_pairs = _select_text_unique_pairs(ranked, required)
         duplicate_query_text_pairs += source_duplicate_pairs
@@ -289,35 +306,61 @@ def _score_query_batch_with_embedder(
 
 def _iter_query_scores(
     rows: Iterable[dict[str, Any]],
+    benchmark_lookup: dict[str, str],
     embedder,
     batch_size: int,
 ) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    """按固定批次编码 query/reference，并保持原始行顺序。"""
+    """批量记录 query→claim 与 query→原始 chunk 的语义诊断。"""
 
     if batch_size < 1:
         raise ValueError("embedding_batch_size must be a positive integer")
     row_iterator = iter(rows)
     while batch_rows := list(islice(row_iterator, batch_size)):
-        pairs = [
-            (
-                str(row["query"]),
-                str(
-                    row.get("source_text")
-                    or row.get("true_claim")
-                    or row.get("claim")
-                    or row.get("conflict_text")
-                    or row.get("query")
-                    or ""
+        triples: list[tuple[str, str, str]] = []
+        for row in batch_rows:
+            source_key = str(
+                row.get("source_key") or row.get("source_id") or row.get("doc_id") or ""
+            )
+            chunk = benchmark_lookup.get(source_key)
+            if chunk is None:
+                if str(row.get("query_type") or "") == DIVERSE_QUERY_TYPE:
+                    raise RuntimeError(
+                        f"Original benchmark chunk is missing for diverse query source {source_key!r}"
+                    )
+                chunk = str(row.get("source_text") or row.get("true_claim") or "")
+            claim = str(row.get("claim") or row.get("true_claim") or "")
+            triples.append((str(row["query"]), claim, chunk))
+
+        flattened = [text for triple in triples for text in triple]
+        vectors = embedder.encode(flattened)
+        expected_vectors = len(triples) * 3
+        if len(vectors) != expected_vectors:
+            raise ValueError(
+                "Embedding backend returned an unexpected number of vectors: "
+                f"expected={expected_vectors}, actual={len(vectors)}"
+            )
+        for index, (row, (query, _, chunk)) in enumerate(zip(batch_rows, triples, strict=True)):
+            query_vector = vectors[index * 3]
+            lower = query.lower()
+            lexical = lexical_copy_scores(
+                str(row.get("question_template") or query),
+                chunk,
+                entity_values=(
+                    str(row.get("original_entity") or row.get("expected_entity") or ""),
+                    str(row.get("paired_counterfactual_entity") or ""),
                 ),
             )
-            for row in batch_rows
-        ]
-        for row, scores in zip(
-            batch_rows,
-            _score_query_batch_with_embedder(pairs, embedder),
-            strict=True,
-        ):
-            yield row, scores
+            yield row, {
+                "naturalness_score": _naturalness_score(query),
+                "context_probe_score": 1.0 if CONTEXT_PROBE_RE.search(query) else 0.0,
+                "prompt_injection_score": 1.0 if INJECTION_RE.search(query) else 0.0,
+                "query_claim_similarity": cosine_similarity(query_vector, vectors[index * 3 + 1]),
+                "query_chunk_similarity": cosine_similarity(query_vector, vectors[index * 3 + 2]),
+                "dangerous_hits": [
+                    pattern for pattern in DANGEROUS_PATTERNS if re.search(pattern, lower)
+                ],
+                **lexical,
+            }
 
 
 def _naturalness_score(query: str) -> float:
@@ -350,6 +393,7 @@ def filter_stealth_queries(
     queries_path: str | Path,
     output_path: str | Path,
     rejected_path: str | Path | None = None,
+    benchmark_path: str | Path | None = None,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_local_files_only: bool = False,
     min_naturalness: float = 0.55,
@@ -357,6 +401,10 @@ def filter_stealth_queries(
     max_prompt_injection: float = 0.5,
     min_similarity: float = 0.05,
     max_similarity: float = 0.95,
+    max_five_gram_containment: float = 0.35,
+    max_longest_common_token_run: int = 8,
+    max_dataset_duplicate_template_rate: float = 0.01,
+    max_dataset_opening_4gram_rate: float = 0.15,
     pairs_per_source: int | None = None,
     embedding_batch_size: int = 256,
     resume: bool = True,
@@ -378,8 +426,9 @@ def filter_stealth_queries(
         min_naturalness:      自然度下限(更低则拒)。
         max_context_probe:    上下文探测分上限(更高则拒)。
         max_prompt_injection: 注入分上限(更高则拒)。
-        min_similarity:       与文档相似度下限(太低=跑题,拒)。
-        max_similarity:       与文档相似度上限(太高=几乎照抄文档,易暴露,拒)。
+        min_similarity/max_similarity: 仅兼容旧调用，当前协议忽略。
+        max_five_gram_containment: 实体遮蔽后 query 5-gram 在原始 chunk 中的比例上限。
+        max_longest_common_token_run: 实体遮蔽后最长连续公共 token 串上限。
         resume:               断点续跑:产物已存在则跳过。
         force:                强制重跑。
     返回:
@@ -387,9 +436,36 @@ def filter_stealth_queries(
         若跳过则带 skipped_existing。
     """
     output = Path(output_path)
+    del min_similarity, max_similarity  # 兼容旧调用；embedding 不再参与隐蔽性拒绝。
     # 没指定拒绝文件路径就自动命名。
     rejected = Path(rejected_path) if rejected_path else output.with_name(output.stem + "_rejected.jsonl")
     manifest_path = output.with_suffix(".manifest.json")
+    if force:
+        for path in (output, rejected, manifest_path):
+            path.unlink(missing_ok=True)
+    benchmark_hash = (
+        sha256_file(benchmark_path)
+        if benchmark_path is not None and Path(benchmark_path).is_file()
+        else None
+    )
+    filter_identity = {
+        "protocol": "lexical_chunk_stealth_v1",
+        "queries_hash": (
+            sha256_file(queries_path) if Path(queries_path).is_file() else None
+        ),
+        "benchmark_hash": benchmark_hash,
+        "embedding_model": embedding_model,
+        "embedding_local_files_only": bool(embedding_local_files_only),
+        "min_naturalness": float(min_naturalness),
+        "max_context_probe": float(max_context_probe),
+        "max_prompt_injection": float(max_prompt_injection),
+        "max_five_gram_containment": float(max_five_gram_containment),
+        "max_longest_common_token_run": int(max_longest_common_token_run),
+        "max_dataset_duplicate_template_rate": float(max_dataset_duplicate_template_rate),
+        "max_dataset_opening_4gram_rate": float(max_dataset_opening_4gram_rate),
+        "pairs_per_source": pairs_per_source,
+    }
+    filter_identity_hash = sha256_obj(filter_identity)
     # 断点续跑。
     if resume and not force and output.exists() and output.stat().st_size > 0 and manifest_path.exists():
         existing = read_json(manifest_path)
@@ -406,10 +482,55 @@ def filter_stealth_queries(
                 "Existing stealth queries do not enforce unique query text per source. "
                 "Rebuild Step 09 with --force."
             )
+        if str(existing.get("filter_identity_hash") or "") != filter_identity_hash:
+            raise RuntimeError(
+                "Existing stealth queries do not match the lexical-chunk filter identity. "
+                "Rebuild Step 09 with --force."
+            )
         LOGGER.info("Skipping existing stealth filtered queries: %s", output)
         return {**existing, "output_path": str(output), "skipped_existing": True}
 
-    # 只加载一次向量模型,后面所有查询复用它。
+    query_rows = list(read_jsonl(queries_path))
+    formal_diverse = any(
+        str(row.get("query_type") or "") == DIVERSE_QUERY_TYPE
+        for row in query_rows
+    )
+    if formal_diverse:
+        if benchmark_path is None:
+            raise RuntimeError(
+                "diverse_slotted_verification requires benchmark_path for original-chunk binding"
+            )
+    benchmark_lookup: dict[str, str] = {}
+    if benchmark_path is not None:
+        for benchmark_row in read_jsonl(benchmark_path):
+            source_key = str(
+                benchmark_row.get("source_key")
+                or benchmark_row.get("source_id")
+                or benchmark_row.get("doc_id")
+                or ""
+            )
+            source_text = str(benchmark_row.get("text") or "")
+            if not source_key or not source_text:
+                raise RuntimeError("Benchmark row is missing source identity or original text")
+            if source_key in benchmark_lookup:
+                raise RuntimeError(f"Duplicate benchmark source_key: {source_key}")
+            benchmark_lookup[source_key] = source_text
+
+    pair_templates: dict[str, str] = {}
+    for row in query_rows:
+        pair_key = f"{row.get('pair_id')}::{row.get('query_type') or 'default'}"
+        template = str(row.get("question_template") or "")
+        if template:
+            existing_template = pair_templates.setdefault(pair_key, template)
+            if existing_template != template:
+                raise RuntimeError(f"Paired queries use inconsistent question templates: {pair_key}")
+    diversity = diversity_statistics(list(pair_templates.values()))
+    if pair_templates and diversity["duplicate_template_rate"] > max_dataset_duplicate_template_rate:
+        raise RuntimeError(f"Dataset duplicate-template gate failed: {diversity}")
+    if pair_templates and diversity["dominant_opening_4gram_rate"] > max_dataset_opening_4gram_rate:
+        raise RuntimeError(f"Dataset opening-concentration gate failed: {diversity}")
+
+    # 只加载一次向量模型，embedding 仅记录语义保真与检索相关度。
     embedder = build_embedding_model(
         embedding_model,
         backend="auto",
@@ -418,7 +539,8 @@ def filter_stealth_queries(
     # 第一遍:逐条打分并做"单条自检",记录每条自身是否触发拒绝条件(此时还不下最终结论)。
     scored: list[dict[str, Any]] = []
     score_iterator = _iter_query_scores(
-        read_jsonl(queries_path),
+        query_rows,
+        benchmark_lookup,
         embedder,
         int(embedding_batch_size),
     )
@@ -434,10 +556,10 @@ def filter_stealth_queries(
             self_reason = "context_probe"
         elif scores["naturalness_score"] < min_naturalness:
             self_reason = "low_naturalness"
-        elif scores["query_doc_similarity"] < min_similarity:
-            self_reason = "too_dissimilar"
-        elif scores["query_doc_similarity"] > max_similarity:
-            self_reason = "too_similar"
+        elif scores["five_gram_containment"] > max_five_gram_containment:
+            self_reason = "five_gram_copy"
+        elif scores["longest_common_token_run"] > max_longest_common_token_run:
+            self_reason = "longest_copy_run"
         # 把分数和单条自检结果并进原记录(self_reject_reason 仅为中间诊断字段)。
         scored.append(
             {
@@ -445,7 +567,24 @@ def filter_stealth_queries(
                 "naturalness_score": scores["naturalness_score"],
                 "context_probe_score": scores["context_probe_score"],
                 "prompt_injection_score": scores["prompt_injection_score"],
-                "query_doc_similarity": scores["query_doc_similarity"],
+                "query_claim_similarity": scores["query_claim_similarity"],
+                "query_chunk_similarity": scores["query_chunk_similarity"],
+                # 兼容现有离线分析字段；语义相似度不再是隐蔽性门禁。
+                "query_doc_similarity": scores["query_chunk_similarity"],
+                "five_gram_containment": scores["five_gram_containment"],
+                "longest_common_token_run": scores["longest_common_token_run"],
+                "lexical_masked_query": scores["masked_query"],
+                "reference_chunk_hash": sha256_text(
+                    benchmark_lookup.get(
+                        str(
+                            row.get("source_key")
+                            or row.get("source_id")
+                            or row.get("doc_id")
+                            or ""
+                        ),
+                        str(row.get("source_text") or row.get("true_claim") or ""),
+                    )
+                ),
                 "self_reject_reason": self_reason,
             }
         )
@@ -500,8 +639,53 @@ def filter_stealth_queries(
     accepted_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in accepted_rows})
     rejected_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in rejected_rows})
 
+    if formal_diverse and pairs_per_source is not None:
+        expected_sources = {
+            str(row.get("source_key") or row.get("source_id") or "")
+            for row in query_rows
+        }
+        retained_sources = {
+            str(row.get("source_key") or row.get("source_id") or "")
+            for row in accepted_rows
+        }
+        missing_sources = sorted(expected_sources - retained_sources)
+        if missing_sources:
+            write_jsonl(rejected_rows, rejected)
+            close_embedder = getattr(embedder, "close", None)
+            if callable(close_embedder):
+                close_embedder()
+            write_json(
+                {
+                    "status": "failed_closed",
+                    "reason": "fixed_budget_or_gate_failure",
+                    "missing_source_count": len(missing_sources),
+                    "missing_sources": missing_sources,
+                    "input_queries_hash": filter_identity["queries_hash"],
+                    "input_benchmark_hash": benchmark_hash,
+                    "filter_identity": filter_identity,
+                    "filter_identity_hash": filter_identity_hash,
+                },
+                manifest_path,
+            )
+            raise RuntimeError(
+                "Diverse Step 09 failed closed instead of deleting pairs/sources: "
+                f"{len(missing_sources)} sources lost the fixed query budget"
+            )
+
     write_jsonl(accepted_rows, output)
     write_jsonl(rejected_rows, rejected)
+    audit_rows = [
+        row for row in scored if str(row.get("claim_type") or "") == "true"
+    ]
+    word_counts = [
+        len(normalized_tokens(str(row.get("question_template") or row.get("query") or "")))
+        for row in audit_rows
+    ]
+    five_gram_values = [float(row["five_gram_containment"]) for row in audit_rows]
+    copy_runs = [int(row["longest_common_token_run"]) for row in audit_rows]
+    reject_reasons = Counter(
+        str(row.get("reject_reason") or "") for row in rejected_rows
+    )
     manifest = {
         "output_path": str(output),
         "rejected_path": str(rejected),
@@ -517,6 +701,30 @@ def filter_stealth_queries(
         "embedding_model": embedding_model,
         "embedding_local_files_only": bool(embedding_local_files_only),
         "embedding_batch_size": int(embedding_batch_size),
+        "embedding_role": "diagnostic_only",
+        "lexical_copy_protocol": "entity_masked_query_vs_original_chunk",
+        "max_five_gram_containment": float(max_five_gram_containment),
+        "max_longest_common_token_run": int(max_longest_common_token_run),
+        "lexical_metrics": {
+            "five_gram_containment_median": median(five_gram_values) if five_gram_values else None,
+            "longest_common_token_run_median": median(copy_runs) if copy_runs else None,
+            "longest_common_token_run_max": max(copy_runs, default=None),
+        },
+        "question_word_count": {
+            "min": min(word_counts, default=None),
+            "median": median(word_counts) if word_counts else None,
+            "max": max(word_counts, default=None),
+            "values": word_counts,
+        },
+        "diversity": diversity,
+        "reject_reason_counts": dict(reject_reasons),
+        "filter_identity": filter_identity,
+        "filter_identity_hash": filter_identity_hash,
+        "input_queries_hash": filter_identity["queries_hash"],
+        "input_benchmark_hash": benchmark_hash,
+        "output_hash": sha256_file(output),
+        "rejected_output_hash": sha256_file(rejected),
+        "query_types": sorted({str(row.get("query_type") or "") for row in accepted_rows}),
     }
     write_json(manifest, output.with_suffix(".manifest.json"))
     LOGGER.info("Stealth filter accepted=%s rejected=%s", len(accepted_rows), len(rejected_rows))

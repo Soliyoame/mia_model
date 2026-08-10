@@ -454,8 +454,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_prompt_injection=float(
             stealth_config.get("max_prompt_injection", 0.5)
         ),
-        min_similarity=float(stealth_config.get("min_similarity", 0.03)),
-        max_similarity=float(stealth_config.get("max_similarity", 0.97)),
+        # 本脚本只用零 API 旧查询筛 source 容量；正式问句由冻结 source 后的 Step 08 生成。
+        max_five_gram_containment=1.0,
+        max_longest_common_token_run=1_000_000,
+        max_dataset_duplicate_template_rate=1.0,
+        max_dataset_opening_4gram_rate=1.0,
         pairs_per_source=int(args.pairs_per_source),
         resume=not args.force,
         force=args.force,

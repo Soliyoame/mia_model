@@ -1,0 +1,74 @@
+# Isolated v21 Enron rebuild.  The complete CSV is only the sampling frame;
+# expensive eligibility runs on a frozen 30,000-source processed pool.
+
+logging:
+  level: INFO
+  file: artifacts/v21/enron_full/logs/preprocess.log
+
+paths:
+  processed_dir: artifacts/v21/enron_full/processed
+  splits_dir: artifacts/v21/enron_full/splits
+  benchmark_dir: artifacts/v21/enron_full/benchmarks
+
+dataset_paths:
+  enron:
+    splits_dir: artifacts/v21/enron_full/splits/enron
+
+preprocess:
+  min_chars: 300
+  max_chars: 2000
+  target_chars: 1000
+  require_entity: true
+  require_numeric: false
+  min_entities: 2
+
+split:
+  seed: 42
+  source_exclusive: true
+  scale: formal
+  formal:
+    target_unit: sources
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Spoof_Seed: 0
+    Reserve: 250
+    per_source_cap: null
+
+enron_sampling_frame:
+  protocol: enron_full_csv_hash_sample_v1
+  raw_csv_path: datasets/raw/extracted/enron/emails.csv
+  expected_raw_records: 517401
+  expected_mailbox_users: 150
+  selection_seed: 42
+  selection_method: sha256(seed,dataset,message_sha256)
+  exact_message_deduplication: true
+  raw_screening_target_sources: 150000
+  selected_jsonl_path: artifacts/v21/enron_full/sampling/enron_screening_pool_150000.jsonl
+  selection_index_path: artifacts/v21/enron_full/sampling/enron_selection_index_150000.jsonl
+  pass_manifest_path: artifacts/v21/enron_full/sampling/enron_selection_pass1.json
+  manifest_path: artifacts/v21/enron_full/sampling/enron_sampling_manifest.json
+
+eligibility_scan:
+  protocol: v21_enron_full_corpus_fixed_pool_v1
+  selection_seed: 42
+  wave_size: 250
+  candidate_pool_multiplier: null
+  candidate_pool_target_sources: 30000
+  candidate_pool_shortfall_policy: fail
+  scan_full_candidate_pool: true
+  target_query_eligible_sources: 2250
+  required_formal_sources: 2250
+  max_chunks_per_source: 5
+  fallback_chunk_caps: []
+  minimum_valid_claims: 3
+  minimum_stealth_pairs: 3
+  deduplicate_complete_sources: true
+  sampling_manifest_path: artifacts/v21/enron_full/sampling/enron_sampling_manifest.json
+
+datasets:
+  enron:
+    input_path: artifacts/v21/enron_full/sampling/enron_screening_pool_150000.jsonl
+    limit: null
+    source_limit: null
+    source_eligibility_path: artifacts/v21/enron_full/eligibility/cap_5/enron/enron_query_eligible_sources.json
+    membership_unit: complete_email

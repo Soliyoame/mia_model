@@ -58,6 +58,8 @@ configs/*secret*.yaml
 datasets/
 output/
 models/
+# MEntA NLI weights and their local verification manifest stay local.
+/models/menta/
 checkpoints/
 runs/
 wandb/
