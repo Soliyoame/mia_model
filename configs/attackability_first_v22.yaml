@@ -1,0 +1,155 @@
+protocol_version: pcv-mia-v22
+method_version: pcv-attackability-first-v22
+status: implementation_frozen_zero_external_calls
+output_root: artifacts/v22
+selection_seed: 42
+
+scope:
+  formal_entity_types: [CONTRACT_TERM, LOCATION, ORG, PERSON, PRODUCT]
+  structured_high_signal_types: [DATE, MONEY, EMAIL, PHONE, IDENTIFIER]
+  diagnostic_only_types: [PROJECT_NAME]
+  target_formal_sources: 2250
+  split_counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+
+candidate_extraction:
+  max_candidates_per_source: 16
+  max_chunks_per_source: 5
+  counterfactual_candidates_per_entity: 3
+  required_pairs_per_source: 3
+  maximum_pairs_per_original_entity: 2
+  require_distinct_fact_signatures: true
+  semantic_resolver_is_final_veto: false
+
+routing:
+  model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+  model_lock_sha256: 9bce3d3dc0a2c21566a8cce93e07350d11b774c92d55d44d88099f5e1f1831b8
+  semantic_schema_sha256: 1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb
+  strategy: high_precision_rule_then_single_model
+  single_model_role: gliner2_base
+  single_model_id: fastino/gliner2-base-v1
+  single_model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+  overlap_threshold: 0.80
+  minimum_prediction_score: 0.65
+  no_prediction_policy: high_precision_rule_else_declared_type_fallback
+  reroute_policy: discard_old_counterfactual_and_regenerate
+  model_miss_is_not_a_veto: true
+  pubmed_biomedical_model_enabled: false
+
+semantic_runtime:
+  enabled: true
+  protocol: pcv_v22_single_router_model
+  model_role: gliner2_base
+  model_id: fastino/gliner2-base-v1
+  model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+  model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+  local_files_only: true
+  device: cuda
+  use_fp16: true
+  batch_size: 8
+  minimum_prediction_score: 0.65
+
+utility:
+  formula_version: attackability_utility_v22_fixed_weights
+  weights:
+    grounded_fact_stability: 0.25
+    corpus_specificity: 0.20
+    counterfactual_naturalness: 0.20
+    verification_discriminativeness: 0.15
+    lexical_anchor_strength: 0.10
+    parser_friendliness: 0.10
+  threshold_grid: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
+  threshold_selection: maximum_retention_subject_to_precision_at_least_0_90
+  attack_auc_visible: false
+  victim_response_visible: false
+  membership_visible: false
+
+source_pools:
+  edgar:
+    declared_raw_capacity: 5480
+    processed_path: artifacts/v21/processed/edgar.jsonl
+    processed_sha256: ad50dbc5ab62bf6570179688081ab970e210f82396a269a63b48295de0beb2df
+    expected_processed_source_count: 5210
+    order_mode: derive_complete_and_verify_v21_prefix
+    frozen_prefix_path: artifacts/v21/eligibility/cap_5/edgar/scan_source_order.json
+    frozen_prefix_sha256: 928002b988a43993d34f1cc41332301bdd9cf3d30bfed218fe5a6f8434cd1bdb
+  enron:
+    declared_raw_capacity: 35000
+    processed_path: artifacts/v21/enron_full/processed/enron.jsonl
+    processed_sha256: 47ef7d2fee45d519618dddc9a1be4be6aafcf69d862cd64f35a109081419a19e
+    expected_processed_source_count: 35000
+    order_mode: exact_existing_order
+    frozen_order_path: artifacts/v21/enron_capacity_r2/eligibility/cap_5/enron/scan_source_order.json
+    frozen_order_sha256: 6e743943cacd7d0ffc02e1687952f3cba5238f4794917479b05fb41bb46393a3
+  pubmed:
+    declared_raw_capacity: 50000
+    processed_path: artifacts/v21/processed/pubmed.jsonl
+    processed_sha256: f8b412d694e1f52762e85c7eb72de5bd546ff9e8382dfdbc095b6ff792ee4cfa
+    expected_processed_source_count: 47950
+    order_mode: derive_complete_and_verify_v21_prefix
+    frozen_prefix_path: artifacts/v21/eligibility/cap_5/pubmed/scan_source_order.json
+    frozen_prefix_sha256: 21672c386c6f0a5dffbf58a508bb2d724b257fa228c21aa4015786bbf2da3901
+
+calibration:
+  projection_sources_per_dataset: 1000
+  cells: 15
+  real_rows_per_cell: 16
+  structural_controls_per_cell: 4
+  total_rows: 300
+  user_base_review_per_cell: 5
+  user_base_review_contains_all_controls: true
+  assistant_reviews_all_rows: true
+  user_reviews_all_assistant_uncertain: true
+  gates:
+    structural_negative_rejection_rate: 1.0
+    minimum_assistant_user_agreement: 0.90
+    minimum_user_attack_usable_precision: 0.85
+    threshold_minimum_precision: 0.90
+    minimum_projected_eligible_sources_per_dataset: 2500
+
+fresh_audit:
+  total_rows: 150
+  rows_per_dataset_type: 10
+  excludes_calibration_ids: true
+  failure_policy: new_protocol_identity_required
+  minimum_attack_usable_rate: 0.90
+  maximum_uncertain_rate: 0.05
+
+shadow_validation:
+  reserve_only: true
+  per_source_selection_from_retrieval_forbidden: true
+  recall_at_5_minimum: 0.70
+  recall_at_10_minimum: 0.80
+  zero_hit_rate_maximum: 0.05
+  recall_at_5_noninferiority_margin: 0.02
+  retrievers: [bge, bm25, hybrid]
+
+superseded_goal_mismatch:
+  - artifacts/v21/entity_policy_r4/phase_2_review_r1
+  - artifacts/v21/entity_policy_r4/phase_2_review_r2
+
+execution:
+  wave_size: 250
+  max_new_waves_default: 1
+  source_pool_checkpoint_interval_rows: 10000
+  api_calls_allowed: false
+  victim_calls_allowed: false
+  retriever_runs_allowed_during_selection: false
+  external_calls_expected: 0
+
+runtime_files:
+  - configs/attackability_first_v22.yaml
+  - configs/entity_type_policy_v21_r1.yaml
+  - src/attack/attackability_selector.py
+  - src/attack/entity_extractor.py
+  - src/attack/entity_type_policy.py
+  - src/attack/perturbation_generator.py
+  - src/attack/semantic_entity_resolver.py
+  - src/data/filter.py
+  - src/prepare/attackability_v22.py
+  - src/utils/hash.py
+  - src/utils/io.py
+  - src/utils/logger.py
+  - scripts/39_run_v22_attackability_first.py
