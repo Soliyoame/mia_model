@@ -1,0 +1,103 @@
+protocol: pcv_v22_attackability_calibration_r3
+method_version: pcv-attackability-first-v22
+status: preregistered_single_router_context_validation_r3
+output_root: artifacts/v22/calibration_r3
+
+base_v22:
+  config_path: configs/attackability_first_v22.yaml
+  config_sha256: def1fea32021fdf578e9af58d77f9d03234e7aece7933557458e8d167b19596e
+  protocol_manifest_path: artifacts/v22/protocol_manifest.json
+  protocol_manifest_sha256: 41b1af95d625b435a0dda6fffc259ca9f15c887c60e444c7a65d4c7489261626
+  protocol_identity_sha256: a488372a733977543f345fa46ed82b6dcc154c32f758595417d5d96c898f1044
+
+superseded_r1:
+  calibration_plan_path: artifacts/v22/calibration/calibration_plan.json
+  calibration_plan_sha256: 725a8c3d2ca2ea19ef4240ed5b830d76895c6c63eccc3c528dcd125fb35402aa
+  calibration_plan_identity_sha256: 3bbda077698505856f366e6cd22997a30500258503c323e514e8c302f05623bd
+  evaluation_path: artifacts/v22/calibration/calibration_evaluation.json
+  evaluation_sha256: fa394cffe28993be5e69057e4c573d79253b152a9eddb57774afbbe1253d3247
+  evaluation_identity_sha256: 5fa32b4197312106cb41bd44da902851d0d0132dc7e97a6714ba7c03f51bf3b9
+  required_status: failed_new_protocol_identity_required
+  reuse_labels: false
+  exclude_pair_source_and_fact_ids: true
+
+superseded_r2:
+  calibration_plan_path: artifacts/v22/calibration_r2/calibration_plan.json
+  calibration_plan_sha256: ba26c5f6386143c27a1390e3033630d429a94af2b69028bf916ac4ee42123aba
+  calibration_plan_identity_sha256: 432305b2797d31818fdb00f12b6c163f63c5883377a10be991b713eebbed63fe
+  evaluation_path: artifacts/v22/calibration_r2/calibration_evaluation.json
+  evaluation_sha256: 2b4e8fa2e459611704200e121864093c8c1a13b1fac174b4049dd713eabcebc7
+  evaluation_identity_sha256: bfc7ba2c392fe7d994f39e290f436f44fd3c3fa51d31e066a9890006ad439bf7
+  assistant_labels_receipt_path: artifacts/v22/calibration_r2/private/assistant_labels_receipt.json
+  assistant_labels_receipt_sha256: 6dfe0d485d5368b94088d17a5ba0df9f67df2bd5cd9b9453f3472d7d86113ddc
+  required_status: failed_new_protocol_identity_required
+  reuse_labels: false
+  exclude_pair_source_and_fact_ids: true
+
+context_overlay:
+  version: pcv-attackability-context-overlay-r3
+  deterministic_hard_gates_only: true
+  semantic_model_is_counterfactual_context_validator: true
+  weights:
+    grounded_fact_stability: 0.15
+    corpus_specificity: 0.10
+    context_slot_compatibility: 0.30
+    queryability: 0.25
+    verification_discriminativeness: 0.10
+    lexical_anchor_strength: 0.10
+
+single_router_validation:
+  model_role: gliner2_base
+  model_id: fastino/gliner2-base-v1
+  model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+  minimum_prediction_score: 0.65
+  require_exact_counterfactual_span: true
+  require_same_effective_type: true
+  batch_rows: 512
+  inference_batch_size: 8
+  device: cuda
+  use_fp16: true
+  local_files_only: true
+  resume_required: true
+
+review:
+  mode: assistant_only_no_human_validation
+  assistant_reviews_all_rows: true
+  human_review_required: false
+  human_validation_claim_allowed: false
+  blinded_review_ids: true
+  controls_hidden_in_review_ids: true
+  controls_use_machine_ground_truth: true
+  allowed_values: ["no", "uncertain", "yes"]
+
+calibration:
+  cells: 15
+  real_rows_per_cell: 16
+  structural_controls_per_cell: 4
+  total_rows: 300
+  projection_sources_per_dataset: 1000
+  threshold_grid: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85]
+  threshold_selection: maximum_retention_subject_to_assistant_judged_usability_rate_at_least_0_90
+  gates:
+    structural_negative_rejection_rate: 1.0
+    maximum_real_uncertain_rate: 0.05
+    threshold_minimum_assistant_judged_usability_rate: 0.90
+    minimum_labelled_real_candidates_per_threshold: 30
+    minimum_projected_eligible_sources_per_dataset: 2500
+
+boundaries:
+  membership_visible: false
+  victim_response_visible: false
+  attack_auc_visible: false
+  api_calls_allowed: false
+  victim_calls_allowed: false
+  retriever_runs_allowed: false
+  formal_scan_allowed_before_r3_pass: false
+  formal_paper_human_validation_claim_allowed: false
+
+runtime_files:
+  - configs/attackability_calibration_r3.yaml
+  - src/attack/attackability_context_overlay.py
+  - src/prepare/attackability_calibration_r2.py
+  - src/prepare/attackability_calibration_r3.py
+  - scripts/41_run_v22_attackability_calibration_r3.py
