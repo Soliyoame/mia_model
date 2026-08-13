@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.attack.restoration_first_v23 import (
     SPECIFICATION_VERSION,
@@ -47,19 +48,26 @@ from src.prepare.restoration_first_v23 import (
     attempt_id,
     bootstrap_attempt_id,
     build_runtime_bundle_manifest,
-    prepare_runtime_bootstrap_authorization,
     capacity_decision,
     canonical_sha256 as governance_canonical_sha256,
     charge_authorization_budget,
+    prepare_aggregate_df_authorization,
+    prepare_runtime_bootstrap_authorization,
+    prepare_runtime_successor_freeze_authorization,
     protocol_revision_id,
     require_passed_checkpoint,
+    run_aggregate_df,
     run_runtime_bootstrap,
+    run_runtime_successor_freeze,
+    validate_active_runtime,
+    validate_aggregate_df,
     validate_implementation_authorization,
     validate_ledger,
     validate_index_allowlist,
     validate_run_authorization,
     validate_runtime_bootstrap_authorization,
     validate_runtime_bootstrap,
+    validate_runtime_successor_freeze,
     evaluate_blind_audit,
     freeze_source_exclusive_split,
     write_stage_checkpoint,
@@ -120,6 +128,7 @@ def _bootstrap_fixture(root: Path) -> dict[str, object]:
         encoding="utf-8",
     )
     _run_git(root, "init", "--quiet")
+    _run_git(root, "config", "core.autocrlf", "false")
     _run_git(root, "config", "user.email", "v23-test@example.invalid")
     _run_git(root, "config", "user.name", "V23 Test")
     _run_git(root, "add", "runtime.py", "requirements.txt")
@@ -131,6 +140,99 @@ def _bootstrap_fixture(root: Path) -> dict[str, object]:
         "runtime_path": runtime_path,
         "tokenizer_path": tokenizer_path,
     }
+
+
+def _synthetic_aggregate_contracts(
+    root: Path,
+    *,
+    dataset: str = "edgar",
+    source_texts: tuple[str, ...] = ("Alpha alpha beta", "Beta gamma"),
+) -> dict[str, object]:
+    pool_root = root / "synthetic_pool" / dataset
+    pool_root.mkdir(parents=True)
+    database = pool_root / "source_pool.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE sources (source_key TEXT PRIMARY KEY, source_order_rank TEXT NOT NULL, full_text TEXT NOT NULL, input_row_count INTEGER NOT NULL)"
+    )
+    connection.execute(
+        "CREATE TABLE chunks (source_key TEXT NOT NULL, chunk_rank INTEGER NOT NULL, selection_hash TEXT NOT NULL, row_json TEXT NOT NULL, PRIMARY KEY (source_key, chunk_rank))"
+    )
+    source_order: list[str] = []
+    for index, text in enumerate(source_texts):
+        source_key = f"source-{index + 1}"
+        source_order.append(source_key)
+        rank = f"{index:06d}"
+        connection.execute(
+            "INSERT INTO sources VALUES (?, ?, ?, ?)",
+            (source_key, rank, text, 1),
+        )
+        row = {
+            "audit_id": f"audit-{index + 1}",
+            "doc_id": f"doc-{index + 1}",
+            "source_id": source_key,
+            "source_path": "synthetic.jsonl",
+            "source_key": source_key,
+            "dataset": dataset,
+            "text": text,
+            "text_hash": text_sha256(text),
+            "chunk_index": 0,
+        }
+        connection.execute(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?)",
+            (source_key, 0, str(index + 1) * 64, json.dumps(row)),
+        )
+    connection.commit()
+    connection.close()
+    order = pool_root / "source_order.json"
+    order.write_text(
+        json.dumps(
+            {
+                "protocol": "synthetic",
+                "dataset": dataset,
+                "selection_seed": 42,
+                "source_order": source_order,
+                "source_order_sha256": "a" * 64,
+                "label_fields_read": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = pool_root / "source_pool_manifest.json"
+    manifest.write_text('{"kind":"synthetic_source_pool"}\n', encoding="utf-8")
+    return {
+        "pool": {
+            "manifest_path": str(manifest.relative_to(root)),
+            "manifest_sha256": sha256_file(manifest),
+            "database_path": str(database.relative_to(root)),
+            "database_sha256": sha256_file(database),
+            "source_order_path": str(order.relative_to(root)),
+            "source_order_file_sha256": sha256_file(order),
+            "source_count": len(source_texts),
+        },
+        "normalization_version": "synthetic_normalization",
+        "tokenization_contract": {
+            "normalization": {"name": "synthetic_normalization"},
+            "tokenization": {"name": "selector_content_tokens"},
+        },
+    }
+
+
+def _bootstrap_synthetic_runtime(root: Path) -> tuple[dict[str, object], bytes]:
+    fixture = _bootstrap_fixture(root)
+    authorization = prepare_runtime_bootstrap_authorization(
+        project_root=root,
+        user_authorization_record="test bootstrap",
+    )
+    run_runtime_bootstrap(
+        project_root=root,
+        authorization_path=authorization["authorization_path"],
+        runtime_files=fixture["runtime_files"],
+        dependency_lock_path=fixture["dependency_lock_path"],
+        model_lock_path=fixture["model_lock_path"],
+    )
+    ledger = root / "artifacts/v23/governance/consumed_source_ledger.jsonl"
+    return fixture, ledger.read_bytes()
 
 
 def _source(*, extra_row: dict | None = None) -> dict:
@@ -787,6 +889,383 @@ class V23GovernanceTests(unittest.TestCase):
                     dependency_lock_path=fixture["dependency_lock_path"],
                     model_lock_path=fixture["model_lock_path"],
                 )
+
+    def test_successor_runtime_freeze_preserves_revision_zero_and_genesis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, ledger_before = _bootstrap_synthetic_runtime(root)
+            fixture["runtime_path"].write_text("VALUE = 2\n", encoding="utf-8")
+            _run_git(root, "add", "runtime.py")
+            _run_git(root, "commit", "--quiet", "-m", "test: successor runtime")
+            authorization = prepare_runtime_successor_freeze_authorization(
+                project_root=root,
+                user_authorization_record="test successor freeze",
+                runtime_files=fixture["runtime_files"],
+                dependency_lock_path=fixture["dependency_lock_path"],
+                model_lock_path=fixture["model_lock_path"],
+            )
+            result = run_runtime_successor_freeze(
+                project_root=root,
+                authorization_path=authorization["authorization_path"],
+                runtime_files=fixture["runtime_files"],
+                dependency_lock_path=fixture["dependency_lock_path"],
+                model_lock_path=fixture["model_lock_path"],
+            )
+            self.assertEqual(result["revision_ordinal"], 1)
+            self.assertEqual(
+                validate_runtime_successor_freeze(
+                    project_root=root,
+                    authorization_path=authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )["protocol_revision_id"],
+                authorization["new_protocol_revision_id"],
+            )
+            revisions = list((root / "artifacts/v23/protocol/revisions").glob("*.json"))
+            bundles = list(
+                (root / "artifacts/v23/protocol/runtime_bundles").glob(
+                    "*/runtime_bundle_manifest.json"
+                )
+            )
+            self.assertEqual((len(revisions), len(bundles)), (2, 2))
+            self.assertEqual(
+                (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
+                ledger_before,
+            )
+
+    def test_aggregate_df_runner_success_is_boolean_private_and_exactly_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, ledger_before = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ):
+                authorization = prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test aggregate df",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError, "attempt_or_artifact_already_exists"
+                ):
+                    prepare_aggregate_df_authorization(
+                        project_root=root,
+                        dataset="edgar",
+                        user_authorization_record="duplicate",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                result = run_aggregate_df(
+                    project_root=root,
+                    dataset="edgar",
+                    authorization_path=authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                validated = validate_aggregate_df(
+                    project_root=root,
+                    dataset="edgar",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                self.assertEqual(result, validated)
+                self.assertEqual(result["budget_charge_count"], 2)
+                self.assertFalse(result["ledger_mutation"])
+                self.assertEqual(result["external_calls_performed"], 0)
+                with self.assertRaisesRegex(
+                    RuntimeError, "output_or_checkpoint_already_exists"
+                ):
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset="edgar",
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+            rows_path = root / "artifacts/v23/aggregate_df/edgar/token_df.jsonl"
+            rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                [(row["token"], row["document_frequency"]) for row in rows],
+                [("alpha", 1), ("beta", 2), ("gamma", 1)],
+            )
+            self.assertTrue(
+                all(set(row) == {"kind", "token", "document_frequency"} for row in rows)
+            )
+            manifest = json.loads(
+                (root / "artifacts/v23/aggregate_df/edgar/df_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                manifest["token_df_rows_path"],
+                "artifacts/v23/aggregate_df/edgar/token_df.jsonl",
+            )
+            self.assertEqual(
+                (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
+                ledger_before,
+            )
+
+    def test_aggregate_df_rejects_wrong_scope_and_dataset_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ):
+                authorization = prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test aggregate df",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                with self.assertRaisesRegex(RuntimeError, "dataset_not_allowed"):
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset="enron",
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+            second_root = root / "second"
+            fixture, _ = _bootstrap_synthetic_runtime(second_root)
+            enron_contracts = _synthetic_aggregate_contracts(
+                second_root, dataset="enron"
+            )
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=enron_contracts,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "aggregate_df_artifact_missing"):
+                    prepare_aggregate_df_authorization(
+                        project_root=second_root,
+                        dataset="enron",
+                        user_authorization_record="out of order",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+
+    def test_aggregate_df_rejects_runtime_and_pool_hash_drift_before_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ):
+                authorization = prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test runtime drift",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                authorization_path = root / authorization["authorization_path"]
+                drifted = dict(authorization)
+                drifted.pop("authorization_path")
+                drifted.pop("source_pool_contents_read")
+                drifted.pop("external_calls_performed")
+                drifted["runtime_bundle_sha256"] = "f" * 64
+                drifted["authorization_id"] = canonical_sha256(
+                    {
+                        key: value
+                        for key, value in drifted.items()
+                        if key != "authorization_id"
+                    }
+                )
+                drifted_path = authorization_path.with_name(
+                    drifted["authorization_id"] + ".json"
+                )
+                drifted_path.write_text(
+                    canonical_json(drifted) + "\n", encoding="utf-8"
+                )
+                authorization_path.unlink()
+                with self.assertRaisesRegex(
+                    RuntimeError, "authorization_active_runtime_drift"
+                ):
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset="edgar",
+                        authorization_path=drifted_path,
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                self.assertFalse(
+                    (root / "artifacts/v23/governance/authorization_budgets").exists()
+                )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            contracts["pool"]["database_sha256"] = "f" * 64
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ), self.assertRaisesRegex(RuntimeError, "bound_file_hash_drift"):
+                prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test pool hash drift",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+            self.assertFalse(
+                (root / "artifacts/v23/governance/attempt_registry.jsonl").exists()
+            )
+
+    def test_aggregate_df_interruption_is_failed_and_not_reusable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, ledger_before = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            original_read = FrozenSourcePoolReader._read_source_unchecked
+
+            def fail_second(reader: FrozenSourcePoolReader, source_key: str) -> dict:
+                if source_key == "source-2":
+                    raise KeyboardInterrupt("synthetic interruption")
+                return original_read(reader, source_key)
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ):
+                authorization = prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test interruption",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                with patch.object(
+                    FrozenSourcePoolReader,
+                    "_read_source_unchecked",
+                    new=fail_second,
+                ), self.assertRaises(KeyboardInterrupt):
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset="edgar",
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                checkpoints = list(
+                    (root / "artifacts/v23/checkpoints/aggregate_df_precomputation/edgar").glob(
+                        "*.json"
+                    )
+                )
+                self.assertEqual(len(checkpoints), 1)
+                self.assertEqual(
+                    json.loads(checkpoints[0].read_text(encoding="utf-8"))["status"],
+                    "failed",
+                )
+                budget = root / "artifacts/v23/governance/authorization_budgets" / (
+                    authorization["authorization_id"] + ".jsonl"
+                )
+                self.assertEqual(len(budget.read_text(encoding="utf-8").splitlines()), 2)
+                with self.assertRaisesRegex(
+                    RuntimeError, "output_or_checkpoint_already_exists"
+                ):
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset="edgar",
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+            self.assertEqual(
+                (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
+                ledger_before,
+            )
+
+    def test_aggregate_df_validation_rejects_artifact_and_budget_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_aggregate_contracts(root)
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                return_value=contracts,
+            ):
+                authorization = prepare_aggregate_df_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test tampering",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                run_aggregate_df(
+                    project_root=root,
+                    dataset="edgar",
+                    authorization_path=authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                paths = {
+                    "rows": root / "artifacts/v23/aggregate_df/edgar/token_df.jsonl",
+                    "manifest": root / "artifacts/v23/aggregate_df/edgar/df_manifest.json",
+                    "checkpoint": next(
+                        (root / "artifacts/v23/checkpoints/aggregate_df_precomputation/edgar").glob(
+                            "*.json"
+                        )
+                    ),
+                    "budget": root
+                    / "artifacts/v23/governance/authorization_budgets"
+                    / (authorization["authorization_id"] + ".jsonl"),
+                }
+                originals = {name: path.read_bytes() for name, path in paths.items()}
+                for name, path in paths.items():
+                    with self.subTest(artifact=name):
+                        if name == "rows":
+                            path.write_bytes(originals[name] + b'{"kind":"extra"}\n')
+                        elif name == "manifest":
+                            payload = json.loads(originals[name])
+                            payload["token_count"] += 1
+                            path.write_text(canonical_json(payload) + "\n", encoding="utf-8")
+                        elif name == "checkpoint":
+                            payload = json.loads(originals[name])
+                            payload["authorization_id"] = "f" * 64
+                            path.write_text(canonical_json(payload) + "\n", encoding="utf-8")
+                        else:
+                            payload = json.loads(originals[name].decode("utf-8").splitlines()[0])
+                            payload["operation_identity_sha256"] = "f" * 64
+                            remaining = originals[name].decode("utf-8").splitlines()[1:]
+                            path.write_text(
+                                canonical_json(payload) + "\n" + "\n".join(remaining) + "\n",
+                                encoding="utf-8",
+                            )
+                        with self.assertRaises((RuntimeError, ValueError, json.JSONDecodeError)):
+                            validate_aggregate_df(
+                                project_root=root,
+                                dataset="edgar",
+                                runtime_files=fixture["runtime_files"],
+                                dependency_lock_path=fixture["dependency_lock_path"],
+                                model_lock_path=fixture["model_lock_path"],
+                            )
+                        path.write_bytes(originals[name])
 
     def test_capacity_golden_boundaries_and_consumption_monotonicity(self):
         cases = {

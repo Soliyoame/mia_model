@@ -12,11 +12,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.prepare.restoration_first_v23 import (  # noqa: E402
+    prepare_aggregate_df_authorization,
     prepare_runtime_bootstrap_authorization,
+    prepare_runtime_successor_freeze_authorization,
+    run_aggregate_df,
     run_runtime_bootstrap,
+    run_runtime_successor_freeze,
+    validate_aggregate_df,
     validate_design_bindings,
     validate_implementation_authorization,
     validate_runtime_bootstrap,
+    validate_runtime_successor_freeze,
     v23_status,
 )
 
@@ -44,6 +50,28 @@ def parse_args() -> argparse.Namespace:
     bootstrap.add_argument("--authorization", required=True)
     validate_bootstrap = commands.add_parser("validate-bootstrap")
     validate_bootstrap.add_argument("--authorization")
+    prepare_successor = commands.add_parser(
+        "prepare-successor-freeze-authorization"
+    )
+    prepare_successor.add_argument("--user-authorization-record", required=True)
+    freeze_successor = commands.add_parser("freeze-successor-runtime")
+    freeze_successor.add_argument("--authorization", required=True)
+    validate_successor = commands.add_parser("validate-successor-runtime")
+    validate_successor.add_argument("--authorization", required=True)
+    prepare_df = commands.add_parser("prepare-aggregate-df-authorization")
+    prepare_df.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
+    prepare_df.add_argument("--user-authorization-record", required=True)
+    aggregate_df = commands.add_parser("aggregate-df")
+    aggregate_df.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
+    aggregate_df.add_argument("--authorization", required=True)
+    validate_df = commands.add_parser("validate-aggregate-df")
+    validate_df.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
     authorization = commands.add_parser("validate-implementation-authorization")
     authorization.add_argument(
         "--authorization",
@@ -78,6 +106,38 @@ def main() -> int:
         result = validate_runtime_bootstrap(
             PROJECT_ROOT,
             authorization_path=args.authorization,
+        )
+    elif args.command == "prepare-successor-freeze-authorization":
+        result = prepare_runtime_successor_freeze_authorization(
+            project_root=PROJECT_ROOT,
+            user_authorization_record=args.user_authorization_record,
+        )
+    elif args.command == "freeze-successor-runtime":
+        result = run_runtime_successor_freeze(
+            project_root=PROJECT_ROOT,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "validate-successor-runtime":
+        result = validate_runtime_successor_freeze(
+            project_root=PROJECT_ROOT,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "prepare-aggregate-df-authorization":
+        result = prepare_aggregate_df_authorization(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
+            user_authorization_record=args.user_authorization_record,
+        )
+    elif args.command == "aggregate-df":
+        result = run_aggregate_df(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "validate-aggregate-df":
+        result = validate_aggregate_df(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
         )
     else:
         result = validate_implementation_authorization(
