@@ -1,0 +1,1359 @@
+protocol_version: pcv-mia-v23
+method_version: pcv-restoration-first-v23
+specification_version: pcv-restoration-first-v23-design-r6
+status: design_preregistered_runtime_not_implemented
+artifact_root: artifacts/v23
+selection_seed: 42
+
+research_objective:
+  primary_attack: source_level_rag_only_paired_entity_restoration
+  unit_of_evaluation: source_document
+  construction_unit: entity_slot_pair
+  estimand: attack_performance_conditional_on_preregistered_selector_eligibility
+  mandatory_companion_reporting: [frozen_pool_coverage, eligible_source_rate, rejection_reasons, per_dataset_results, macro_results]
+  transductive_unlabelled_full_pool_statistics_allowed: [document_frequency]
+  transductive_statistics_disclosure_required: true
+  counterfactual_naturalness_optimized: false
+  luna_generation_first_cancelled: true
+  matched_llm_only_role: frozen_post_selection_mechanism_control_only
+
+threat_model:
+  attacker_goal: infer_whether_a_known_candidate_source_document_is_in_the_target_rag_knowledge_base
+  membership_unit: source_document
+  attacker_prior_knowledge:
+    - exact_candidate_source_text
+    - exact_original_fact_and_original_entity_derived_without_membership_or_downstream_outputs
+    - public_protocol_selector_and_query_schema
+    - target_rag_query_interface
+  attacker_unknowns:
+    - membership_assignment
+    - formal_split_key_order_before_release
+    - main_index_contents_except_public_protocol_constraints
+    - retriever_results_scores_and_ranks
+    - victim_internal_states_and_model_logits
+  attacker_access:
+    interface: black_box_text_query_to_fixed_rag_pipeline
+    visible_output: final_victim_response_body_or_transport_error_only
+    retriever_api_or_metadata_visible: false
+    index_inspection_or_write_access: false
+    adaptive_queries_allowed: false
+    rag_query_budget_per_selected_source_per_backend_cell: 6
+    rag_backend_cells: [dense, bm25, hybrid]
+    matched_llm_only_query_budget_per_selected_source_shared_cell: 6
+    matched_llm_only_shared_across_all_rag_backends: true
+    query_budget_may_increase_after_observing_responses: false
+  selection_knowledge_boundary:
+    membership_split_victim_llm_only_retriever_and_auc_visible: false
+    full_candidate_source_visible: true
+    transductive_aggregate_document_frequency_visible: true
+  primary_observation: six_frozen_rag_response_cells_per_backend_for_three_frozen_pairs
+  estimand_scope: conditional_on_selector_eligible_sources_not_all_documents
+
+design_identity_contracts:
+  design_manifest:
+    path: configs/restoration_first_v23.design_manifest.json
+    canonical_json: selector_primitives_canonical_json
+    self_hash_field_forbidden: true
+    required_fields: [kind, protocol_version, method_version, specification_version, status, created_at, config, preregistration, reader_test, frozen_upstream_files, artifact_root, runtime_implemented, external_calls_performed]
+    object_schema: {kind: str, protocol_version: str, method_version: str, specification_version: str, status: str, created_at: rfc3339_utc, config: object, preregistration: object, reader_test: object, frozen_upstream_files: list, artifact_root: str, runtime_implemented: bool, external_calls_performed: int}
+    constants: {kind: pcv_v23_restoration_first_design_manifest, status: design_preregistered_runtime_not_implemented, runtime_implemented: false, external_calls_performed: 0}
+    config_object_schema: {path: str, sha256: lowercase_sha256_hex}
+    preregistration_object_schema: {path: str, sha256: lowercase_sha256_hex}
+    reader_test_object_schema: {method: str, verdict: passed, round: int, completed_at: rfc3339_utc, blocking_findings: int}
+    frozen_upstream_file_object_schema: {path: str, sha256: lowercase_sha256_hex}
+    frozen_upstream_files_order: path_ascending_utf8
+    binds_exactly_explicit_23_file_list_below: true
+    frozen_upstream_files:
+      - {path: artifacts/v21/enron_full/processed/enron.jsonl, sha256: 47ef7d2fee45d519618dddc9a1be4be6aafcf69d862cd64f35a109081419a19e}
+      - {path: artifacts/v21/processed/edgar.jsonl, sha256: ad50dbc5ab62bf6570179688081ab970e210f82396a269a63b48295de0beb2df}
+      - {path: artifacts/v21/processed/pubmed.jsonl, sha256: f8b412d694e1f52762e85c7eb72de5bd546ff9e8382dfdbc095b6ff792ee4cfa}
+      - {path: artifacts/v22/pilot/edgar/scan_plan.json, sha256: 09735a9c358bb10b9d3da9de6ca4f37322a1679983f2bf4ef9007a70d29646a5}
+      - {path: artifacts/v22/pilot/enron/scan_plan.json, sha256: cdcee73778fdf9628e55f5cfdb3be5b1d5a560ab8c3e45831755495363400d0d}
+      - {path: artifacts/v22/pilot/pubmed/scan_plan.json, sha256: d87c41e079b6f9301e8f25113ffc1bd03dccfe425a684f5a357f821626993bab}
+      - {path: artifacts/v22/protocol_manifest.json, sha256: 41b1af95d625b435a0dda6fffc259ca9f15c887c60e444c7a65d4c7489261626}
+      - {path: artifacts/v22/source_pools/edgar/source_order.json, sha256: fed738286427549d4d9550166c57c7ec11ee24894be42a08f126e24bfa79073f}
+      - {path: artifacts/v22/source_pools/edgar/source_pool.sqlite3, sha256: 5332d677fe6b29ef6c30a72d1ea825c09c15807531b9bc606044d90da3f0ecb6}
+      - {path: artifacts/v22/source_pools/edgar/source_pool_manifest.json, sha256: 522a2083e3b45b23828c3d22b5cebd7b8e7a236852fb97a1443786509138d80b}
+      - {path: artifacts/v22/source_pools/enron/source_order.json, sha256: 2fdf86050e74cf152c3676c5a97156c3307effbc674155ad15feb609d59eab8c}
+      - {path: artifacts/v22/source_pools/enron/source_pool.sqlite3, sha256: c6219dd34ba09b8f29dfaf52d3e3d51654eb9217524e01e31e59c139c942b388}
+      - {path: artifacts/v22/source_pools/enron/source_pool_manifest.json, sha256: abaaefe8b3e72e043a762ff31745a4fcf25f463288cf560ea2c7845c33597e2b}
+      - {path: artifacts/v22/source_pools/pubmed/source_order.json, sha256: 9db36023cd78672353ff468af57a81343793c66cbb51bd9db93deb9a13f5e432}
+      - {path: artifacts/v22/source_pools/pubmed/source_pool.sqlite3, sha256: 3c4e89ee4132d066dba519ecd29e9bbd2c67a118ef16a97bd129dcac73b5a200}
+      - {path: artifacts/v22/source_pools/pubmed/source_pool_manifest.json, sha256: b506d4736df258c7c77a31f6cf62a07c37bcb62a2c923234aa3e94d87f78624f}
+      - {path: configs/entity_type_policy_v21_r1.yaml, sha256: 582a30dcf321748cde55e25fa59e81dc1055de159852349405158b2c87d62c1f}
+      - {path: configs/semantic_entity_models_v6_3.lock.yaml, sha256: 9bce3d3dc0a2c21566a8cce93e07350d11b774c92d55d44d88099f5e1f1831b8}
+      - {path: src/attack/attackability_selector.py, sha256: bc035f92a370dcffb2e9164b5aa2cf8ae3b31a35d00390700224d6770a0f6139}
+      - {path: src/attack/entity_extractor.py, sha256: 84f45c549428b417cbf7cf4a99fdfbecf106979012c11ec7f8ecc4997f108b6b}
+      - {path: src/attack/entity_type_policy.py, sha256: 12a08bd163394c9504ebaba1b6e24696a58ac84180fb9c26faf0f9668a93c50d}
+      - {path: src/attack/perturbation_generator.py, sha256: 9ce275e52531320493834fe7586c361c234f073c49e734bea6f3650888f2e98c}
+      - {path: src/attack/semantic_entity_resolver.py, sha256: 75febf61d66913d031b013b45bb2833028534277dccc28bdefed6c05a1fc17da}
+    frozen_upstream_files_count: 23
+    frozen_upstream_files_golden_sha256: 59578397e9c998dc576d5d9fe4b692a9a3ba87d0d5a6f704afb7c5a4aa4ed03e
+    identity_for_future_manifests: sha256_of_complete_design_manifest_file_bytes
+  runtime_bundle_manifest:
+    path_pattern: artifacts/v23/protocol/runtime_bundles/<runtime_bundle_id>/runtime_bundle_manifest.json
+    required_fields: [kind, protocol_version, method_version, specification_version, runtime_bundle_id, design_manifest_sha256, code_commit, python_executable, python_version, dependency_lock_path, dependency_lock_sha256, numpy_version, pcg64_state_golden_sha256, gliner_runtime_identity, files, created_at]
+    runtime_bundle_id: sha256_canonical_json_object_of_design_manifest_sha256_code_commit_dependency_lock_sha256_and_ordered_file_hashes
+    file_object_schema: {path: str, sha256: lowercase_sha256_hex}
+    files_order: path_ascending_utf8
+    gliner_runtime_identity_required_fields: [model_id, model_revision, model_snapshot_sha256, transformers_version, torch_version, gliner_library_version, tokenizer_or_processor_sha256, device_type, precision, deterministic_algorithms, inference_batch_size]
+    gliner_required_values: {device_type: cuda, deterministic_algorithms: true}
+  protocol_revision_identity:
+    object_schema: {kind: str, specification_version: str, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, revision_ordinal: int}
+    constants: {kind: v23_protocol_revision}
+    value: sha256_canonical_json_object
+  attempt_identity:
+    object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, stage: str, execution_unit: str, attempt_ordinal: int, expected_prior_ledger_tip_sha256: lowercase_sha256_hex_or_genesis_sentinel}
+    constants: {kind: v23_stage_attempt}
+    value: sha256_canonical_json_object
+    ordinal_allocation: under_one_exclusive_attempt_registry_lock_choose_one_plus_max_prior_ordinal_for_same_protocol_revision_stage_and_execution_unit_or_zero_if_none_then_append_and_fsync_before_use
+    concurrent_duplicate_or_gap: fail_closed
+
+frozen_v22_bindings:
+  protocol_manifest_path: artifacts/v22/protocol_manifest.json
+  protocol_manifest_sha256: 41b1af95d625b435a0dda6fffc259ca9f15c887c60e444c7a65d4c7489261626
+  protocol_identity_sha256: a488372a733977543f345fa46ed82b6dcc154c32f758595417d5d96c898f1044
+  source_pools:
+    edgar:
+      manifest_path: artifacts/v22/source_pools/edgar/source_pool_manifest.json
+      manifest_sha256: 522a2083e3b45b23828c3d22b5cebd7b8e7a236852fb97a1443786509138d80b
+      source_pool_identity_sha256: 44b6e2c89931601dec0378b75d654f26a59ec22433b461283277e80a51db20cf
+      source_order_sha256: ad9e8471f448f964bd616a8a47ad2d1228e95a20c583abc39476cb422a276a53
+      source_order_path: artifacts/v22/source_pools/edgar/source_order.json
+      source_order_file_sha256: fed738286427549d4d9550166c57c7ec11ee24894be42a08f126e24bfa79073f
+      processed_path: artifacts/v21/processed/edgar.jsonl
+      processed_sha256: ad50dbc5ab62bf6570179688081ab970e210f82396a269a63b48295de0beb2df
+      database_path: artifacts/v22/source_pools/edgar/source_pool.sqlite3
+      database_sha256: 5332d677fe6b29ef6c30a72d1ea825c09c15807531b9bc606044d90da3f0ecb6
+      source_count: 5210
+    enron:
+      manifest_path: artifacts/v22/source_pools/enron/source_pool_manifest.json
+      manifest_sha256: abaaefe8b3e72e043a762ff31745a4fcf25f463288cf560ea2c7845c33597e2b
+      source_pool_identity_sha256: 66d746a9db665c5d660db1235c6144cf8148afb86f10165068c8f267c59a258b
+      source_order_sha256: 3cb188001c3808b6875a6b87f9592a67c76b737d304c8ab0620264f303244ac3
+      source_order_path: artifacts/v22/source_pools/enron/source_order.json
+      source_order_file_sha256: 2fdf86050e74cf152c3676c5a97156c3307effbc674155ad15feb609d59eab8c
+      processed_path: artifacts/v21/enron_full/processed/enron.jsonl
+      processed_sha256: 47ef7d2fee45d519618dddc9a1be4be6aafcf69d862cd64f35a109081419a19e
+      database_path: artifacts/v22/source_pools/enron/source_pool.sqlite3
+      database_sha256: c6219dd34ba09b8f29dfaf52d3e3d51654eb9217524e01e31e59c139c942b388
+      source_count: 35000
+    pubmed:
+      manifest_path: artifacts/v22/source_pools/pubmed/source_pool_manifest.json
+      manifest_sha256: b506d4736df258c7c77a31f6cf62a07c37bcb62a2c923234aa3e94d87f78624f
+      source_pool_identity_sha256: f1f490435f3555e8908d688b3309d42c68400fd8e81e8a17bf8dce8607e9df5c
+      source_order_sha256: 55421daf47c9c561c4f2d8212ea4834203211057298aa7be65f85e70fd109feb
+      source_order_path: artifacts/v22/source_pools/pubmed/source_order.json
+      source_order_file_sha256: 9db36023cd78672353ff468af57a81343793c66cbb51bd9db93deb9a13f5e432
+      processed_path: artifacts/v21/processed/pubmed.jsonl
+      processed_sha256: f8b412d694e1f52762e85c7eb72de5bd546ff9e8382dfdbc095b6ff792ee4cfa
+      database_path: artifacts/v22/source_pools/pubmed/source_pool.sqlite3
+      database_sha256: 3c4e89ee4132d066dba519ecd29e9bbd2c67a118ef16a97bd129dcac73b5a200
+      source_count: 47950
+  entity_router:
+    role: gliner2_base
+    model_id: fastino/gliner2-base-v1
+    model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+    model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+    model_lock_sha256: 9bce3d3dc0a2c21566a8cce93e07350d11b774c92d55d44d88099f5e1f1831b8
+    allowed_roles: [entity_routing, coarse_type_and_format_validation]
+    forbidden_roles: [recoverability_scoring, pair_selection, naturalness_judging]
+  extraction_rule_bindings:
+    entity_type_policy_path: configs/entity_type_policy_v21_r1.yaml
+    entity_type_policy_sha256: 582a30dcf321748cde55e25fa59e81dc1055de159852349405158b2c87d62c1f
+    entity_extractor_path: src/attack/entity_extractor.py
+    entity_extractor_sha256: 84f45c549428b417cbf7cf4a99fdfbecf106979012c11ec7f8ecc4997f108b6b
+    entity_type_policy_runtime_path: src/attack/entity_type_policy.py
+    entity_type_policy_runtime_sha256: 12a08bd163394c9504ebaba1b6e24696a58ac84180fb9c26faf0f9668a93c50d
+    semantic_entity_resolver_path: src/attack/semantic_entity_resolver.py
+    semantic_entity_resolver_sha256: 75febf61d66913d031b013b45bb2833028534277dccc28bdefed6c05a1fc17da
+    perturbation_generator_path: src/attack/perturbation_generator.py
+    perturbation_generator_sha256: 9ce275e52531320493834fe7586c361c234f073c49e734bea6f3650888f2e98c
+    minimum_validity_reference_path: src/attack/attackability_selector.py
+    minimum_validity_reference_sha256: bc035f92a370dcffb2e9164b5aa2cf8ae3b31a35d00390700224d6770a0f6139
+    permitted_reuse: [pattern_registry_candidate_emission, sentence_semantic_failure_reasons, entity_routing, semantic_subtype, machine_format_compatible, article_compatible_candidates, exact_single_slot_validation]
+    forbidden_reuse: [entity_extractor_score_or_top_k, utility_components, utility_score, counterfactual_naturalness, v22_pair_ranking, perturbation_fallback_generation]
+
+evidence_partition:
+  source_order_sampling_design:
+    algorithm: sort_ascending_sha256_utf8_null_join_selection_seed_dataset_source_key
+    selection_seed: 42
+    order_created_before_v23_design: true
+    membership_victim_retriever_auc_independent: true
+    sampling_interpretation: deterministic_cryptographic_pseudorandom_order_without_replacement
+  v22_pilot_source_count_per_dataset: 1000
+  development_sources:
+    definition: exact_first_1000_sources_from_each_frozen_v22_source_order
+    scan_plan_bindings:
+      edgar:
+        path: artifacts/v22/pilot/edgar/scan_plan.json
+        sha256: 09735a9c358bb10b9d3da9de6ca4f37322a1679983f2bf4ef9007a70d29646a5
+        identity_sha256: 24c265162739c3fc81f98becf9efaf45701842ffcb19a3ba7f973fdb2afb3450
+      enron:
+        path: artifacts/v22/pilot/enron/scan_plan.json
+        sha256: cdcee73778fdf9628e55f5cfdb3be5b1d5a560ab8c3e45831755495363400d0d
+        identity_sha256: 407f0df79a4adf0b7a0eedb5b003bebe08cc5b0fb96706ed5a39b5c87faf4a82
+      pubmed:
+        path: artifacts/v22/pilot/pubmed/scan_plan.json
+        sha256: d87c41e079b6f9301e8f25113ffc1bd03dccfe425a684f5a357f821626993bab
+        identity_sha256: b34a707e78fc2173610f040c0dbf3c4502fb02ba8ac579005f7d406c031da2a4
+  fresh_audit_reserve_source_count_per_dataset: 250
+  fresh_audit_selected_source_count_per_dataset: 100
+  fresh_audit_sources:
+    reserve_definition: revision_specific_first_250_sources_after_development_in_frozen_v22_source_order_excluding_prior_revision_ledger_snapshot
+    selected_definition: first_100_eligible_sources_in_fresh_audit_reserve_order
+    role: validation_only_all_250_reserve_sources_permanently_excluded_from_formal
+  consumption_ledger:
+    namespace: pcv-mia-v23-all-revisions
+    path: artifacts/v23/governance/consumed_source_ledger.jsonl
+    append_only: true
+    consumed_roles: [development, fresh_audit_reserve, human_viewed, diagnostic_viewed, formal_scan_viewed]
+    keys: [dataset, source_key, source_hash, normalized_text_hash]
+    all_prior_revision_consumed_rows_excluded_from_future_audit_and_formal: true
+    initialization: create_genesis_once_when_first_v23_runtime_bundle_is_frozen
+    global_dataset_order: [edgar, enron, pubmed]
+    genesis_row:
+      object_schema: {kind: str, sequence: int, protocol_revision_id: lowercase_sha256_hex, role: str, dataset: str, source_key: str, source_hash: str, normalized_text_hash: str, consumed_at: rfc3339_utc, reason: str, previous_row_sha256: str, design_manifest_sha256: lowercase_sha256_hex, frozen_v22_protocol_identity_sha256: lowercase_sha256_hex, source_order_file_sha256_by_dataset: object, row_sha256: lowercase_sha256_hex}
+      constants: {kind: v23_consumption_ledger_genesis, sequence: 0, role: genesis, dataset: __all__, source_key: __genesis__, source_hash: __not_applicable__, normalized_text_hash: __not_applicable__, previous_row_sha256: 64_ascii_zeroes}
+      row_sha256: sha256_canonical_json_excluding_row_sha256
+    source_row:
+      object_schema: {kind: str, sequence: int, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, reservation_batch_id: lowercase_sha256_hex, reservation_batch_index: int, reservation_batch_size: int, role: str, dataset: str, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, consumed_at: rfc3339_utc, reason: str, previous_row_sha256: lowercase_sha256_hex, row_sha256: lowercase_sha256_hex}
+      constants: {kind: v23_consumed_source}
+    row_schema: exact_genesis_or_source_row_schema_above_unknown_fields_rejected
+    row_hash: sha256_canonical_json_excluding_row_sha256
+    genesis_binds: [design_manifest_sha256, frozen_v22_protocol_identity_sha256, all_source_order_file_sha256]
+    genesis_tip_anchor:
+      path: artifacts/v23/governance/ledger_anchors/000000000000_genesis_<ledger_tip_sha256>.json
+      object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, ledger_tip_sha256: lowercase_sha256_hex, genesis_row_sha256: lowercase_sha256_hex, created_at: rfc3339_utc}
+      constants: {kind: v23_ledger_genesis_anchor}
+      sha256: sha256_of_complete_anchor_file_bytes
+    missing_after_genesis_reordered_truncated_or_rewritten_ledger_fails_closed: true
+    development_registration_rule: on_first_protocol_revision_only_durably_complete_one_1000_source_batch_in_global_dataset_order_then_group_completion_anchor_before_any_development_content_visibility_later_revisions_verify_and_reuse_same_consumed_development_identity_without_new_rows
+    reserve_registration_rule: freeze_one_common_prior_ledger_snapshot_derive_all_three_250_source_reserves_from_that_snapshot_then_durably_register_one_batch_per_dataset_in_global_dataset_order_and_write_group_completion_anchor_before_any_reserve_content_visibility_or_development_capacity_evaluation
+    audit_reserve_for_revision: first_250_sources_after_development_in_frozen_v22_order_after_excluding_all_sources_in_prior_revision_ledger_snapshot
+    initial_revision_audit_reserve: exact_source_order_indices_1000_through_1249
+    reserve_snapshot:
+      object_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, prior_ledger_tip_sha256: lowercase_sha256_hex, source_order_file_sha256: lowercase_sha256_hex, ordered_sources: list}
+      source_identity_object_schema: {source_order_index: int, source_key: str}
+      constants: {kind: v23_fresh_audit_reserve_snapshot}
+      ordered_sources_order: frozen_v22_source_order_ascending
+      expected_source_count: 250
+      identity: sha256_canonical_json_object
+    revision_reservation_group:
+      prior_snapshot_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, common_prior_ledger_tip_sha256: lowercase_sha256_hex, common_prior_tip_anchor_sha256: lowercase_sha256_hex, dataset_order: list_of_exactly_edgar_enron_pubmed, ordered_reserve_snapshot_sha256: list_of_exactly_three_lowercase_sha256_hex}
+      prior_snapshot_constants: {kind: v23_revision_reservation_prior_snapshot}
+      completion_anchor_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, common_prior_snapshot_sha256: lowercase_sha256_hex, ordered_reservation_batch_ids: list_of_exactly_three_lowercase_sha256_hex, final_ledger_tip_sha256: lowercase_sha256_hex, final_tip_anchor_sha256: lowercase_sha256_hex, created_at: rfc3339_utc}
+      completion_anchor_constants: {kind: v23_revision_reservation_group_complete}
+      path_pattern: artifacts/v23/governance/revision_reservations/<protocol_revision_id>/group_completion.json
+      content_visibility: no_development_or_reserve_source_content_for_current_revision_until_group_completion_file_is_durable
+    fewer_than_250_unconsumed_reserve_sources: fail_closed_new_revision_cannot_start
+    formal_scan_rule: freeze_prior_consumption_exclusion_snapshot_before_scan_then_append_each_current_revision_scanned_source_without_invalidating_current_revision_selected_set
+    future_revision_rule: every_formal_scan_viewed_source_from_any_earlier_revision_is_excluded
+    write_ahead_and_recovery:
+      source_must_be_reserved_in_ledger_before_content_is_exposed_to_selector_reviewer_or_diagnostic: true
+      aggregate_df_precomputation_exception: only_the_frozen_no_source_mapping_document_frequency_stage_defined_under_aggregate_df_precomputation
+      batch_identity:
+        object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, role: str, dataset: str, expected_batch_size: int, ordered_source_identity_sha256: lowercase_sha256_hex, expected_prior_ledger_tip_sha256: lowercase_sha256_hex_or_genesis_sentinel}
+        constants: {kind: v23_reservation_batch}
+        value: sha256_canonical_json_object
+      reservation_plan:
+        object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, role: str, dataset: str, expected_prior_ledger_tip_sha256: lowercase_sha256_hex_or_genesis_sentinel, ordered_source_identity_objects: list}
+        source_identity_object_schema: {source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex}
+        constants: {kind: v23_reservation_plan}
+        source_order: frozen_v22_source_order
+        content_fields_forbidden: [full_text, chunks, row, supporting_sentence]
+        sha256: sha256_canonical_json_object
+        trusted_identity_registrar_exception: may_stream_bound_full_text_only_to_recompute_source_hash_and_normalized_text_hash_without_exposing_or_persisting_text_or_any_derived_feature_beyond_the_two_hashes
+        registrar_forbidden_roles: [token_df, candidate_extraction, selector_gate, diagnostic, human_packet, membership_or_split]
+        registrar_hashes_must_be_recomputed_and_exactly_matched_after_content_visibility: true
+      batch_append_operation: acquire_one_exclusive_lock_verify_expected_prior_tip_append_each_complete_utf8_json_line_with_monotone_batch_index_flush_and_fsync_after_every_line_write_no_overwrite_batch_completion_anchor_flush_and_fsync_anchor_then_release_lock
+      batch_atomicity_interpretation: content_visibility_atomic_not_filesystem_multirow_atomic
+      content_visibility_rule: no_source_in_batch_may_be_read_until_all_expected_rows_and_batch_completion_anchor_are_durable
+      interrupted_incomplete_batch_recovery: under_exclusive_lock_verify_durable_prefix_matches_batch_identity_then_append_only_missing_suffix_and_completion_anchor_without_rereading_any_source_content
+      mismatched_prefix_duplicate_batch_index_or_unexpected_tip: fail_closed_forensic_repair_under_new_attempt_identity
+      crash_after_reservation: source_remains_consumed
+      crash_before_durable_reservation: source_content_must_not_be_read
+      partial_trailing_line: fail_closed_and_requires_forensic_repair_under_new_attempt_identity
+      tip_anchor_directory: artifacts/v23/governance/ledger_anchors
+      tip_anchor:
+        filename: <last_sequence>_<ledger_tip_sha256>.json
+        object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, reservation_batch_id: lowercase_sha256_hex, first_sequence: int, last_sequence: int, batch_size: int, prior_ledger_tip_sha256: lowercase_sha256_hex_or_genesis_sentinel, ledger_tip_sha256: lowercase_sha256_hex, created_at: rfc3339_utc}
+        constants: {kind: v23_ledger_tip_anchor}
+        sha256: sha256_of_complete_anchor_file_bytes
+      stage_checkpoint:
+        path_pattern: artifacts/v23/checkpoints/<protocol_revision_id>/<stage>/<attempt_id>.json
+        object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, stage: str, execution_unit: str, status: str, input_ledger_tip_sha256: lowercase_sha256_hex, input_tip_anchor_sha256: lowercase_sha256_hex, output_ledger_tip_sha256: lowercase_sha256_hex, output_tip_anchor_sha256: lowercase_sha256_hex, ledger_mutation: bool, authorization_id: lowercase_sha256_hex, authorization_budget_journal_tip_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, output_manifest_sha256: lowercase_sha256_hex_or_null, completed_at: rfc3339_utc}
+        constants: {kind: v23_stage_checkpoint}
+        allowed_status: [passed, failed, partial, superseded]
+        no_ledger_mutation_rule: ledger_mutation_false_requires_output_ledger_tip_equal_input_ledger_tip_and_output_tip_anchor_sha256_equal_input_tip_anchor_sha256
+      validation: each_checkpoint_input_tip_must_equal_its_authorizations_expected_prior_tip_and_each_passed_checkpoint_output_tip_must_be_an_ancestor_or_equal_to_current_highest_valid_anchor_tip_never_required_to_equal_later_tips
+  aggregate_df_precomputation:
+    role: selector_independent_transductive_aggregate_only
+    ledger_consumption_exemption: true
+    rationale: no_candidate_source_or_per_source_statistic_is_selected_viewed_or_emitted
+    stage_order: after_runtime_bundle_freeze_before_any_selector_execution_or_source_reservation
+    input: all_complete_source_documents_in_each_bound_frozen_v22_source_pool
+    input_identity_binds: [design_manifest_sha256, runtime_bundle_sha256, dataset, source_pool_manifest_sha256, database_sha256, source_order_file_sha256, exact_bound_source_count, normalization_version, tokenization_contract]
+    computation: one_boolean_document_presence_per_normalized_token_per_complete_source_using_selector_primitives_tokenization
+    rows_path_pattern: artifacts/v23/aggregate_df/<dataset>/token_df.jsonl
+    rows_serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_in_token_order
+    rows_file_sha256: sha256_of_complete_file_bytes
+    output_path_pattern: artifacts/v23/aggregate_df/<dataset>/df_manifest.json
+    output_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, input_identity_sha256: lowercase_sha256_hex, source_count: int, token_count: int, token_df_rows_path: str, token_df_rows_file_sha256: lowercase_sha256_hex, tokenization_contract_sha256: lowercase_sha256_hex, created_at: rfc3339_utc, external_calls_performed: int}
+    output_constants: {kind: v23_aggregate_document_frequency, external_calls_performed: 0}
+    token_df_row_schema: {kind: str, token: str, document_frequency: int}
+    token_df_row_constants: {kind: v23_token_document_frequency}
+    token_df_order: normalized_token_ascending_python_lexicographic
+    forbidden_outputs: [source_key, source_hash, normalized_text_hash, per_source_tokens, per_source_rows, membership, split, group]
+    privacy_and_governance_boundary: artifact_contains_only_dataset_level_token_df_aggregates_without_source_mapping_or_per_source_rows_low_frequency_tokens_are_not_claimed_non_invertible_and_selector_access_to_a_particular_source_still_requires_later_ledger_reservation
+    computation_cardinality: exactly_once_per_runtime_bundle_and_dataset_under_aggregate_df_precomputation_authorization
+    later_selector_stage_validation: recompute_input_identity_and_verify_manifest_schema_token_df_file_sha256_manifest_file_sha256_and_runtime_bundle_binding_without_reading_source_pool_contents
+    full_pool_reread_outside_a_new_explicitly_authorized_aggregate_df_attempt: forbidden
+    drift_or_forbidden_field: fail_closed_new_runtime_bundle_or_design_revision_required
+  formal_source_domain: exact_formal_scan_order_definition_under_formal_sequence
+  development_formal_overlap_required: 0
+  fresh_audit_formal_overlap_required: 0
+  pairwise_partition_guards:
+    partitions: [development, fresh_audit_reserve, formal]
+    within_dataset_source_key_overlap: 0
+    within_dataset_source_hash_overlap: 0
+    within_dataset_normalized_text_hash_overlap: 0
+    cross_dataset_source_hash_overlap: 0
+    cross_dataset_normalized_text_hash_overlap: 0
+  v22_r1_r2_r3_labels_reused: false
+  v22_r1_r2_r3_thresholds_reused: false
+  v22_r3_context_passed_as_only_candidate_universe: false
+
+scope:
+  formal_entity_types: [CONTRACT_TERM, LOCATION, ORG, PERSON, PRODUCT]
+  structured_extension_types: [DATE, MONEY, EMAIL, PHONE, IDENTIFIER]
+  structured_extension_role: diagnostic_and_secondary_only
+  p0_eligibility_uses_formal_entity_types_only: true
+  structured_extension_can_fill_required_pairs: false
+  structured_extension_can_affect_development_fresh_audit_or_formal_gates: false
+  structured_extension_artifact_namespace: artifacts/v23/diagnostic_structured_extension
+  required_pairs_per_source: 3
+  queries_per_pair: 2
+  queries_per_source: 6
+  maximum_pairs_per_original_entity: 2
+  require_distinct_fact_signatures: true
+  target_formal_sources_per_dataset: 2250
+  split_counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+
+selector_primitives:
+  text_normalization:
+    name: unicode_nfkc_casefold_whitespace_v1
+    algorithm: apply_unicode_nfkc_then_python_str_casefold_then_replace_each_maximal_unicode_isspace_run_with_one_ascii_space_then_strip
+    empty_value_rejected: true
+  coordinates:
+    unit: python_unicode_codepoint
+    interval: half_open
+    original_span_reference: unmodified_supporting_sentence
+    substring_invariant: supporting_sentence_start_end_equals_original_entity_exactly
+  canonical_json:
+    encoding: utf_8
+    ensure_ascii: false
+    sort_keys: true
+    separators: [",", ":"]
+    allow_nan: false
+    trailing_newline: false
+  hash:
+    algorithm: sha256
+    input: canonical_json_utf8_unless_raw_text_hash_is_explicitly_named
+    output: lowercase_hex
+  raw_text_hashes:
+    source_hash: sha256_utf8_of_sources_full_text_exact_bytes_as_python_string
+    chunk_hash: sha256_utf8_of_row_json_text_exact_bytes_as_python_string
+    sentence_hash: sha256_utf8_of_unmodified_trimmed_supporting_sentence
+  normalized_text_hash: sha256_utf8_of_unicode_nfkc_casefold_whitespace_v1_text
+  bounded_value_occurrence:
+    comparison_text: unicode_nfkc_casefold_whitespace_v1
+    match: literal_normalized_value_substring
+    left_boundary: start_of_text_or_previous_codepoint_is_not_unicode_alphanumeric
+    right_boundary: end_of_text_or_next_codepoint_is_not_unicode_alphanumeric
+  proposition_segmentation:
+    input: sources_full_text
+    raw_regex: '[^.!?\n]+(?:[.!?]+|$)'
+    row_boundary: newline_is_always_a_boundary
+    trimming: remove_leading_and_trailing_unicode_whitespace_and_rebase_coordinates
+    empty_segments_removed: true
+  tokenization:
+    after_normalization_regex: "[a-z0-9]+(?:[-'][a-z0-9]+)*"
+    minimum_token_characters: 3
+    pure_numeric_tokens_removed: true
+    stopwords: [a, an, and, are, as, at, be, been, being, but, by, can, could, did, do, does, for, from, had, has, have, he, her, here, him, his, how, i, if, in, into, is, it, its, may, might, more, most, no, not, of, on, or, our, shall, she, should, than, that, the, their, them, then, there, these, they, this, those, to, was, we, were, what, when, where, which, who, why, will, with, would, you, your]
+  deterministic_regexes:
+    flags: python_re_ignorecase_and_unicode
+    relation_cue: '\b(?:is|are|was|were|be|been|being|has|have|had|will|would|shall|should|can|could|received|paid|sent|met|meet|discussed|signed|reported|increased|decreased|acquired|sold|filed|approved|required|requires|expires|begins|ends|contains|assigned|located|treated|measured|observed|compared)\b'
+    mail_header: '^\s*(?:from|to|cc|bcc|subject|sent|date|message-id|content-type)\s*:'
+    unresolved_reference: '\b(?:this|that|these|those|here|there|above|below|aforementioned|former|latter|he|she|it|they)\b'
+    generic_role_fullmatch: '^(?:president|director|manager|officer|author|employee|customer|company|department|team|group|system|service|product|agreement)$'
+    balanced_delimiters: require_equal_well_nested_round_square_and_curly_delimiters_before_and_after_substitution
+  identity_construction:
+    relation_signature:
+      object_schema: {kind: str, dataset: str, source_key: str, effective_type: str, masked_sentence_normalized: str}
+      constants: {kind: v23_relation_signature}
+      value: sha256_canonical_json_object
+    fact_signature:
+      object_schema: {kind: str, dataset: str, source_key: str, sentence_hash: lowercase_sha256_hex}
+      constants: {kind: v23_fact_signature}
+      value: sha256_canonical_json_object
+    counterfactual_id:
+      object_schema: {kind: str, specification_version: str, dataset: str, source_key: str, sentence_hash: lowercase_sha256_hex, original_span: list_of_exactly_two_ints, effective_type: str, semantic_subtype: str, counterfactual_normalized: str}
+      constants: {kind: v23_counterfactual}
+      value: sha256_canonical_json_object
+    pair_id:
+      object_schema: {kind: str, specification_version: str, fact_signature: lowercase_sha256_hex, original_entity_normalized: str, counterfactual_normalized: str, counterfactual_id: lowercase_sha256_hex}
+      constants: {kind: v23_pair}
+      value: sha256_canonical_json_object
+  golden_vectors:
+    normalization:
+      input: "  Cafe\u0301\tACME  "
+      expected: "caf\u00e9 acme"
+      expected_codepoints_hex: ["0x63", "0x61", "0x66", "0xe9", "0x20", "0x61", "0x63", "0x6d", "0x65"]
+    span:
+      sentence: "Alice signed the Agreement."
+      original_entity: Alice
+      original_span: [0, 5]
+      expected_substring: Alice
+    canonical_json:
+      object: {kind: v23_fact_signature, dataset: edgar, source_key: source-1, sentence_hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      expected_utf8_text: '{"dataset":"edgar","kind":"v23_fact_signature","sentence_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_key":"source-1"}'
+      expected_sha256: 5cb640436a1aaf6aa1f07e20aaba9e3f7f4fa9f3f3c43f42044beb0b0264e74b
+
+source_and_candidate_construction:
+  membership_unit:
+    edgar: filing
+    enron: source_email_document
+    pubmed: complete_pmcid_article
+  source_absence_scope: complete_source_document
+  recoverability_scope: complete_source_document
+  candidate_chunk_policy:
+    source: exact_chunks_in_bound_v22_source_pool_database
+    database_schema: sources_source_key_source_order_rank_full_text_input_row_count_and_chunks_source_key_chunk_rank_selection_hash_row_json
+    maximum_chunks_per_source: 5
+    v22_selection_rule: exact_existing_chunks_rows_already_selected_by_lowest_sha256_selection_seed_dataset_source_key_doc_id_text_hash_text
+    label_or_downstream_signal_used: false
+    complete_source_still_required_for_all_source_level_gates: true
+  candidate_universe:
+    reconstruction: fresh_reextract_from_bound_v22_source_database_under_v23_identity
+    pre_r3_candidate_artifact_reused: false
+    v22_context_passed_or_utility_filtered_rows_reused: false
+    rule_candidates: all_formal_type_matches_emitted_by_bound_pattern_registry_before_any_v22_score_or_top_k
+    model_candidates: all_bound_gliner2_predictions_of_formal_types_with_score_at_least_0_65
+    traversal_order: chunk_rank_ascending_then_proposition_raw_start_ascending_then_rule_pattern_registry_index_ascending_then_regex_match_start_end_then_model_predictions
+    gliner_minimum_prediction_score: 0.65
+    gliner_span_overlap_threshold: 0.80
+    gliner_overlap_formula: max_0_min_candidate_end_prediction_end_minus_max_candidate_start_prediction_start_divided_by_max_1_min_candidate_length_prediction_length
+    gliner_prediction_coordinates: python_unicode_codepoint_half_open_relative_to_same_unmodified_supporting_sentence
+    gliner_prediction_filter_order: discard_score_below_0_65_then_discard_non_p0_label_then_sort_by_negative_score_label_start_end_text
+    gliner_role_vote: at_most_one_prediction_after_sort_per_candidate_and_model_role
+    routing: bound_high_precision_rule_then_single_gliner2_router_then_declared_type_fallback
+    unrecognized_or_unmapped_semantic_subtype_policy: reject_candidate
+    model_predictions_used_for: [candidate_emission, coarse_type_routing, recoverability_filler_inventory]
+    model_predictions_forbidden_for: [recoverability_score, naturalness, ranking, eligibility_prediction]
+    merge_and_deduplication:
+      first_group_key: [sentence_hash, original_span, normalized_original_entity]
+      effective_type_resolution: unique_high_precision_rule_type_else_highest_score_gliner_prediction_then_label_ascending_else_declared_pattern_type_ascending
+      semantic_subtype_derivation: call_bound_semantic_subtype_exactly_once_after_effective_type_resolution
+      final_key: [sentence_hash, original_span, normalized_original_entity, effective_type, semantic_subtype]
+      survivor: minimum_tuple_source_priority_rule_before_model_then_emitter_registry_index_then_negative_model_score_then_declared_type_then_raw_surface_utf8
+      survivor_sentinels: {rule_source_priority: 0, model_source_priority: 1, model_emitter_registry_index: 2147483647, rule_model_score: 0.0}
+      conflicting_survivors_after_final_key: retain_exactly_one
+    pre_gate_candidate_cap: null
+  original_fact_provenance:
+    required_fields: [dataset, source_key, source_hash, normalized_text_hash, chunk_hash, sentence_hash, supporting_sentence, original_entity, original_span, effective_type, semantic_subtype, relation_signature, fact_signature]
+    exact_original_span_required: true
+    source_hash_required: true
+    sentence_hash_required: true
+  counterfactual_generation:
+    deterministic: true
+    regenerate_under_v23_identity: true
+    pool_source: exact_semantic_replacement_candidates_in_bound_entity_type_policy_for_deterministic_semantic_subtype
+    fallback_generator_used: false
+    normalize_and_deduplicate_by: unicode_nfkc_casefold_whitespace_v1
+    normalized_duplicate_surface_survivor: earliest_value_in_bound_yaml_subtype_list_then_raw_utf8_lexicographic
+    exclude: [normalized_original_value, source_present_bounded_value, empty_value, coarse_type_incompatible, surface_format_incompatible, frozen_external_a_an_frame_incompatible]
+    ordering: ascending_counterfactual_id_then_normalized_counterfactual
+    preserve_claim_except_one_entity_slot: true
+    maximum_candidates_per_original_entity_after_all_filters: 3
+    maximum_candidates_scope: each_exact_fact_candidate_identified_by_dataset_source_key_sentence_hash_original_span_effective_type_and_semantic_subtype_not_shared_across_other_occurrences
+    fewer_than_one_candidate_policy: reject_fact_candidate
+    source_global_absence_required: true
+
+minimum_construction_validity:
+  hard_gates:
+    exact_original_span: true
+    grounded_specific_fact: true
+    single_slot_change: true
+    counterfactual_absent_from_complete_source: true
+    coarse_type_compatible: true
+    surface_format_compatible: true
+    syntactically_valid_after_substitution: true
+    generic_role_or_fragment_rejected: true
+  exact_syntactic_minimum:
+    substitution: supporting_sentence_prefix_plus_counterfactual_plus_supporting_sentence_suffix
+    prefix_and_suffix_byte_for_byte_unchanged: true
+    counterfactual_nonempty_after_normalization: true
+    surrounding_whitespace_and_punctuation_frame_preserved: true
+    balanced_delimiters_required: true
+    external_a_an_frame_detection: apply_python_re_search_pattern_backslash_b_a_or_an_backslash_s_plus_dollar_ignorecase_to_exact_supporting_sentence_prefix_before_original_span
+    external_a_an_compatibility: if_frame_exists_candidate_first_ascii_alphabetic_codepoint_must_exist_and_be_in_aeiou_exactly_when_article_casefold_is_an_otherwise_must_not_be_in_aeiou_no_fallback_to_unfiltered_pool
+    no_language_model_or_naturalness_judge: true
+  gate_algorithms:
+    grounded_specific_fact: exact_conjunction_of_restoration_hard_gates_grounded_fact_stability_rules
+    coarse_type_compatible: candidate_effective_type_equals_replacement_pool_semantic_subtypes_declared_parent_type_in_bound_entity_type_policy_exact_string
+    surface_format_compatible: call_bound_src_attack_attackability_selector_machine_format_compatible_with_original_counterfactual_effective_type_then_require_true
+    syntactically_valid_after_substitution: exact_conjunction_of_exact_syntactic_minimum_rules
+    generic_role_or_fragment_rejected: original_entity_and_counterfactual_must_not_fullmatch_selector_primitives_generic_role_and_supporting_sentence_must_pass_proposition_segmentation_nonempty_rule
+    bound_callable_hashes: {machine_format_compatible_file: src/attack/attackability_selector.py, machine_format_compatible_file_sha256: bc035f92a370dcffb2e9164b5aa2cf8ae3b31a35d00390700224d6770a0f6139, entity_policy_file: configs/entity_type_policy_v21_r1.yaml, entity_policy_file_sha256: 582a30dcf321748cde55e25fa59e81dc1055de159852349405158b2c87d62c1f}
+  naturalness_score_computed: false
+  naturalness_threshold: null
+
+restoration_hard_gates:
+  grounded_fact_stability:
+    original_sentence_exactly_occurs_in_complete_source: true
+    sentence_source_occurrence_minimum: 1
+    relation_cue_regex_match_minimum: 1
+    declarative_terminal_character: ['.', ';']
+    ascii_alphanumeric_token_count_inclusive: [8, 80]
+    mail_header_regex_rejected: true
+    unresolved_reference_regex_rejected_anywhere: true
+    generic_entity_value_or_generic_role_fullmatch_rejected: true
+  original_entity_recoverability:
+    masked_claim_construction: replace_exact_original_span_with_single_entity_slot_token
+    relation_signature_construction: selector_primitives_identity_construction_relation_signature
+    complete_source_proposition_segmentation: selector_primitives_proposition_segmentation
+    filler_inventory: union_of_bound_pattern_registry_and_bound_gliner2_predictions_over_all_complete_source_propositions_then_route_and_deduplicate
+    filler_deduplication_key: [proposition_raw_start, proposition_raw_end, filler_span, normalized_filler, effective_type]
+    gliner_score_is_threshold_only_and_not_a_rank_feature: true
+    matching_supporting_propositions_in_complete_source_exactly: 1
+    matched_filler_must_equal_original_entity: true
+    competing_same_type_fillers_for_exact_relation_signature_maximum: 0
+    normalized_original_entity_bounded_occurrence_minimum: 1
+    model_prediction_used_for_inventory_and_routing: true
+    model_prediction_used_for_scoring_or_ranking: false
+  non_entity_retrieval_anchor:
+    anchor_source: masked_true_claim_only
+    original_and_counterfactual_entities_removed: true
+    all_p0_routed_entity_spans_removed: true
+    overlapping_p0_span_resolution: clip_each_half_open_span_to_masked_claim_coordinates_discard_empty_sort_by_start_then_negative_end_then_effective_type_then_normalized_surface_merge_touching_or_overlapping_intervals_then_replace_each_merged_interval_with_one_ascii_space_before_normalization
+    structured_diagnostic_spans_removed_or_used: false
+    token_normalization: unicode_nfkc_casefold
+    token_pattern_and_stopwords: selector_primitives_tokenization
+    minimum_distinct_content_tokens: 4
+    minimum_relation_cue_count: 1
+    minimum_source_specific_anchor_tokens: 1
+    source_specific_token_definition: normalized_non_entity_token_whose_df_times_100_is_less_than_or_equal_to_complete_frozen_pool_source_count
+    document_frequency_unit: complete_source_document_boolean_presence
+    document_frequency_denominator: exact_bound_source_count_for_same_dataset
+    idf_formula: natural_log_of_source_count_plus_1_divided_by_document_frequency_plus_1
+    idf_sum_round_decimals: 12
+    retriever_used: false
+  verification_discriminativeness:
+    original_supported_by_complete_source: true
+    counterfactual_exact_value_absent_from_complete_source: true
+    same_relation_can_hold_for_both_entities_rejected: true
+    correction_target_must_be_single_original_entity: true
+    operational_test: exact_relation_signature_has_one_original_filler_and_zero_distinct_same_type_competing_fillers_and_counterfactual_has_zero_bounded_source_occurrences
+  query_self_containment:
+    explicit_subject_operational_test: at_least_one_non_stopword_token_precedes_first_relation_cue
+    explicit_relation_operational_test: at_least_one_relation_cue_regex_match
+    explicit_entity_slot_operational_test: exactly_one_ENTITY_SLOT_after_masking
+    unresolved_deictic_or_cross_sentence_reference_test: unresolved_reference_regex_has_zero_matches
+  parser_contract:
+    role: global_query_and_response_schema_gate
+    unique_definition: downstream_identity_contracts_response_parser
+    per_pair_victim_or_llm_output_used: false
+    required_response_fields: [stance, correction_entity]
+    stance_values: [supported, contradicted, insufficient]
+    exact_correction_entity_required_when_contradicted: true
+    unknown_fields_mark_schema_invalid: true
+    non_contradicted_correction_entity_must_be_null: true
+
+selection:
+  strategy: hard_gates_then_deterministic_lexicographic_ranking
+  learned_or_weighted_utility_score_used: false
+  all_numeric_rank_features_are_recomputed_by_validator: true
+  ranking_tuple_ascending:
+    - negative_relation_cue_count
+    - sentence_source_occurrence_count
+    - negative_terminal_declarative_flag
+    - negative_min_content_token_count_40
+    - normalized_original_entity_bounded_occurrence_count
+    - same_type_filler_inventory_count
+    - negative_source_specific_anchor_count
+    - negative_idf_sum_rounded_12
+    - negative_distinct_content_token_count
+    - competing_relation_signature_count
+    - correction_candidate_count
+    - negative_explicit_argument_count
+    - unresolved_reference_count
+    - fact_signature_asc
+    - original_span_start_asc
+    - counterfactual_entity_normalized_asc
+    - pair_id_asc
+  rank_feature_definitions:
+    relation_cue_count: non_overlapping_relation_cue_regex_match_count_in_supporting_sentence
+    sentence_source_occurrence_count: non_overlapping_literal_occurrence_count_of_unmodified_trimmed_supporting_sentence_in_complete_source
+    terminal_declarative_flag: 1_if_supporting_sentence_ends_with_period_or_semicolon_else_0
+    min_content_token_count_40: min_40_and_distinct_non_entity_non_stopword_content_token_count
+    normalized_original_entity_bounded_occurrence_count: bounded_value_occurrence_count_in_complete_source
+    same_type_filler_inventory_count: distinct_normalized_fillers_with_effective_type_in_complete_source
+    source_specific_anchor_count: distinct_anchor_tokens_passing_df_times_100_less_than_or_equal_to_N
+    idf_sum_rounded_12: sum_idf_over_distinct_anchor_tokens_then_round_half_even_to_12_decimal_places
+    distinct_content_token_count: distinct_tokens_after_all_anchor_removal_and_tokenization_rules
+    competing_relation_signature_count: distinct_non_original_same_type_fillers_whose_relation_signature_equals_target_relation_signature
+    correction_candidate_count: distinct_fillers_for_target_relation_signature
+    explicit_argument_count: distinct_non_stopword_tokens_before_first_relation_cue_plus_distinct_non_stopword_tokens_after_ENTITY_SLOT
+    unresolved_reference_count: non_overlapping_unresolved_reference_regex_match_count
+    negative_prefix: multiply_numeric_feature_by_negative_one
+    asc_suffix: compare_normalized_utf8_strings_in_python_lexicographic_order
+  diversity_constraints:
+    distinct_fact_signatures: true
+    maximum_pairs_per_original_entity: 2
+    type_quota: null
+  tie_breaking: deterministic_no_random_draw_after_protocol_freeze
+  selection_algorithm:
+    name: stable_greedy_top_3_v1
+    procedure: sort_all_hard_gate_passed_formal_type_pairs_by_ranking_tuple_then_scan_once_accept_if_fact_signature_unseen_and_normalized_original_entity_count_below_2_stop_at_3
+    eligible_source_definition: stable_greedy_returns_exactly_3_pairs
+    fewer_than_3_policy: source_ineligible_and_no_p0_pairs_emitted
+    output_order: accepted_greedy_order
+  canonical_pair_artifact:
+    development_path_pattern: artifacts/v23/selection/development/<dataset>/selected_pairs.jsonl
+    fresh_audit_path_pattern: artifacts/v23/selection/fresh_audit/<protocol_revision_id>/<dataset>/selected_pairs.jsonl
+    formal_path_pattern: artifacts/v23/selection/formal/<protocol_revision_id>/<dataset>/selected_pairs.jsonl
+    serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator
+    order: frozen_source_order_then_accepted_greedy_pair_order
+    row_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, source_order_rank: int, pair_order: int, pair_id: lowercase_sha256_hex, fact_signature: lowercase_sha256_hex, relation_signature: lowercase_sha256_hex, supporting_sentence: str, original_span: list_of_exactly_two_ints, original_entity: str, counterfactual_entity: str, effective_type: str, semantic_subtype: str, true_claim: str, counterfactual_claim: str, rank_tuple: list_of_exactly_17_values}
+    constants: {kind: v23_selected_pair}
+    unknown_fields: reject
+    file_sha256: sha256_of_complete_file_bytes
+
+development_gate:
+  source_count_per_dataset: 1000
+  source_set: exact_v22_development_sources_fresh_reextracted_from_bound_v22_source_database
+  labels_or_thresholds_from_v22_used: false
+  expected_pair_count_per_eligible_source: 3
+  gates:
+    deterministic_rerun_hash_match: true
+    cross_dataset_source_and_text_hash_overlap: 0
+    development_formal_source_overlap: 0
+    hard_gate_violation_rate: 0.0
+    exact_three_pair_rate_among_eligible_sources: 1.0
+    capacity_inference:
+      distribution: hypergeometric_without_replacement
+      confidence_side: one_sided_lower
+      alpha: 0.05
+      population_N: exact_bound_source_count
+      sample_n: 1000
+      observed_x: eligible_source_count_in_development
+      total_eligible_lower_K_L: minimum_integer_K_in_0_to_N_such_that_hypergeom_survival_x_minus_1_given_N_K_n_is_at_least_0_05
+      consumed_non_development_c: count_distinct_ledger_sources_excluding_development_in_same_dataset
+      formal_eligible_lower: max_0_K_L_minus_observed_x_minus_consumed_non_development_c
+      comparison: formal_eligible_lower_greater_than_or_equal_to_2250
+      initial_c: 250
+      initial_minimum_observed_x:
+        edgar: 623
+        enron: 89
+        pubmed: 66
+      initial_boundary_check:
+        edgar: {x: 623, K_L: 3125, formal_eligible_lower: 2252}
+        enron: {x: 89, K_L: 2618, formal_eligible_lower: 2279}
+        pubmed: {x: 66, K_L: 2574, formal_eligible_lower: 2258}
+      recompute_before_each_new_revision_may_enter_fresh_audit_or_formal_scan: true
+  failure_policy: new_protocol_revision_required_no_formal_scan
+
+fresh_audit:
+  status: design_frozen_execution_blocked
+  sampling_unit: source_document
+  reserve_source_count_per_dataset: 250
+  source_count_per_dataset: 100
+  pairs_per_source: 3
+  total_pairs: 900
+  excludes_all_development_sources: true
+  reserve_source_order: evidence_partition_fresh_audit_sources_reserve_definition
+  initial_revision_reserve_golden_vector: exact_frozen_source_order_indices_1000_through_1249_for_each_dataset
+  selected_source_order: first_100_eligible_sources_in_reserve_order
+  minimum_eligible_sources_in_reserve: 100
+  all_reserve_sources_permanently_excluded_from_formal: true
+  independent_human_blind_review_required: true
+  independent_human_reviewer_count: 2
+  disagreements_and_uncertain_require_third_party_adjudication: true
+  assistant_only_labels_sufficient: false
+  blinding_claim: source_identity_and_protocol_feature_blind_not_guaranteed_dataset_modality_blind
+  opaque_audit_source_id:
+    object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, reserve_snapshot_sha256: lowercase_sha256_hex, dataset: str, source_key: str}
+    constants: {kind: v23_opaque_audit_source}
+    value: first_32_lowercase_hex_of_hmac_sha256_with_revision_audit_secret_over_canonical_json_object
+  packet_order_key:
+    object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, opaque_audit_source_id: str, pair_id: lowercase_sha256_hex}
+    constants: {kind: v23_audit_packet_order}
+    value: hmac_sha256_with_revision_audit_secret_over_canonical_json_object
+    ordering: ascending_packet_order_key
+  audit_secret: generated_once_from_32_os_csprng_bytes_then_hash_committed_before_packet_creation_and_revealed_only_after_final_adjudication
+  reviewer_identity_binding: each_reviewer_and_adjudicator_manifest_binds_pseudonymous_reviewer_id_role_packet_manifest_sha256_schema_sha256_and_completed_label_file_sha256
+  reviewer_role_separation: two_distinct_primary_reviewer_ids_and_one_distinct_adjudicator_id_required
+  blind_packet_visible_fields: [opaque_audit_source_id, complete_source_text, supporting_sentence, true_claim, counterfactual_claim, original_entity, counterfactual_entity, effective_type]
+  blind_packet_hidden_fields: [dataset_name, source_key, membership, split, group, selector_rank, rank_features, v22_labels, other_reviewer_labels, victim_response, llm_only_response, retriever_output, attack_score, auc]
+  review_dimensions:
+    - grounded_fact_stability
+    - original_entity_recoverability
+    - minimum_construction_validity
+    - non_entity_retrieval_anchor
+    - verification_discriminativeness
+    - query_self_containment
+  label_schema:
+    dimension_values: [pass, fail, uncertain]
+    overall_accept: all_dimensions_pass
+    overall_reject: at_least_one_dimension_fail
+    overall_uncertain: otherwise
+    both_reviewers_label_all_900_pairs_independently: true
+    missing_duplicate_or_invalid_label: audit_incomplete_fail_closed
+    adjudication_scope: any_pair_with_disagreeing_overall_labels_or_either_overall_uncertain
+    adjudicator_output_uses_same_schema: true
+  canonical_artifacts:
+    packet_path: artifacts/v23/audit/<protocol_revision_id>/blind_packets.jsonl
+    packet_order: ascending_packet_order_key
+    packet_row_schema: {kind: str, opaque_audit_source_id: str, packet_order_key: lowercase_sha256_hex, pair_id: lowercase_sha256_hex, pair_order: int, complete_source_text: str, supporting_sentence: str, true_claim: str, counterfactual_claim: str, original_entity: str, counterfactual_entity: str, effective_type: str}
+    packet_row_constants: {kind: v23_blind_audit_packet}
+    packet_manifest_path: artifacts/v23/audit/<protocol_revision_id>/blind_packet_manifest.json
+    packet_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, reserve_group_completion_sha256: lowercase_sha256_hex, selected_pair_file_sha256_by_dataset: object, packet_path: str, packet_file_sha256: lowercase_sha256_hex, packet_schema_sha256: lowercase_sha256_hex, packet_row_count: int, audit_secret_commitment_sha256: lowercase_sha256_hex, created_at: rfc3339_utc}
+    packet_manifest_constants: {kind: v23_blind_audit_packet_manifest, packet_row_count: 900}
+    reviewer_label_path_pattern: artifacts/v23/audit/<protocol_revision_id>/labels/<reviewer_id>.jsonl
+    reviewer_label_row_schema: {kind: str, reviewer_id: str, reviewer_role: str, opaque_audit_source_id: str, pair_id: lowercase_sha256_hex, grounded_fact_stability: str, original_entity_recoverability: str, minimum_construction_validity: str, non_entity_retrieval_anchor: str, verification_discriminativeness: str, query_self_containment: str, overall_label: str}
+    reviewer_label_row_constants: {kind: v23_blind_audit_label}
+    label_row_order: exact_packet_order
+    reviewer_manifest_path_pattern: artifacts/v23/audit/<protocol_revision_id>/labels/<reviewer_id>_manifest.json
+    reviewer_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, reviewer_id: str, reviewer_role: str, packet_manifest_sha256: lowercase_sha256_hex, label_schema_sha256: lowercase_sha256_hex, label_file_path: str, label_file_sha256: lowercase_sha256_hex, label_row_count: int, completed_at: rfc3339_utc}
+    reviewer_manifest_constants: {kind: v23_blind_audit_reviewer_manifest, label_row_count: 900}
+    adjudicator_label_path: artifacts/v23/audit/<protocol_revision_id>/labels/adjudicator.jsonl
+    adjudicator_label_row_schema: {kind: str, reviewer_id: str, reviewer_role: str, opaque_audit_source_id: str, pair_id: lowercase_sha256_hex, grounded_fact_stability: str, original_entity_recoverability: str, minimum_construction_validity: str, non_entity_retrieval_anchor: str, verification_discriminativeness: str, query_self_containment: str, overall_label: str}
+    adjudicator_label_row_constants: {kind: v23_blind_audit_adjudication, reviewer_role: adjudicator}
+    adjudicator_label_order: exact_packet_order_filtered_to_adjudication_scope
+    adjudicator_manifest_path: artifacts/v23/audit/<protocol_revision_id>/labels/adjudicator_manifest.json
+    adjudicator_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, reviewer_id: str, reviewer_role: str, packet_manifest_sha256: lowercase_sha256_hex, primary_reviewer_manifest_sha256s: list_of_exactly_two_lowercase_sha256_hex, adjudication_scope_sha256: lowercase_sha256_hex, label_schema_sha256: lowercase_sha256_hex, label_file_path: str, label_file_sha256: lowercase_sha256_hex, label_row_count: int, completed_at: rfc3339_utc}
+    adjudicator_manifest_constants: {kind: v23_blind_audit_adjudicator_manifest, reviewer_role: adjudicator}
+    final_label_path: artifacts/v23/audit/<protocol_revision_id>/final_labels.jsonl
+    final_label_row_schema: {kind: str, opaque_audit_source_id: str, pair_id: lowercase_sha256_hex, final_label_source: str, grounded_fact_stability: str, original_entity_recoverability: str, minimum_construction_validity: str, non_entity_retrieval_anchor: str, verification_discriminativeness: str, query_self_containment: str, overall_label: str}
+    final_label_row_constants: {kind: v23_blind_audit_final_label}
+    final_label_source_values: [primary_agreement, adjudicator]
+    final_label_order: exact_packet_order
+    final_label_row_count: 900
+    result_manifest_path: artifacts/v23/audit/<protocol_revision_id>/audit_result_manifest.json
+    result_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, reserve_group_completion_sha256: lowercase_sha256_hex, selected_pair_file_sha256_by_dataset: object, packet_manifest_sha256: lowercase_sha256_hex, packet_file_sha256: lowercase_sha256_hex, packet_schema_sha256: lowercase_sha256_hex, audit_secret_commitment_sha256: lowercase_sha256_hex, primary_reviewer_manifest_sha256s: list_of_exactly_two_lowercase_sha256_hex, adjudicator_manifest_sha256: lowercase_sha256_hex, final_label_file_path: str, final_label_file_sha256: lowercase_sha256_hex, final_label_row_count: int, metrics: object, status: str, completed_at: rfc3339_utc}
+    result_manifest_constants: {kind: v23_fresh_blind_audit_result}
+    all_jsonl_serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_unknown_fields_rejected
+  denominators:
+    pre_adjudication_raw_agreement: exact_overall_label_matches_divided_by_900
+    cohen_kappa: three_category_unweighted_kappa_over_all_900_complete_independent_label_pairs
+    kappa_formula: observed_agreement_minus_marginal_expected_agreement_divided_by_one_minus_marginal_expected_agreement
+    zero_kappa_denominator: fail_closed
+    final_overall_acceptance: adjudicated_or_agreed_accept_count_divided_by_900
+    final_uncertain: adjudicated_or_agreed_uncertain_count_divided_by_900
+    dataset_pair_acceptance: accepted_pairs_divided_by_300_for_each_dataset
+    dataset_source_all_three_pass: sources_with_three_accepted_pairs_divided_by_100_for_each_dataset
+  gates:
+    minimum_pair_acceptance_rate: 0.90
+    maximum_uncertain_rate: 0.05
+    minimum_dataset_pair_acceptance_rate: 0.85
+    minimum_each_dataset_source_all_three_pairs_pass_rate: 0.80
+    minimum_pre_adjudication_raw_agreement: 0.90
+    minimum_cohen_kappa: 0.80
+  failure_policy: new_protocol_revision_required_no_formal_scan
+
+formal_sequence:
+  stages:
+    - runtime_implementation_and_tests
+    - runtime_bundle_and_commit_freeze
+    - aggregate_df_precomputation
+    - revision_audit_reserve_snapshot_and_write_ahead_registration
+    - development_pilot_and_capacity_gate
+    - fresh_blind_audit
+    - formal_source_scan
+    - source_exclusive_split
+    - reserve_only_shadow_gate
+    - release_finalize
+    - luna_query_generation
+    - main_index_build_and_retriever_matrix
+    - matched_rag_and_llm_only_victim_runs
+    - parsing_scoring_and_source_level_evaluation
+  stage_may_start_only_after_previous_passed: true
+  formal_scan_early_stop_at_exact_target: true
+  global_dataset_order: [edgar, enron, pubmed]
+  dataset_execution: finish_one_dataset_before_starting_next_no_interleaving
+  formal_scan_order_definition: at_formal_scan_start_freeze_current_valid_ledger_tip_and_scan_frozen_v22_source_order_ascending_after_excluding_every_source_in_that_prior_consumption_snapshot
+  formal_scan_reservation_unit: exactly_one_source_per_reservation_batch
+  formal_scan_loop: for_each_dataset_in_global_order_reserve_exactly_next_one_unexcluded_source_durably_then_read_and_evaluate_it_if_eligible_append_its_exact_three_pairs_stop_immediately_when_eligible_count_becomes_2250
+  after_2250th_eligible: do_not_reserve_register_read_or_evaluate_any_later_source_in_same_dataset
+  formal_scan_current_revision_rows: each_single_source_append_before_selector_read_and_remain_eligible_for_current_selected_set_but_are_excluded_from_every_future_revision
+
+formal_split:
+  prerequisite: exact_2250_eligible_source_set_per_dataset_frozen_before_any_membership_assignment
+  split_key:
+    object_schema: {kind: str, specification_version: str, selection_seed: int, dataset: str, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex}
+    constants: {kind: v23_formal_split}
+    value: sha256_canonical_json_object
+  ordering: ascending_split_key_then_source_key
+  assignment:
+    first_1000: KB_Member
+    next_1000: True_Non_Member
+    final_250: Reserve
+  source_exclusive: true
+  required_zero_overlap_keys: [source_key, source_hash, normalized_text_hash]
+  formal_exclusion_snapshot:
+    path_pattern: artifacts/v23/formal/<protocol_revision_id>/<dataset>/formal_exclusion_snapshot.json
+    object_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, prior_ledger_tip_sha256: lowercase_sha256_hex, prior_tip_anchor_sha256: lowercase_sha256_hex, excluded_source_keys_sha256: lowercase_sha256_hex, source_order_file_sha256: lowercase_sha256_hex}
+    constants: {kind: v23_formal_exclusion_snapshot}
+    identity: sha256_canonical_json_object
+  selected_source_set_manifest:
+    path_pattern: artifacts/v23/formal/<protocol_revision_id>/<dataset>/selected_source_set_manifest.json
+    object_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, code_commit: str, aggregate_df_manifest_sha256: lowercase_sha256_hex, formal_exclusion_snapshot_sha256: lowercase_sha256_hex, ordered_selected_source_identity_sha256: lowercase_sha256_hex, selected_source_count: int, scan_viewed_source_count: int, final_consumption_ledger_tip_sha256: lowercase_sha256_hex, final_tip_anchor_sha256: lowercase_sha256_hex, status: str, external_calls_performed: int}
+    constants: {kind: v23_formal_selected_source_set, selected_source_count: 2250, status: passed, external_calls_performed: 0}
+    ordered_source_identity_object_schema: {selection_index: int, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, ordered_pair_ids: list_of_exactly_three_lowercase_sha256_hex}
+    identity: sha256_canonical_json_object
+  selected_source_rows:
+    path_pattern: artifacts/v23/formal/<protocol_revision_id>/<dataset>/selected_sources.jsonl
+    row_schema: {kind: str, selection_index: int, dataset: str, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, source_order_rank: int, ordered_pair_ids: list_of_exactly_three_lowercase_sha256_hex}
+    constants: {kind: v23_formal_selected_source}
+    order: selection_index_ascending
+    serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator
+    manifest_binding_field: ordered_selected_source_identity_sha256_equals_sha256_of_complete_rows_file_bytes
+  split_manifest:
+    path_pattern: artifacts/v23/splits/<protocol_revision_id>/<dataset>/split_manifest.json
+    object_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, code_commit: str, selected_source_set_sha256: lowercase_sha256_hex, consumption_ledger_tip_sha256: lowercase_sha256_hex, split_key_list_sha256: lowercase_sha256_hex, member_source_count: int, nonmember_source_count: int, reserve_source_count: int, required_zero_overlap_passed: bool, status: str, external_calls_performed: int}
+    constants: {kind: v23_source_exclusive_split, member_source_count: 1000, nonmember_source_count: 1000, reserve_source_count: 250, required_zero_overlap_passed: true, status: passed, external_calls_performed: 0}
+    identity: sha256_canonical_json_object
+  split_rows:
+    path_pattern: artifacts/v23/splits/<protocol_revision_id>/<dataset>/split_rows.jsonl
+    row_schema: {kind: str, dataset: str, split_index: int, split_key: lowercase_sha256_hex, group: str, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, source_order_rank: int, ordered_pair_ids: list_of_exactly_three_lowercase_sha256_hex}
+    constants: {kind: v23_source_split_row}
+    allowed_group: [KB_Member, True_Non_Member, Reserve]
+    order: split_index_ascending_after_split_key_then_source_key_sort
+    serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator
+    split_key_list_sha256: sha256_of_complete_rows_file_bytes
+  split_manifest_binds: [selected_source_set_sha256, design_manifest_sha256, runtime_bundle_sha256, code_commit, consumption_ledger_tip_sha256, split_key_list_sha256]
+  selection_rerun_after_split_forbidden: true
+
+release_contract:
+  path_pattern: artifacts/v23/release/<protocol_revision_id>/release_manifest.json
+  release_rows_path_pattern: artifacts/v23/release/<protocol_revision_id>/release_rows.jsonl
+  release_row_schema: {kind: str, specification_version: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, group: str, split_index: int, source_key: str, source_hash: lowercase_sha256_hex, normalized_text_hash: lowercase_sha256_hex, pair_order: int, pair_id: lowercase_sha256_hex, fact_signature: lowercase_sha256_hex, relation_signature: lowercase_sha256_hex, supporting_sentence: str, original_entity: str, counterfactual_entity: str, effective_type: str, true_claim: str, counterfactual_claim: str}
+  release_row_constants: {kind: v23_release_pair}
+  release_row_order: dataset_ascending_then_group_order_KB_Member_True_Non_Member_Reserve_then_split_index_then_pair_order
+  release_rows_serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator
+  shadow_gate_manifest_path_pattern: artifacts/v23/shadow/<protocol_revision_id>/<dataset>/<backend>/shadow_gate_manifest.json
+  shadow_gate_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, backend: str, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, split_manifest_sha256: lowercase_sha256_hex, reserve_source_key_list_sha256: lowercase_sha256_hex, shadow_index_manifest_sha256: lowercase_sha256_hex, retrieval_rows_path: str, retrieval_rows_file_sha256: lowercase_sha256_hex, retrieval_row_count: int, rebuild_retrieval_rows_file_sha256: lowercase_sha256_hex, isolation_gates: object, status: str, external_calls_performed: int, created_at: rfc3339_utc}
+  shadow_gate_manifest_constants: {kind: v23_reserve_shadow_gate, status: passed}
+  formal_selected_pair_file_sha256_by_dataset_source: exact_formal_selector_pair_artifact_sha256_for_each_dataset
+  manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, code_commit: str, formal_selected_pair_file_sha256_by_dataset: object, split_manifest_sha256_by_dataset: object, audit_result_manifest_sha256: lowercase_sha256_hex, shadow_gate_manifest_sha256_by_dataset_backend: object, release_rows_path: str, release_rows_file_sha256: lowercase_sha256_hex, release_row_count: int, status: str, external_calls_performed: int, created_at: rfc3339_utc}
+  manifest_constants: {kind: v23_release_manifest, release_row_count: 20250, status: passed, external_calls_performed: 0}
+  release_rows_count_derivation: 3_datasets_times_2250_sources_times_3_pairs
+
+downstream_identity_contracts:
+  luna_query_generator:
+    role: query_generation_only
+    pair_or_source_selection_forbidden: true
+    counterfactual_generation_forbidden: true
+    requested_model: gpt-5.6-luna
+    actual_model_id_version_endpoint_and_prompt_hash_must_be_frozen_before_calls: true
+    queries_may_not_be_reworked_using_victim_or_auc: true
+    input_object_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, source_key: str, pair_id: lowercase_sha256_hex, query_polarity: str, claim: str, original_entity: str, counterfactual_entity: str, effective_type: str, relation_cue: str, response_schema_literal: object}
+    input_constants: {kind: v23_luna_query_input}
+    allowed_query_polarity: [Q_plus, Q_minus]
+    claim_mapping: {Q_plus: exact_frozen_true_claim, Q_minus: exact_frozen_counterfactual_claim}
+    relation_cue_selection: run_python_re_finditer_with_selector_primitives_relation_cue_on_exact_claim_and_take_exact_substring_of_first_match_in_start_order_reject_if_no_match
+    response_schema_literal_value: {stance: supported_or_contradicted_or_insufficient, correction_entity: string_or_null}
+    response_schema_json_serialization: selector_primitives_canonical_json
+    prompt_substitution: require_each_of_pair_id_query_polarity_claim_response_schema_json_placeholders_exactly_once_then_replace_in_that_order_with_exact_utf8_input_strings_without_additional_escaping_or_format_interpolation
+    request_body_encoding: provider_adapter_must_bind_exact_canonical_json_request_bytes_and_sha256_in_query_contract_before_first_call
+    exact_prompt_template: |-
+      You convert one supplied claim into one neutral, self-contained verification question.
+      Preserve the claim's meaning and entities exactly. Do not add facts, alternatives, explanations, or source references.
+      Ask exactly one question ending in one question mark. Do not answer the question.
+      The downstream answer must be exactly one JSON object with keys "stance" and "correction_entity".
+      Allowed stance values are "supported", "contradicted", and "insufficient".
+      correction_entity must be null for supported or insufficient, and a non-empty string for contradicted.
+
+      Return exactly one JSON object and no other text with this exact shape:
+      {"kind":"v23_frozen_query","pair_id":"{pair_id}","query_polarity":"{query_polarity}","query_text":"<ONE QUESTION>"}
+
+      CLAIM_POLARITY: {query_polarity}
+      CLAIM: {claim}
+      RESPONSE_SCHEMA: {response_schema_json}
+    prompt_template_path_pattern: artifacts/v23/protocol/query_contracts/<query_contract_id>/luna_prompt.txt
+    prompt_template_sha256_required: true
+    generation_parameters: {temperature: 0.0, top_p: 1.0, n: 1, maximum_output_tokens: 256, seed_if_provider_supports: 42}
+    transport_attempts_per_query: 1
+    semantic_or_schema_retry_attempts: 0
+    output_object_schema: {kind: str, pair_id: lowercase_sha256_hex, query_polarity: str, query_text: str}
+    output_constants: {kind: v23_frozen_query}
+    output_unknown_fields: reject
+    output_validation:
+      - nonempty_utf8_query_text
+      - exactly_one_question_mark_after_strip
+      - no_entity_slot_literal
+      - at_least_one_relation_cue_regex_match
+      - contains_at_least_one_normalized_non_stopword_token_from_claim_before_first_relation_cue
+      - unresolved_reference_regex_zero_matches
+      - no_new_p0_entity_surface_beyond_surfaces_already_in_exact_claim
+      - pair_and_polarity_exactly_match_input
+    no_new_p0_entity_surface_algorithm: run_same_frozen_rule_and_gliner_p0_emission_routing_overlap_and_normalization_pipeline_on_exact_claim_and_query_text_then_require_set_of_normalized_query_surfaces_minus_normalized_claim_surfaces_is_empty
+    invalid_missing_transport_error_or_unparseable: retain_failed_query_cell_no_regeneration_and_block_query_plan_finalize_and_all_retriever_or_victim_run_cells
+    query_plan_order: dataset_ascending_then_frozen_split_source_order_then_pair_order_then_Q_plus_before_Q_minus
+    included_groups: [KB_Member, True_Non_Member]
+    reserve_queries_generated: false
+    query_rows_path_pattern: artifacts/v23/queries/<query_contract_id>/query_rows.jsonl
+    query_row_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, release_manifest_sha256: lowercase_sha256_hex, dataset: str, group: str, split_index: int, source_key: str, pair_order: int, pair_id: lowercase_sha256_hex, query_polarity: str, query_text: str, luna_request_sha256: lowercase_sha256_hex, luna_response_sha256: lowercase_sha256_hex, status: str}
+    query_row_constants: {kind: v23_frozen_query_row}
+    query_rows_serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_unknown_fields_rejected
+    expected_query_count: 36000
+    query_plan_manifest:
+      path_pattern: artifacts/v23/queries/<query_contract_id>/query_plan_manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, release_manifest_sha256, query_contract_id, query_rows_path, query_rows_file_sha256, expected_query_count, valid_query_count, failed_query_count, status, external_calls_performed, created_at]
+      constants: {kind: v23_query_plan}
+      passed_status_requires: expected_query_count_equals_valid_query_count_and_failed_query_count_zero
+      failed_query_plan_preserved_and_never_used_downstream: true
+    query_contract_manifest:
+      path_pattern: artifacts/v23/protocol/query_contracts/<query_contract_id>/manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, requested_model, actual_model_id, actual_model_version, endpoint_identity, prompt_path, prompt_sha256, generation_parameters, input_schema_sha256, output_schema_sha256, validator_code_sha256, created_at]
+      constants: {kind: v23_query_contract}
+      query_contract_id: sha256_canonical_json_object_of_all_required_fields_except_created_at
+  victim:
+    intended_model: google/gemma-2-2b-it
+    model_revision: 9b78bb926a2a249dd297e27b043019eb0666ce82
+    provider: huggingface_local_transformers_cuda
+    exact_snapshot_runtime_precision_and_decoding_must_be_frozen_before_calls: true
+    input_prompt_contract:
+      exact_system_prompt: |-
+        Verify the user's question using only the supplied context when a CONTEXT section is present.
+        If no CONTEXT section is present, answer only from the model's own fixed knowledge.
+        Return exactly one JSON object and no other text.
+        The object must contain exactly two keys: "stance" and "correction_entity".
+        stance must be "supported", "contradicted", or "insufficient".
+        Use "supported" only when the claim in the question is supported.
+        Use "contradicted" only when the claim is contradicted; set correction_entity to the corrected entity string.
+        Otherwise use "insufficient". For supported or insufficient, correction_entity must be null.
+      exact_rag_user_template: |-
+        QUESTION:
+        {query_text}
+
+        CONTEXT:
+        {ranked_context_blocks}
+      exact_llm_only_user_template: |-
+        QUESTION:
+        {query_text}
+      rag_user_payload_order: query_then_retrieved_context_chunks_in_retriever_rank_order
+      llm_only_user_payload_order: exact_same_query_with_context_section_omitted
+      context_chunk_template: '[CONTEXT {rank}]\n{text}'
+      prompt_template_path_pattern: artifacts/v23/protocol/victim_contracts/<victim_contract_id>/prompt.txt
+      prompt_sha256_required: true
+    decoding: {do_sample: false, temperature: 0.0, top_p: 1.0, num_beams: 1, max_new_tokens: 128, repetition_penalty: 1.0}
+    runtime_algorithm:
+      dtype: bfloat16
+      batch_size: 1
+      tokenizer_padding_side: left
+      tokenizer_truncation: false_input_exceeding_frozen_model_context_fails_cell_without_retry
+      chat_encoding: concatenate_exact_system_prompt_two_lf_exact_user_payload_as_one_user_role_message_then_tokenizer_apply_chat_template_tokenize_true_add_generation_prompt_true_return_tensors_pt
+      response_decode: decode_only_generated_token_ids_skip_special_tokens_true_clean_up_tokenization_spaces_false_then_utf8_strip
+      deterministic_algorithms: true
+    transport_attempts_per_cell: 1
+    generation_retry_attempts: 0
+    missing_timeout_error_or_oom: retain_missing_cell_and_score_negative_half
+    victim_contract_manifest:
+      path_pattern: artifacts/v23/protocol/victim_contracts/<victim_contract_id>/manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, model_id, model_revision, model_snapshot_sha256, tokenizer_sha256, transformers_version, torch_version, device_type, precision, decoding, prompt_path, prompt_sha256, response_schema_sha256, created_at]
+      constants: {kind: v23_victim_contract, device_type: cuda}
+      victim_contract_id: sha256_canonical_json_object_of_all_required_fields_except_created_at
+    response_artifacts:
+      rows_path_pattern: artifacts/v23/responses/<victim_contract_id>/<dataset>/<run_cell>/response_rows.jsonl
+      run_cell_values: [dense_rag, bm25_rag, hybrid_rag, shared_llm_only]
+      row_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, run_cell: str, backend: str_or_null, group: str, split_index: int, source_key: str, pair_order: int, pair_id: lowercase_sha256_hex, query_polarity: str, query_sha256: lowercase_sha256_hex, query_plan_manifest_sha256: lowercase_sha256_hex, retrieval_manifest_sha256: lowercase_sha256_hex_or_null, victim_contract_id: lowercase_sha256_hex, exact_prompt_sha256: lowercase_sha256_hex, provider_response_fingerprint: str_or_null, raw_response_text: str_or_null, raw_response_sha256: lowercase_sha256_hex_or_null, status: str, error_class: str_or_null}
+      row_constants: {kind: v23_victim_response}
+      status_values: [completed, missing, timeout, error, oom]
+      order: frozen_split_source_order_then_pair_order_then_Q_plus_before_Q_minus
+      serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_unknown_fields_rejected
+      manifest_path_pattern: artifacts/v23/responses/<victim_contract_id>/<dataset>/<run_cell>/response_manifest.json
+      manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, run_cell: str, backend: str_or_null, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, release_manifest_sha256: lowercase_sha256_hex, query_plan_manifest_sha256: lowercase_sha256_hex, retrieval_manifest_sha256: lowercase_sha256_hex_or_null, victim_contract_manifest_sha256: lowercase_sha256_hex, rows_path: str, rows_file_sha256: lowercase_sha256_hex, row_count: int, completed_count: int, missing_or_error_count: int, external_generation_attempts: int, created_at: rfc3339_utc}
+      manifest_constants: {kind: v23_victim_response_manifest, row_count: 12000, external_generation_attempts: 12000}
+      rag_cells_require_matching_retrieval_manifest_sha256: true
+      shared_llm_only_requires_null_backend_and_retrieval_manifest_sha256: true
+      full_suite_manifest_count: 12
+      full_suite_rows_and_generation_attempts: 144000
+  response_parser:
+    extraction: utf8_strip_then_parse_entire_string_as_one_rfc8259_json_object_no_markdown_fence_or_surrounding_text
+    object_schema: {stance: str, correction_entity: str_or_null}
+    unknown_fields: reject
+    stance_values: [supported, contradicted, insufficient]
+    correction_entity_rules:
+      supported: must_be_null
+      insufficient: must_be_null
+      contradicted: must_be_nonempty_string_after_unicode_nfkc_casefold_whitespace_v1
+    duplicate_json_keys: reject
+    nonfinite_values: reject
+    invalid_utf8_missing_or_schema_violation: unparseable_cell_score_negative_half
+    parser_contract_manifest:
+      path_pattern: artifacts/v23/protocol/parser_contracts/<parser_contract_id>/manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, parser_code_sha256, response_schema_sha256, normalization_contract_sha256, golden_vectors_sha256, created_at]
+      constants: {kind: v23_parser_contract}
+      parser_contract_id: sha256_canonical_json_object_of_all_required_fields_except_created_at
+    golden_vectors:
+      supported_valid: {input: '{"stance":"supported","correction_entity":null}', parsed_stance: supported, parsed_correction_entity: null}
+      contradicted_valid: {input: '{"stance":"contradicted","correction_entity":"Alice"}', parsed_stance: contradicted, parsed_correction_entity: Alice}
+      extra_field_invalid: '{"stance":"supported","correction_entity":null,"confidence":1}'
+      contradicted_null_invalid: '{"stance":"contradicted","correction_entity":null}'
+      fenced_invalid: '```json\n{"stance":"supported","correction_entity":null}\n```'
+  retriever_and_index:
+    formal_run_cells: [dense, bm25, hybrid]
+    one_backend_per_run_cell: true
+    query_rewriting: false
+    top_k: 5
+    dense:
+      model_id: BAAI/bge-base-en-v1.5
+      model_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+      query_instruction: 'Represent this sentence for searching relevant passages: '
+      encoder_algorithm: frozen_sentence_transformers_snapshot_modules_json_execution
+      document_input: exact_decoded_chunk_text_without_prefix
+      query_input: exact_query_instruction_concatenated_with_query_text
+      output_dtype: float32
+      pooling: exact_pooling_module_in_frozen_model_snapshot
+      l2_normalize_embeddings: true
+      similarity: inner_product_equal_to_cosine_after_normalization
+      index: faiss_IndexFlatIP_only_no_json_or_cpu_semantic_fallback
+      encode_batch_size: 32
+      device: cuda
+      precision: float32
+    bm25:
+      implementation: repository_bm25_inverted_index_v1
+      tokenizer_regex: '[A-Za-z0-9]+'
+      tokenizer_preprocess: python_str_casefold_then_regex_findall
+      query_terms: sorted_unique_tokens_ascending_python_lexicographic
+      score_accumulation_order: exact_query_terms_order_never_python_set_iteration_order
+      k1: 1.5
+      b: 0.75
+      idf: natural_log_of_1_plus_num_docs_minus_df_plus_0_5_divided_by_df_plus_0_5
+      score: sum_idf_times_tf_times_k1_plus_1_divided_by_tf_plus_k1_times_1_minus_b_plus_b_times_doc_length_divided_by_max_average_doc_length_1e_minus_12
+      tie_break: score_descending_then_docstore_index_ascending
+    hybrid:
+      dense_candidate_top_k: 20
+      bm25_candidate_top_k: 20
+      rrf_k: 60
+      fusion_top_k: 20
+      reranker_model: BAAI/bge-reranker-base
+      reranker_revision: 2cfc18c9415c912f9d8155881c133215df768a70
+      final_top_k: 5
+      reranker_input: exact_two_string_list_query_then_chunk_text
+      reranker_tokenization: frozen_cross_encoder_tokenizer_longest_first_truncation_to_model_max_length_with_special_tokens
+      reranker_batch_size: 32
+      reranker_device: cuda
+      reranker_precision: float32
+      reranker_score: exact_single_logit_float32
+      final_tie_break: reranker_score_descending_then_chunk_id_ascending
+    chunking:
+      unit: model_tokens
+      tokenizer_model: BAAI/bge-base-en-v1.5
+      tokenizer_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+      token_encode: add_special_tokens_false
+      chunk_size: 128
+      chunk_overlap: 32
+      step: 96
+      windows: start_at_0_then_add_step_stop_after_window_reaches_token_sequence_end
+      decode: skip_special_tokens_true_clean_up_tokenization_spaces_false_then_unicode_strip
+      empty_decoded_chunk: reject
+      chunk_id: source_key_plus_ascii_colon_plus_zero_based_chunk_index_as_eight_lowercase_hex_digits
+      source_offsets: persist_token_start_inclusive_and_token_end_exclusive_and_source_key_no_claim_of_lossless_character_offsets
+    retrieval_tie_break: score_descending_then_chunk_id_ascending
+    index_manifest:
+      path_pattern: artifacts/v23/indexes/<dataset>/<backend>/index_manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, dataset, backend, allowed_group, split_manifest_sha256, source_key_list_sha256, source_count, chunk_count, chunking, embedding_or_bm25_identity, index_file_sha256, created_at]
+      constants: {kind: v23_main_index, allowed_group: KB_Member}
+    retriever_contract_manifest:
+      path_pattern: artifacts/v23/protocol/retriever_contracts/<retriever_contract_id>/manifest.json
+      required_fields: [kind, design_manifest_sha256, runtime_bundle_sha256, protocol_revision_id, backend, library_versions, model_and_tokenizer_snapshots, parameters, tie_break, index_manifest_sha256, retriever_code_sha256, created_at]
+      constants: {kind: v23_retriever_contract}
+      retriever_contract_id: sha256_canonical_json_object_of_all_required_fields_except_created_at
+    frozen_reference_code:
+      embeddings: {path: src/rag/embeddings.py, sha256: f88f4c8d4be4d91e468c3c94e7b9c4a3ce9cb2d03ad102e3969b3e40697717d0}
+      index_builder: {path: src/rag/index_builder.py, sha256: d2f4ca778bea00290a30a8178657fe63163114cc6d0961e3582bee7c7707a04e}
+      retriever: {path: src/rag/retriever.py, sha256: 385488fcc46c4029bb7e2e61009662cfc29444b3dd104e1a1981aeeb9d40ed77}
+      reuse_rule: runtime_may_reimplement_only_if_golden_vectors_and_output_hashes_match_static_algorithms_above_reference_files_are_not_added_to_design_manifest_23_upstream_set
+    retrieval_rows:
+      path_pattern: artifacts/v23/retrieval/<retriever_contract_id>/<dataset>/<backend>/retrieval_rows.jsonl
+      row_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, backend: str, query_contract_id: lowercase_sha256_hex, source_key: str, pair_id: lowercase_sha256_hex, query_polarity: str, query_sha256: lowercase_sha256_hex, rank: int, chunk_id: str, chunk_text_sha256: lowercase_sha256_hex, retrieved_source_key: str, score: number, dense_score: number_or_null, bm25_score: number_or_null, rrf_score: number_or_null, reranker_score: number_or_null}
+      constants: {kind: v23_retrieved_chunk}
+      order: query_plan_order_then_rank_ascending
+      serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_unknown_fields_rejected
+      manifest_path_pattern: artifacts/v23/retrieval/<retriever_contract_id>/<dataset>/<backend>/retrieval_manifest.json
+      manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, dataset: str, backend: str, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, release_manifest_sha256: lowercase_sha256_hex, query_plan_manifest_sha256: lowercase_sha256_hex, index_manifest_sha256: lowercase_sha256_hex, retriever_contract_manifest_sha256: lowercase_sha256_hex, rows_path: str, rows_file_sha256: lowercase_sha256_hex, query_count: int, top_k: int, row_count: int, status: str, external_calls_performed: int, created_at: rfc3339_utc}
+      manifest_constants: {kind: v23_retrieval_manifest, query_count: 12000, top_k: 5, row_count: 60000, status: passed, external_calls_performed: 12000}
+      passed_status_requires_exactly_five_ranked_rows_for_every_query: true
+    retriever_output_not_visible_to_attacker_or_selector: true
+  matched_control:
+    same_source_pair_query_victim_and_decoding: true
+    only_retriever_context_presence_changes: true
+    llm_only_response_visible_during_selection: false
+    cell_matrix:
+      rag_cells: [dense_rag, bm25_rag, hybrid_rag]
+      llm_only_cells: [shared_llm_only]
+      per_source_query_count_by_cell: {dense_rag: 6, bm25_rag: 6, hybrid_rag: 6, shared_llm_only: 6}
+      llm_only_response_reuse: one_physical_llm_only_generation_per_query_referenced_by_all_three_backend_context_gain_comparisons
+      per_evaluated_source_total_victim_generations: 24
+      evaluated_sources_per_dataset: 2000
+      victim_generations_per_dataset: 48000
+      victim_generations_full_suite: 144000
+  main_index:
+    allowed_group: KB_Member
+    forbidden_groups: [True_Non_Member, Spoof_Seed, Spoofed_Non_Member, Reserve]
+  shadow_index:
+    allowed_group: Reserve
+    isolated_path_and_manifest_required: true
+    gate_role: engineering_isolation_and_retrieval_determinism_only_not_quality_selection_or_calibration
+    query_source: exact_frozen_true_and_counterfactual_claim_strings_without_luna_or_victim_calls
+    query_count_per_reserve_source_per_backend: 6
+    backends: [dense, bm25, hybrid]
+    required_gates:
+      - index_contains_only_exact_250_reserve_sources
+      - source_key_source_hash_and_normalized_text_hash_overlap_with_main_index_is_zero
+      - rebuild_index_manifest_and_retrieval_output_hash_match
+      - every_retrieved_chunk_belongs_to_reserve
+      - retriever_contract_identity_matches_future_main_backend_contract_except_index_and_allowed_group
+    forbidden_gates_or_uses: [recall_threshold, auc, membership_metric, victim_response, llm_only_response, pair_or_source_reselection, rank_or_threshold_tuning]
+    output_artifacts_diagnostic_only: true
+    failure_policy: block_release_and_require_new_runtime_attempt_not_change_selector_or_retriever_parameters_in_same_design_revision
+
+p0_outcome_functional:
+  evaluation_unit: source_document
+  primary_backend_dimension: [dense, bm25, hybrid]
+  response_cells_per_source_per_backend: 6
+  total_rag_response_cells_per_source_across_backends: 18
+  pair_count_per_source: 3
+  cells_per_pair: {Q_plus_true_claim: 1, Q_minus_counterfactual_claim: 1}
+  parser_input_contract: exact_global_parser_contract_frozen_before_any_victim_call
+  correction_entity_match: unicode_nfkc_casefold_whitespace_v1_exact_equality_to_original_entity
+  q_plus_support_score:
+    supported: 1.0
+    contradicted: -1.0
+    insufficient: -0.5
+    missing_unparseable_error_or_schema_invalid: -0.5
+  q_minus_restoration_score:
+    contradicted_and_exact_original_correction: 1.0
+    contradicted_without_exact_original_correction: 0.5
+    supported: -1.0
+    insufficient: -0.5
+    missing_unparseable_error_or_schema_invalid: -0.5
+  pair_pvs: q_plus_support_score_plus_q_minus_restoration_score
+  pair_pvs_range: [-2.0, 2.0]
+  source_pvs_function: source_pvs_dataset_backend_source_equals_arithmetic_mean_of_exactly_three_pair_pvs_for_that_same_backend_in_frozen_pair_order
+  source_pvs_range: [-2.0, 2.0]
+  missing_cell_policy: retain_source_and_apply_frozen_negative_half_score_never_drop_or_impute_from_other_cells
+  primary_membership_metric:
+    backend_policy: compute_and_report_dense_bm25_and_hybrid_as_three_separate_primary_attack_instantiations
+    population: exact_frozen_1000_KB_Member_and_1000_True_Non_Member_sources_per_dataset
+    positive_class: KB_Member
+    score: source_pvs_for_same_dataset_backend_and_source
+    metric: roc_auc_equal_to_mann_whitney_u_with_half_credit_for_tied_member_nonmember_scores_divided_by_1000_times_1000
+    reserve_excluded: true
+    cross_backend_score_pooling_or_averaging: forbidden_for_primary_metric
+  uncertainty:
+    bootstrap_unit: source_document
+    repetitions: 10000
+    seed: 42
+    canonical_source_order_within_cell: source_key_ascending_python_lexicographic
+    cell_order: [edgar_KB_Member, edgar_True_Non_Member, enron_KB_Member, enron_True_Non_Member, pubmed_KB_Member, pubmed_True_Non_Member]
+    rng: numpy_random_generator_pcg64
+    rng_initialization: numpy_random_Generator_numpy_random_PCG64_seed_42
+    rng_version_contract: exact_numpy_version_and_pcg64_state_golden_vector_bound_in_runtime_bundle
+    cross_run_cell_policy: generate_one_complete_10000_by_6_by_1000_int64_index_tensor_once_from_fresh_PCG64_42_validate_its_file_hash_then_reuse_the_identical_tensor_without_advancing_any_rng_for_dense_rag_bm25_rag_hybrid_rag_and_shared_llm_only
+    bootstrap_index_tensor_path_pattern: artifacts/v23/evaluation/bootstrap_indices_pcg64_seed42.npy
+    bootstrap_index_tensor_dtype_shape: little_endian_int64_shape_10000_6_1000
+    bootstrap_index_tensor_file_sha256_required: true
+    each_metric_cell_rng_reinitialization: forbidden
+    draw_loop: for_repetition_0_through_9999_then_for_each_cell_in_cell_order_draw_exactly_1000_integers_with_Generator_integers_low_0_high_1000_size_1000_endpoint_false_dtype_int64
+    resampling: use_drawn_indices_into_canonical_source_order_independently_with_replacement_within_each_cell
+    auc_per_repetition: recompute_tie_aware_auc_from_two_resampled_membership_cells_per_dataset
+    interval: sort_10000_statistic_values_ascending_then_linear_quantile_type_7_at_probabilities_0_025_and_0_975
+    quantile_type_7: h_equals_N_minus_1_times_p_j_floor_h_g_h_minus_j_output_x_j_plus_g_times_x_j_plus_1_using_zero_based_sorted_indices
+    macro_bootstrap: for_each_backend_separately_arithmetic_mean_of_three_per_dataset_auc_values_within_each_shared_repetition
+    golden_vectors:
+      rng_first_10_indices_seed_42_high_1000: [89, 773, 654, 438, 433, 858, 85, 697, 201, 94]
+      quantile_input_sorted: [0.0, 1.0, 2.0, 3.0, 4.0]
+      quantile_type_7_p_0_025: 0.1
+      quantile_type_7_p_0_975: 3.9
+  low_fpr:
+    levels: [0.01, 0.001]
+    empirical_definition: maximum_tpr_over_thresholds_with_empirical_fpr_less_than_or_equal_to_level_using_predict_member_when_source_pvs_greater_than_or_equal_to_threshold
+    thresholds: positive_infinity_then_all_distinct_observed_scores_descending_then_negative_infinity
+    tied_scores_cross_threshold_together: true
+  reporting_levels:
+    roc_auc: [per_backend_per_dataset, per_backend_macro_arithmetic_mean]
+    bootstrap_95_ci: [per_backend_per_dataset_auc, per_backend_macro_arithmetic_mean_auc]
+    low_fpr_tpr: [per_backend_per_dataset_only]
+    pooled_cross_dataset_metric: forbidden
+    cross_backend_primary_aggregation: forbidden
+  mandatory_reporting: [per_backend_per_dataset_roc_auc, per_backend_macro_mean_of_three_dataset_roc_auc, per_backend_per_dataset_and_macro_source_level_bootstrap_95_ci, per_backend_per_dataset_tpr_at_fpr_0_01, per_backend_per_dataset_tpr_at_fpr_0_001, frozen_pool_coverage, eligible_source_rate, rejection_reasons]
+  matched_llm_only_and_context_gain_not_primary: true
+  canonical_evaluation_artifacts:
+    input_manifest_path_pattern: artifacts/v23/evaluation/<protocol_revision_id>/evaluation_input_manifest.json
+    input_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, release_manifest_sha256: lowercase_sha256_hex, query_plan_manifest_sha256: lowercase_sha256_hex, parser_contract_manifest_sha256: lowercase_sha256_hex, retrieval_manifest_sha256_by_dataset_backend: object, rag_response_manifest_sha256_by_dataset_backend: object, shared_llm_only_response_manifest_sha256_by_dataset: object, bootstrap_index_tensor_path: str, bootstrap_index_tensor_file_sha256: lowercase_sha256_hex, expected_source_count_per_dataset: int, expected_pair_count_per_source: int, expected_query_count_per_source: int, expected_full_suite_response_rows: int, created_at: rfc3339_utc}
+    input_manifest_constants: {kind: v23_evaluation_input_manifest, expected_source_count_per_dataset: 2000, expected_pair_count_per_source: 3, expected_query_count_per_source: 6, expected_full_suite_response_rows: 144000}
+    exact_input_set: only_files_whose_complete_file_sha256_is_referenced_by_this_manifest_or_its_referenced_canonical_manifests
+    parsed_rows_path_pattern: artifacts/v23/evaluation/<protocol_revision_id>/parsed_response_rows.jsonl
+    parsed_row_schema: {kind: str, dataset: str, backend: str, group: str, source_key: str, pair_order: int, pair_id: lowercase_sha256_hex, query_polarity: str, response_manifest_sha256: lowercase_sha256_hex, raw_response_sha256: lowercase_sha256_hex_or_null, parse_status: str, stance: str_or_null, correction_entity: str_or_null, frozen_cell_score: number}
+    parsed_row_constants: {kind: v23_parsed_response}
+    parsed_row_order: backend_order_dense_bm25_hybrid_then_dataset_order_edgar_enron_pubmed_then_group_KB_Member_True_Non_Member_then_source_key_then_pair_order_then_Q_plus_before_Q_minus
+    parsed_rows_serialization: one_selector_primitives_canonical_json_object_per_utf8_line_with_single_lf_terminator_unknown_fields_rejected
+    source_score_rows_path_pattern: artifacts/v23/evaluation/<protocol_revision_id>/source_scores.jsonl
+    source_score_row_schema: {kind: str, dataset: str, backend: str, group: str, source_key: str, split_index: int, ordered_pair_ids: list_of_exactly_three_lowercase_sha256_hex, pair_pvs: list_of_exactly_three_numbers, source_pvs: number}
+    source_score_row_constants: {kind: v23_source_score}
+    source_score_row_order: backend_order_dense_bm25_hybrid_then_dataset_order_edgar_enron_pubmed_then_group_KB_Member_True_Non_Member_then_source_key
+    source_score_row_count: 18000
+    evaluation_manifest_path_pattern: artifacts/v23/evaluation/<protocol_revision_id>/evaluation_manifest.json
+    evaluation_manifest_schema: {kind: str, protocol_revision_id: lowercase_sha256_hex, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex, evaluation_input_manifest_sha256: lowercase_sha256_hex, parsed_rows_path: str, parsed_rows_file_sha256: lowercase_sha256_hex, source_score_rows_path: str, source_score_rows_file_sha256: lowercase_sha256_hex, source_score_row_count: int, metrics_by_backend_dataset: object, macro_metrics_by_backend: object, status: str, created_at: rfc3339_utc}
+    evaluation_manifest_constants: {kind: v23_source_level_evaluation, source_score_row_count: 18000, status: passed}
+    identity_chain: formal_selected_pair_files_to_audit_result_to_split_manifests_to_release_manifest_to_query_plan_manifest_to_retrieval_manifests_to_response_manifests_to_evaluation_input_manifest_to_evaluation_manifest
+    unbound_or_hash_mismatched_input: fail_closed
+
+selector_input_contract:
+  policy: recursive_exact_allowlist_unknown_field_rejected
+  source_object_required_fields: [dataset, source_key, source_order_rank, full_text, input_row_count, chunks]
+  source_object_optional_fields: []
+  source_object_types: {dataset: str, source_key: str, source_order_rank: str, full_text: str, input_row_count: int, chunks: list}
+  chunk_object_required_fields: [source_key, chunk_rank, selection_hash, row]
+  chunk_object_optional_fields: []
+  chunk_object_types: {source_key: str, chunk_rank: int, selection_hash: lowercase_sha256_hex, row: object}
+  row_object_required_fields: [audit_id, doc_id, source_id, source_path, source_key, dataset, text, text_hash, chunk_index]
+  row_object_optional_fields: []
+  row_object_types: {audit_id: str, doc_id: str, source_id: str, source_path: str, source_key: str, dataset: str, text: str, text_hash: lowercase_sha256_hex, chunk_index: int_or_null}
+  internally_generated_model_predictions_never_accepted_from_serialized_selector_input: true
+  nested_mapping_or_sequence_unknown_fields_fail_closed: true
+
+forbidden_selection_inputs:
+  - membership
+  - membership_label
+  - member_label
+  - split
+  - group
+  - victim_response
+  - victim_answer
+  - rag_response
+  - llm_only_response
+  - llm_only_answer
+  - retriever_output
+  - retrieval_rank
+  - retrieval_score
+  - retrieved_documents
+  - attack_score
+  - attack_auc
+  - auc
+  - v22_calibration_label
+  - v22_calibration_threshold
+
+execution_boundaries:
+  runtime_implemented: false
+  runtime_frozen: false
+  api_calls_allowed: false
+  victim_calls_allowed: false
+  retriever_runs_allowed: false
+  gpu_long_tasks_allowed: false
+  external_calls_expected_during_selection: 0
+  actual_status_source_until_runtime_exists: this_design_config_and_project_records
+  immutable_protocol_capability:
+    selection_external_calls: forbidden
+    downstream_calls: structurally_defined_but_not_authorized
+  authorization:
+    config_flags_must_never_be_flipped_in_place: true
+    implementation_authorization:
+      required_before_runtime_writes: true
+      manifest_path_pattern: artifacts/v23/governance/implementation_authorizations/<authorization_id>.json
+      required_fields: [authorization_id, user_authorization_record, authorized_stage, allowed_repository_paths, issued_at, expires_at_or_null, design_manifest_sha256, external_calls_allowed]
+      authorized_stage_exact_value: runtime_implementation_and_tests
+      external_calls_allowed_exact_value: false
+      runtime_bundle_sha256_required: false
+      object_schema: {kind: str, authorization_id: lowercase_sha256_hex, user_authorization_record: str, authorized_stage: str, allowed_repository_paths: list_of_str, issued_at: rfc3339_utc, expires_at_or_null: rfc3339_utc_or_null, design_manifest_sha256: lowercase_sha256_hex, external_calls_allowed: bool}
+      constants: {kind: v23_implementation_authorization, authorized_stage: runtime_implementation_and_tests, external_calls_allowed: false}
+      allowed_repository_paths_normalization: repository_relative_forward_slash_no_dotdot_duplicates_rejected_sorted_ascending_utf8
+      authorization_id: sha256_canonical_json_object_excluding_authorization_id
+    runtime_bootstrap_authorization:
+      purpose: authorize_exactly_one_first_runtime_bundle_freeze_and_consumption_ledger_genesis_without_requiring_a_preexisting_runtime_bundle_sha256
+      manifest_path_pattern: artifacts/v23/governance/runtime_bootstrap_authorizations/<authorization_id>.json
+      required_fields: [authorization_id, user_authorization_record, authorized_stage, execution_unit, bootstrap_attempt_id, expected_prior_ledger_tip_sha256, issued_at, expires_at_or_null, design_manifest_sha256, external_calls_allowed]
+      object_schema: {kind: str, authorization_id: lowercase_sha256_hex, user_authorization_record: str, authorized_stage: str, execution_unit: str, bootstrap_attempt_id: lowercase_sha256_hex, expected_prior_ledger_tip_sha256: str, issued_at: rfc3339_utc, expires_at_or_null: rfc3339_utc_or_null, design_manifest_sha256: lowercase_sha256_hex, external_calls_allowed: bool}
+      constants: {kind: v23_runtime_bootstrap_authorization, authorized_stage: runtime_bundle_and_commit_freeze, execution_unit: global, expected_prior_ledger_tip_sha256: genesis_sentinel, external_calls_allowed: false}
+      runtime_bundle_sha256_field: forbidden_because_this_authorization_creates_the_first_runtime_bundle
+      bootstrap_attempt_identity_object_schema: {kind: str, design_manifest_sha256: lowercase_sha256_hex, stage: str, execution_unit: str, bootstrap_attempt_ordinal: int}
+      bootstrap_attempt_identity_constants: {kind: v23_runtime_bootstrap_attempt, stage: runtime_bundle_and_commit_freeze, execution_unit: global}
+      bootstrap_attempt_id: sha256_canonical_json_object_of_bootstrap_attempt_identity
+      bootstrap_attempt_ordinal_allocation: under_exclusive_bootstrap_attempt_registry_lock_choose_one_plus_max_prior_ordinal_or_zero_if_none_then_append_and_fsync_before_use
+      ordinary_attempt_identity_and_protocol_revision_id_before_bundle_creation: forbidden
+      single_use_rule: no_valid_runtime_bundle_or_consumption_ledger_genesis_may_preexist_and_authorization_id_must_never_have_a_prior_checkpoint_or_budget_journal
+      authorization_id: sha256_canonical_json_object_excluding_authorization_id
+      bootstrap_checkpoint_path_pattern: artifacts/v23/checkpoints/bootstrap/<bootstrap_attempt_id>.json
+      bootstrap_checkpoint_schema: {kind: str, design_manifest_sha256: lowercase_sha256_hex, bootstrap_attempt_id: lowercase_sha256_hex, authorization_id: lowercase_sha256_hex, status: str, new_runtime_bundle_sha256: lowercase_sha256_hex, new_protocol_revision_id: lowercase_sha256_hex, genesis_row_sha256: lowercase_sha256_hex, genesis_anchor_sha256: lowercase_sha256_hex, code_commit: str, completed_at: rfc3339_utc}
+      bootstrap_checkpoint_constants: {kind: v23_runtime_bootstrap_checkpoint, status: passed}
+      completion: one_passed_bootstrap_checkpoint_must_bind_the_new_runtime_bundle_sha256_new_protocol_revision_id_genesis_row_sha256_and_genesis_anchor_sha256
+    run_authorization:
+      required_after_runtime_bundle_freeze_and_before_any_execution_stage: true
+      manifest_path_pattern: artifacts/v23/governance/run_authorizations/<authorization_id>.json
+      required_fields: [authorization_id, user_authorization_record, protocol_revision_id, attempt_id, authorized_stage, execution_unit, expected_prior_ledger_tip_sha256, datasets, run_roles, model_or_retriever_cells, budget_kind, budget_limit, issued_at, expires_at_or_null, design_manifest_sha256, runtime_bundle_sha256]
+      object_schema: {kind: str, authorization_id: lowercase_sha256_hex, user_authorization_record: str, protocol_revision_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, authorized_stage: str, execution_unit: str, expected_prior_ledger_tip_sha256: lowercase_sha256_hex_or_genesis_sentinel, datasets: list_of_str, run_roles: list_of_str, model_or_retriever_cells: list_of_str, budget_kind: str, budget_limit: int, issued_at: rfc3339_utc, expires_at_or_null: rfc3339_utc_or_null, design_manifest_sha256: lowercase_sha256_hex, runtime_bundle_sha256: lowercase_sha256_hex}
+      constants: {kind: v23_run_authorization}
+      one_stage_one_attempt: authorized_stage_must_equal_attempt_identity_stage_and_execution_unit_must_equal_attempt_identity_execution_unit
+      list_normalization: reject_duplicates_then_sort_each_list_ascending_utf8_before_hash_and_execution
+      authorization_id: sha256_canonical_json_object_excluding_authorization_id
+      stage_checkpoint_input_tip_must_equal_expected_prior_ledger_tip_sha256: true
+      budget_kind_values: [none, sources, waves, calls]
+      exact_stage_budget_mapping:
+        aggregate_df_precomputation: {budget_kind: sources, execution_unit: one_dataset, charge: one_per_source_read}
+        revision_audit_reserve_snapshot_and_write_ahead_registration: {budget_kind: sources, execution_unit: all_datasets_group, charge: one_per_source_reserved}
+        development_pilot_and_capacity_gate: {budget_kind: sources, execution_unit: one_dataset, charge: one_per_source_selector_evaluation}
+        fresh_blind_audit: {budget_kind: sources, execution_unit: one_dataset, charge: one_per_reserved_source_selector_evaluation_before_content_read_maximum_250_per_dataset_packetization_of_first_100_eligible_adds_zero_runtime_charges_human_label_actions_are_outside_runtime_call_budget_but_require_separate_human_authorization_record}
+        formal_source_scan: {budget_kind: sources, execution_unit: one_dataset, charge: one_per_source_reserved_before_read}
+        source_exclusive_split: {budget_kind: none, execution_unit: one_dataset}
+        reserve_only_shadow_gate: {budget_kind: calls, execution_unit: one_dataset_one_backend, charge: one_per_retrieval_query}
+        release_finalize: {budget_kind: none, execution_unit: global}
+        luna_query_generation: {budget_kind: calls, execution_unit: one_dataset, charge: one_per_transport_attempt}
+        main_index_build_and_retriever_matrix: {budget_kind: calls, execution_unit: one_dataset_one_backend, charge: one_per_retrieval_query_index_build_itself_zero_calls}
+        matched_rag_and_llm_only_victim_runs: {budget_kind: calls, execution_unit: one_dataset_one_victim_cell, charge: one_per_victim_generation_attempt}
+        parsing_scoring_and_source_level_evaluation: {budget_kind: none, execution_unit: one_metric_cell}
+      none_budget_requires_zero: true
+      budget_limit_nonnegative_integer: true
+      budget_journal:
+        path_pattern: artifacts/v23/governance/authorization_budgets/<authorization_id>.jsonl
+        row_schema: {kind: str, sequence: int, authorization_id: lowercase_sha256_hex, attempt_id: lowercase_sha256_hex, stage: str, execution_unit: str, charge_ordinal: int, charge_kind: str, charge_amount: int, operation_identity_sha256: lowercase_sha256_hex, previous_row_sha256: lowercase_sha256_hex_or_64_ascii_zeroes, row_sha256: lowercase_sha256_hex, charged_at: rfc3339_utc}
+        constants: {kind: v23_authorization_budget_charge, charge_amount: 1}
+        append_rule: under_exclusive_authorization_budget_lock_verify_hash_chain_and_sum_charges_strictly_less_than_budget_limit_append_complete_canonical_json_line_flush_and_fsync_then_perform_exactly_one_operation
+        crash_after_charge: charge_remains_spent_and_operation_may_resume_only_by_exact_operation_identity_without_new_charge_if_durable_operation_completion_exists_otherwise_fail_closed_new_authorization_required
+        reaching_budget_limit: refuse_next_operation_before_any_content_read_external_call_or_reservation
+        checkpoint_binding: final_budget_journal_tip_sha256_required
+    unspecified_capability: denied
+    implementation_authorization_does_not_authorize_pilot_gpu_api_victim_or_retriever: true
+
+stage_status_matrix:
+  runtime_implementation_and_tests: not_implemented_waiting_for_user_authorization
+  runtime_bundle_and_commit_freeze: blocked_by_runtime_implementation
+  aggregate_df_precomputation: blocked_by_runtime_bundle_and_separate_run_authorization
+  revision_audit_reserve_snapshot_and_write_ahead_registration: blocked_by_aggregate_df_precomputation
+  development_pilot_and_capacity_gate: blocked_by_reserve_registration_and_separate_run_authorization
+  fresh_blind_audit: blocked_by_development_gate_and_separate_authorization
+  formal_source_scan: blocked_by_fresh_audit_and_separate_authorization
+  source_exclusive_split: blocked_by_formal_scan
+  reserve_only_shadow_gate: blocked_by_split_and_separate_retriever_authorization
+  release_finalize: blocked_by_shadow_gate
+  luna_query_generation: blocked_by_release_and_separate_api_authorization
+  main_index_build_and_retriever_matrix: blocked_by_release_and_separate_retriever_authorization
+  matched_rag_and_llm_only_victim_runs: blocked_by_query_index_and_separate_victim_authorization
+  parsing_scoring_and_source_level_evaluation: blocked_by_complete_responses
+
+required_runtime_guards:
+  - recursively_enforce_exact_selector_input_allowlist_and_reject_unknown_fields
+  - verify_all_bound_file_hashes_before_resume
+  - reject_config_code_model_or_input_drift
+  - preserve_partial_failed_and_superseded_artifacts
+  - write_new_attempt_or_revision_identity_on_force
+  - record_zero_external_calls_in_selection_manifests
+  - prevent_formal_stage_before_all_prior_gates_pass
+  - enforce_one_dataset_generator_retriever_run_role_cell_at_a_time
