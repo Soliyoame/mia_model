@@ -3451,13 +3451,16 @@ def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
         )
     )
     bootstrap: dict[str, Any] | None = None
+    active: dict[str, Any] | None = None
     bootstrap_error: str | None = None
     if bootstrap_artifacts_exist:
         try:
             bootstrap = validate_runtime_bootstrap(root)
+            active = validate_active_runtime(root)
         except (OSError, RuntimeError, ValueError) as error:
             bootstrap_error = str(error)
-    frozen = bootstrap is not None
+    frozen = active is not None
+    runtime_identity = active or bootstrap or {}
     blocked = [
         "aggregate_df_precomputation",
         "revision_audit_reserve_snapshot_and_write_ahead_registration",
@@ -3490,8 +3493,8 @@ def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
         "design_manifest_sha256": bindings["design_manifest_sha256"],
         "implementation_files_present": present,
         "runtime_bundle_frozen": frozen,
-        "runtime_bundle_sha256": bootstrap.get("runtime_bundle_sha256") if bootstrap else None,
-        "protocol_revision_id": bootstrap.get("protocol_revision_id") if bootstrap else None,
+        "runtime_bundle_sha256": runtime_identity.get("runtime_bundle_sha256"),
+        "protocol_revision_id": runtime_identity.get("protocol_revision_id"),
         "bootstrap_validation_error": bootstrap_error,
         "pilot_started": False,
         "external_calls_performed": 0,

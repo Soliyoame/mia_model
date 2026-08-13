@@ -68,6 +68,7 @@ from src.prepare.restoration_first_v23 import (
     validate_runtime_bootstrap_authorization,
     validate_runtime_bootstrap,
     validate_runtime_successor_freeze,
+    v23_status,
     evaluate_blind_audit,
     freeze_source_exclusive_split,
     write_stage_checkpoint,
@@ -933,6 +934,35 @@ class V23GovernanceTests(unittest.TestCase):
                 (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
                 ledger_before,
             )
+
+    def test_status_reports_active_successor_runtime_identity(self):
+        bootstrap = {
+            "runtime_bundle_frozen": True,
+            "runtime_bundle_sha256": "a" * 64,
+            "protocol_revision_id": "b" * 64,
+        }
+        active = {
+            "runtime_bundle_sha256": "c" * 64,
+            "protocol_revision_id": "d" * 64,
+        }
+        with patch(
+            "src.prepare.restoration_first_v23.validate_bootstrap_design_identity",
+            return_value={"design_manifest_sha256": DESIGN_MANIFEST_SHA256},
+        ), patch(
+            "src.prepare.restoration_first_v23._directory_has_entries",
+            return_value=True,
+        ), patch(
+            "src.prepare.restoration_first_v23.validate_runtime_bootstrap",
+            return_value=bootstrap,
+        ), patch(
+            "src.prepare.restoration_first_v23.validate_active_runtime",
+            return_value=active,
+        ):
+            status = v23_status(project_root=Path("."))
+        self.assertEqual(status["status"], "runtime_frozen_downstream_blocked")
+        self.assertTrue(status["runtime_bundle_frozen"])
+        self.assertEqual(status["runtime_bundle_sha256"], active["runtime_bundle_sha256"])
+        self.assertEqual(status["protocol_revision_id"], active["protocol_revision_id"])
 
     def test_aggregate_df_runner_success_is_boolean_private_and_exactly_once(self):
         with tempfile.TemporaryDirectory() as directory:
