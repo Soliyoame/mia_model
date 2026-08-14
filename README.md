@@ -1,10 +1,76 @@
 # PCV-MIA
 
-## 当前唯一执行口径
+## 当前活跃协议：v23 Restoration-First
 
-当前正式 RAG 协议是 `pcv-mia-v20 / pcv-rag-only-source-v20`。上游
-attack-first RC2 的三数据集 benchmark 与每 source `3 pair / 6 queries`
-预算继续冻结复用；旧 MiniLM RAG 已标记为 `superseded` 并封存在
+当前研究协议是 `pcv-mia-v23 / pcv-restoration-first-v23`，设计配置入口为
+`configs/restoration_first_v23.yaml`，零外部调用 runtime 入口为
+`scripts/42_run_v23_restoration_first.py`。v22 的三套 source pool 与 pilot 可按
+v23 冻结绑定受控复用，但 v22 `calibration_r3` 已以
+`failed_final_calibration_revision` 正式失败；不得续跑 v22 formal scan、split、
+fresh audit、shadow、query、victim 或 Retriever 阶段。
+
+v23 取消反事实自然性优化和未实施的 Luna Generation-First。类型与句法只承担最低
+构造有效性约束，P0 selector 的选择目标是：
+
+- 原事实稳定、原实体可恢复；
+- 非实体检索锚点充分；
+- 验证结果可辨别；
+- query 自包含且输出可解析。
+
+P0 正式类型固定为 `CONTRACT_TERM`、`LOCATION`、`ORG`、`PERSON`、`PRODUCT`。
+`DATE`、`MONEY`、`EMAIL`、`PHONE`、`IDENTIFIER` 只作为诊断与次要扩展，不能填充
+P0 所需 pair。类型多样性本身不是优化目标。
+
+selector 禁止读取或利用 membership、split/group、victim/RAG response、
+LLM-only response、Retriever 输出、attack score/AUC 或 v22 calibration
+label/threshold。完整 source pool 只允许在受控 aggregate-DF stage 按
+runtime bundle/dataset 读取一次；其输出只包含 aggregate token DF，不包含 source
+映射或逐 source 行，也不得据此声称低频 token 不可反演。
+
+### v23 当前状态（2026-08-14）
+
+| 阶段 | 状态 | 可核验证据 |
+|---|---|---|
+| Runtime 实现、bootstrap 与 successor freeze | 已完成 | 隔离 runtime bundle、protocol revision 与 append-only governance 链已生成 |
+| Edgar aggregate-DF | `passed` | 5,210 sources / 116,953 token rows / 0 external calls |
+| Enron aggregate-DF | `passed` | 35,000 sources / 181,394 token rows / 0 external calls |
+| PubMed aggregate-DF | 未完成 | 目录已创建但没有 canonical manifest |
+| v23 fact extraction、selector pilot 与 capacity gate | 未启动 | 等待 PubMed aggregate-DF 及独立运行授权 |
+| formal scan、split、fresh audit、shadow、Luna、Gemma victim、Retriever 与 evaluation | 未启动且 blocked | 必须依次通过上游 gate，并分别取得长任务/GPU/API/victim/Retriever 授权 |
+
+当前 aggregate-DF protocol revision 为
+`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+Edgar 与 Enron manifest 均记录 `external_calls_performed: 0`；当前没有 v23 victim、
+LLM-only 或 Retriever 响应可用于选样或报告结果。
+
+只读校验命令：
+
+```powershell
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-design
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset edgar
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset enron
+```
+
+`status` 会重算冻结输入与 runtime 身份哈希，在大型 source pool 上可能耗时较长：
+
+```powershell
+python -X utf8 -B scripts/42_run_v23_restoration_first.py status
+```
+
+执行新的 aggregate-DF 必须使用为单一 dataset/attempt 单独签发的 authorization；
+不得复用示例 ID，也不得把一次登录切换或实现授权解释为实验运行授权：
+
+```powershell
+python -X utf8 -B scripts/42_run_v23_restoration_first.py aggregate-df `
+  --dataset <edgar|enron|pubmed> `
+  --authorization <authorized-manifest.json>
+```
+
+## v20 兼容实现参考（已冻结，非当前执行入口）
+
+v20 曾是成熟的 RAG、matched LLM-only、baseline、defense 与报告实现。以下命令和
+配置仅用于理解或复现历史实现，不能作为 v23 的下一步，也不能与 v23 上游候选或
+结果拼接。旧 MiniLM RAG 已标记为 `superseded` 并封存在
 `legacy/abandoned_retriever_20260730/`，禁止续跑、合并、评分或进入论文。
 
 v20 的正式系统为：
@@ -121,7 +187,7 @@ KB isolation
 = source-document membership score
 ```
 
-## 当前状态
+## v20 历史状态（已 superseded）
 
 ### 2026-07-31：v20 首次 API 前离线门禁完成
 
@@ -220,7 +286,7 @@ P1 推荐恢复顺序：
 - 每一次物理重试都重新经过令牌桶，不会绕过 `requests_per_minute`。缺依赖、解析错误等非 API 异常不会无限空等。
 - 默认长冷却是 300 秒。若端点长期宕机或授权永久不可用，进程会持续运行并重试；需人工停止时使用 `Ctrl+C`。
 
-## 方法概览
+## v20 经典流水线（历史实现参考）
 
 完整流水线如下：
 
@@ -1687,9 +1753,9 @@ python scripts/run_pipeline.py --dataset enron --only-steps 3,9-13,15 --force
 python -B -m unittest discover -s tests
 ```
 
-v19/RC2 最新本地验收结果为 302/302 tests 通过、260 个 Python 文件内存编译通过、
-15 个 YAML 解析通过；formal integrity 与 `git diff --check` 也通过。测试输出中的
-timeout/retry 文本来自 mock 路径，不是真实 API 调用。
+当前分支最新验收结果为 8/8 个 entity-policy 定向测试与 457/457 个全量单元测试
+通过。测试过程没有 GPU、真实 API、victim 或 Retriever 调用；测试输出中的
+timeout/retry 文本来自 mock 路径，不是真实外部调用。
 
 语法检查：
 
@@ -1794,27 +1860,14 @@ baseline：6 个（RAG-MIA / S2MIA / MBA / IA / DCMI / MEntA）统一接入第 1
 
 ## 研究记录
 
-仓库 `研究记录/` 目录下的 `思路v2.txt`~`思路v19.txt`、`baseline.txt`、`分类器.txt`、`实验v1.txt` 是研究记录，不是运行入口（该目录默认不入库）。当前思路文档以增量方式叠加，权威性以最新为准：
+`研究记录/`、根目录 `notes.md` 和 `task_plan.md` 是本地研究管理材料，不是公开运行
+接口，也不应仅因 README 更新而提交到远端。公开 README 只保留能够由当前代码、
+配置和机器可读 manifest 复核的协议状态，不复制 authorization ID、私有 artifact、
+内部审计内容或历史逐次日志。
 
-- `思路v19` 冻结三数据集、四 Generator、双 Retriever、source-level 固定八次查询、validator v2、双盲审计与 36-cell canonical 门禁。当前本地技术阶段已完成，真实人工门禁仍待回收。
-- `思路v18` 记录 2026-07-13 baseline 复现就绪审计、MBA 并发修复、IA/DCMI 失败放大原因，以及 PCV-MIA/全 baseline 的 API 长冷却无限重试决策。
-- `思路v17` 固定 LLM-only 默认关闭与 P1 完整性基础设施修复。
-- `思路v16` 是当前最新协议增量：P0 固定 RAG-only 主攻击、source-level 评估、conformal 校准与 canonical run/suite；P1 负责修通实验基础设施。若该文件未纳入仓库，请以当前 README 与代码中的 `P0_PROTOCOL` 为准。
-- [思路v15.txt](研究记录/思路v15.txt) 是上一版工程化增量文档（run 归档、论文图、模型相关产物分层）。
-- [思路v11.txt](研究记录/思路v11.txt) 是终分层精炼（L1 主分→z-score、去误受项、per-term 去偏对照、门控否决、阈值-指标关系表 + Accuracy 输出；全程离线消融裁决，含两个被数据否决的方向）。
-- [思路v10.txt](思路v10.txt) 是 v9 的增量（方案 D 抽事实保底覆盖 + 质量加权三口径 + 句子定位 bug 修复；附录"同日第二批"：07/08/09 加固 + 第 15 步主报告排除 Reserve + 死兜底清理）。
-- [思路v9.txt](思路v9.txt) 是 v8 的增量（L1 群体校准 + 预训练污染诊断 + L2 shadow 逐样本校准）。
-- [思路v8.txt](思路v8.txt) 是 v7 的增量（prompt 对称化 + 可行性验证 + 输出归档/可视化）。
-- [思路v7.txt](思路v7.txt) 是主流水线本体（01-15 顺序、数据隔离、事实抽取、打分公式）的详细说明。
-- 新旧说法冲突时，以 `思路v19` + 当前 README + 当前代码/配置为准；旧版中的 context-gain 主分、chunk-level 主评估与历史数值仅作研究过程记录。
-- **当前阶段定位 = attack-first RC2 本地产物与 AI 预审已完成，准备 Enron 单 cell
-  机制 pilot**。pilot 通过后逐个 Generator、逐个 Retriever 扩展；若论文主张真实
-  双人一致性，仍须另外收集真人标签。
-- v9 关键诊断：enron 在 formal 上 `cvg_llm AUC=0.606`（阴性对照失败），根因是 enron 公开数据集被 victim 预训练污染；扣先验后 `cg_cvg AUC=0.772 CI[0.716,0.828]` 仍显著，攻击未失效，但污染数据上应主报扣先验终分或用 L2。
-- `实验v1.txt` 记录首次 Enron 端到端实验结果（AUC ≈ 0.77）。
-- `分类器.txt` 是关于 MIA 元分类器方向的调研笔记；其中提到的 `GradientBoostingClassifier` 等分类器属于后续设想，当前代码尚未引入，主方法仍是 CG-CVG 阈值判定。
-
-README 是面向运行和复现的操作文档，应与 `思路v19.txt`、任务记录和当前代码/配置同步更新。
+当前阶段定位是：v23 runtime 已实现，Edgar/Enron aggregate-DF 已通过，PubMed
+aggregate-DF 与后续 selector/pilot 尚待独立授权；formal、victim、Retriever 和
+evaluation 均未启动。v20 及更早研究结果只作历史证据，不能写入 v23 主结果。
 
 ## v6.3 RC1 四-pair容量诊断（历史，已 superseded）
 
