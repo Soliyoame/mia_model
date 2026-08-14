@@ -23,9 +23,10 @@ P0 所需 pair。类型多样性本身不是优化目标。
 
 selector 禁止读取或利用 membership、split/group、victim/RAG response、
 LLM-only response、Retriever 输出、attack score/AUC 或 v22 calibration
-label/threshold。完整 source pool 只允许在受控 aggregate-DF stage 按
-runtime bundle/dataset 读取一次；其输出只包含 aggregate token DF，不包含 source
-映射或逐 source 行，也不得据此声称低频 token 不可反演。
+label/threshold。完整 source pool 只允许在受控 aggregate-DF stage 按 producer
+execution identity/dataset 读取一次；跨 runtime bundle 复用必须有显式 carry-forward
+证明。其输出只包含 aggregate token DF，不包含 source 映射或逐 source 行，也不得
+据此声称低频 token 不可反演。
 
 ### v23 当前状态（2026-08-14）
 
@@ -34,14 +35,24 @@ runtime bundle/dataset 读取一次；其输出只包含 aggregate token DF，�
 | Runtime 实现、bootstrap 与 successor freeze | 已完成 | 隔离 runtime bundle、protocol revision 与 append-only governance 链已生成 |
 | Edgar aggregate-DF | `passed` | 5,210 sources / 116,953 token rows / 0 external calls |
 | Enron aggregate-DF | `passed` | 35,000 sources / 181,394 token rows / 0 external calls |
-| PubMed aggregate-DF | 未完成 | 目录已创建但没有 canonical manifest |
-| v23 fact extraction、selector pilot 与 capacity gate | 未启动 | 等待 PubMed aggregate-DF 及独立运行授权 |
+| PubMed aggregate-DF | `passed` | 47,950 sources / 1,284,757 token rows / 0 external calls |
+| Stage-Scoped Identity execution erratum e1 | 已实现、待提交与 successor freeze | 不创建方法 r7；尚未生成真实 carry-forward artifact |
+| v23 fact extraction、selector pilot 与 capacity gate | 未启动 | 等待 e1 提交、successor freeze、DF carry-forward 与独立运行授权 |
 | formal scan、split、fresh audit、shadow、Luna、Gemma victim、Retriever 与 evaluation | 未启动且 blocked | 必须依次通过上游 gate，并分别取得长任务/GPU/API/victim/Retriever 授权 |
 
 当前 aggregate-DF protocol revision 为
 `286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
-Edgar 与 Enron manifest 均记录 `external_calls_performed: 0`；当前没有 v23 victim、
+三套 manifest 均记录 `external_calls_performed: 0`；当前没有 v23 victim、
 LLM-only 或 Retriever 响应可用于选样或报告结果。
+
+`pcv-restoration-first-v23-design-r6 execution erratum e1` 将完整 `runtime_bundle`
+保留为 provenance，同时用 `stage_dependency_fingerprint` 决定阶段产物兼容性，并用
+`stage_execution_identity` 绑定 protocol revision 与 fingerprint。README、研究记录和
+非计算 launcher 不传播实验失效；aggregate-DF 分词、归一化、DF 算法或任一 source
+pool identity 变化会令三套 DF 及全部下游 stale。任何跨 bundle 复用都必须单独授权并
+生成 `artifacts/v23/protocol/stage_compatibility/<new_revision>/aggregate_df_precomputation.json`，
+不会改写原 DF、读取 88,160 个 source、增加预算扣费或修改 ledger。当前尚未冻结
+successor runtime，也没有该 carry-forward artifact。
 
 只读校验命令：
 
@@ -49,7 +60,12 @@ LLM-only 或 Retriever 响应可用于选样或报告结果。
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-design
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset edgar
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset enron
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset pubmed
 ```
+
+e1 随 successor runtime 冻结后，可用 `stage-status` 查看每阶段的 `native`、
+`carried_forward`、`stale` 或 `not_started`；successor freeze 与真实 carry-forward
+artifact 生成都需要分别取得明确授权。
 
 `status` 会重算冻结输入与 runtime 身份哈希，在大型 source pool 上可能耗时较长：
 

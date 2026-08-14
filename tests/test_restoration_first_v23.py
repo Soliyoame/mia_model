@@ -5,6 +5,7 @@ import math
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,11 +55,15 @@ from src.prepare.restoration_first_v23 import (
     prepare_aggregate_df_authorization,
     prepare_runtime_bootstrap_authorization,
     prepare_runtime_successor_freeze_authorization,
+    prepare_stage_carry_forward_authorization,
     protocol_revision_id,
     require_passed_checkpoint,
     run_aggregate_df,
     run_runtime_bootstrap,
     run_runtime_successor_freeze,
+    run_stage_carry_forward,
+    stage_change_impact,
+    stage_status,
     validate_active_runtime,
     validate_aggregate_df,
     validate_implementation_authorization,
@@ -68,12 +73,19 @@ from src.prepare.restoration_first_v23 import (
     validate_runtime_bootstrap_authorization,
     validate_runtime_bootstrap,
     validate_runtime_successor_freeze,
+    validate_stage_carry_forward,
     v23_status,
     evaluate_blind_audit,
     freeze_source_exclusive_split,
     write_stage_checkpoint,
 )
 from src.utils.hash import sha256_file
+from src.utils.stage_identity import (
+    affected_stages,
+    compute_stage_dependency_fingerprint,
+    load_stage_dependency_contract,
+    validate_stage_dependency_contract,
+)
 
 
 def _run_git(root: Path, *arguments: str) -> str:
@@ -98,6 +110,11 @@ def _bootstrap_fixture(root: Path) -> dict[str, object]:
     shutil.copy2(
         repository_root / "configs/restoration_first_v23.design_manifest.json",
         root / "configs/restoration_first_v23.design_manifest.json",
+    )
+    shutil.copy2(
+        repository_root
+        / "configs/restoration_first_v23.execution_erratum_e1.yaml",
+        root / "configs/restoration_first_v23.execution_erratum_e1.yaml",
     )
     runtime_path = root / "runtime.py"
     runtime_path.write_text("VALUE = 1\n", encoding="utf-8")
@@ -579,6 +596,242 @@ class V23SelectorTests(unittest.TestCase):
         self.assertEqual(select_top_three(rows[:2]), [])
 
 
+class V23StageIdentityTests(unittest.TestCase):
+    def _contract(self) -> dict:
+        root = Path(__file__).resolve().parents[1]
+        return load_stage_dependency_contract(
+            root / "configs/restoration_first_v23.execution_erratum_e1.yaml"
+        )
+
+    def test_change_impact_matrix_is_stage_scoped(self):
+        contract = self._contract()
+        expected = {
+            "documentation_or_launcher": set(),
+            "aggregate_df_contract": set(contract["stage_order"]),
+            "reserve_registration": set(contract["stage_order"][1:]),
+            "pilot_runtime": set(contract["stage_order"][2:]),
+            "selector_fact_restoration_rank": set(contract["stage_order"][2:]),
+            "luna_query_generation": {
+                "luna_query_generation",
+                "main_index_build_and_retriever_matrix",
+                "rag_victim_generation",
+                "llm_only_victim_generation",
+                "parsing_scoring_and_source_level_evaluation",
+            },
+            "retriever_or_index": {
+                "main_index_build_and_retriever_matrix",
+                "rag_victim_generation",
+                "parsing_scoring_and_source_level_evaluation",
+            },
+            "generator_or_prompt": {
+                "rag_victim_generation",
+                "llm_only_victim_generation",
+                "parsing_scoring_and_source_level_evaluation",
+            },
+            "parser_or_scoring": {
+                "parsing_scoring_and_source_level_evaluation"
+            },
+        }
+        for change_class, stages in expected.items():
+            with self.subTest(change_class=change_class):
+                self.assertEqual(set(affected_stages(contract, change_class)), stages)
+                self.assertEqual(
+                    set(stage_change_impact(change_class)),
+                    stages,
+                )
+
+    def test_aggregate_fingerprint_ignores_selector_only_code_but_binds_df_inputs(self):
+        import yaml
+
+        root = Path(__file__).resolve().parents[1]
+        contract = self._contract()
+        attack_path = "src/attack/restoration_first_v23.py"
+        prepare_path = "src/prepare/restoration_first_v23.py"
+        config_path = "configs/restoration_first_v23.yaml"
+        sources = {
+            attack_path: (root / attack_path).read_text(encoding="utf-8"),
+            prepare_path: (root / prepare_path).read_text(encoding="utf-8"),
+        }
+        config_text = (root / config_path).read_text(encoding="utf-8")
+
+        def fingerprint(
+            *,
+            attack_source: str = sources[attack_path],
+            prepare_source: str = sources[prepare_path],
+            config_source: str = config_text,
+        ) -> str:
+            result = compute_stage_dependency_fingerprint(
+                contract,
+                "aggregate_df_precomputation",
+                python_source_loader=lambda path: (
+                    attack_source
+                    if path == attack_path
+                    else prepare_source
+                    if path == prepare_path
+                    else sources[path]
+                ),
+                config_source_loader=lambda path: config_source,
+                runtime_manifest={"python_version": "3.12.13"},
+            )
+            return result["stage_dependency_fingerprint"]
+
+        baseline = fingerprint()
+        selector_only = sources[attack_path].replace(
+            "def fresh_extract_candidates(", "def fresh_extract_candidates_v2(", 1
+        )
+        self.assertEqual(fingerprint(attack_source=selector_only), baseline)
+        pilot_only = sources[prepare_path].replace(
+            "def evaluate_blind_audit(", "def evaluate_blind_audit_v2(", 1
+        )
+        self.assertEqual(fingerprint(prepare_source=pilot_only), baseline)
+        df_changed = sources[attack_path].replace(
+            "counts.update(set(content_tokens(text)))",
+            "counts.update(content_tokens(text))",
+            1,
+        )
+        self.assertNotEqual(fingerprint(attack_source=df_changed), baseline)
+
+        config = yaml.safe_load(config_text)
+        config["selector_primitives"]["tokenization"]["minimum_token_length"] = 4
+        self.assertNotEqual(
+            fingerprint(config_source=yaml.safe_dump(config, sort_keys=False)),
+            baseline,
+        )
+        config = yaml.safe_load(config_text)
+        config["frozen_v22_bindings"]["source_pools"]["edgar"][
+            "database_sha256"
+        ] = "f" * 64
+        self.assertNotEqual(
+            fingerprint(config_source=yaml.safe_dump(config, sort_keys=False)),
+            baseline,
+        )
+
+    def test_whole_file_ast_and_exact_file_dependencies(self):
+        contract = self._contract()
+        specification = contract["fingerprints"]["aggregate_df_precomputation"]
+        specification["python_dependencies"] = [
+            {"path": "runtime.py", "symbols": []}
+        ]
+        specification["config_dependencies"] = [
+            {"path": "config.yaml", "selectors": ["selected"]}
+        ]
+        specification["file_dependencies"] = [
+            {"path": "artifact.bin", "role": "upstream_artifact"}
+        ]
+        specification["runtime_manifest_fields"] = ["python_version"]
+
+        def fingerprint(
+            source: str,
+            config: str,
+            artifact: bytes,
+        ) -> str:
+            result = compute_stage_dependency_fingerprint(
+                contract,
+                "aggregate_df_precomputation",
+                python_source_loader=lambda _path: source,
+                config_source_loader=lambda _path: config,
+                file_bytes_loader=lambda _path: artifact,
+                runtime_manifest={"python_version": "3.12.13"},
+            )
+            return result["stage_dependency_fingerprint"]
+
+        baseline = fingerprint(
+            '"""module docs"""\n# ignored\nVALUE=1\n',
+            "selected:\n  value: 1\nignored: first\n",
+            b"artifact-v1",
+        )
+        self.assertEqual(
+            fingerprint(
+                '"""different docs"""\nVALUE = 1\n',
+                "selected:\n  value: 1\nignored: second\n",
+                b"artifact-v1",
+            ),
+            baseline,
+        )
+        self.assertNotEqual(
+            fingerprint(
+                "VALUE = 2\n",
+                "selected:\n  value: 1\nignored: second\n",
+                b"artifact-v1",
+            ),
+            baseline,
+        )
+        self.assertNotEqual(
+            fingerprint(
+                "VALUE = 1\n",
+                "selected:\n  value: 2\nignored: second\n",
+                b"artifact-v1",
+            ),
+            baseline,
+        )
+        self.assertNotEqual(
+            fingerprint(
+                "VALUE = 1\n",
+                "selected:\n  value: 1\nignored: second\n",
+                b"artifact-v2",
+            ),
+            baseline,
+        )
+        with self.assertRaisesRegex(RuntimeError, "file_loader_missing"):
+            compute_stage_dependency_fingerprint(
+                contract,
+                "aggregate_df_precomputation",
+                python_source_loader=lambda _path: "VALUE = 1\n",
+                config_source_loader=lambda _path: "selected:\n  value: 1\n",
+                runtime_manifest={"python_version": "3.12.13"},
+            )
+
+    def test_cli_registers_stage_identity_commands(self):
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts/42_run_v23_restoration_first.py"
+        commands = {
+            "stage-status": "--stage",
+            "prepare-carry-forward-authorization": "--user-authorization-record",
+            "carry-forward": "--authorization",
+            "validate-carry-forward": "--stage",
+        }
+        for command, expected_option in commands.items():
+            with self.subTest(command=command):
+                completed = subprocess.run(
+                    [sys.executable, "-X", "utf8", "-B", str(script), command, "--help"],
+                    cwd=root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn(expected_option, completed.stdout)
+
+    def test_stage_contract_missing_symbol_and_cycle_fail_closed(self):
+        contract = self._contract()
+        cycle = json.loads(json.dumps(contract))
+        cycle["stage_graph"]["aggregate_df_precomputation"]["upstream"] = [
+            "parsing_scoring_and_source_level_evaluation"
+        ]
+        with self.assertRaisesRegex(RuntimeError, "graph_cycle"):
+            validate_stage_dependency_contract(cycle)
+
+        missing = json.loads(json.dumps(contract))
+        symbols = missing["fingerprints"]["aggregate_df_precomputation"][
+            "python_dependencies"
+        ][0]["symbols"]
+        symbols.append("zz_missing_symbol")
+        root = Path(__file__).resolve().parents[1]
+        with self.assertRaisesRegex(RuntimeError, "symbol_missing"):
+            compute_stage_dependency_fingerprint(
+                missing,
+                "aggregate_df_precomputation",
+                python_source_loader=lambda path: (root / path).read_text(
+                    encoding="utf-8"
+                ),
+                config_source_loader=lambda path: (root / path).read_text(
+                    encoding="utf-8"
+                ),
+                runtime_manifest={"python_version": "3.12.13"},
+            )
+
+
 class V23GovernanceTests(unittest.TestCase):
     def test_frozen_source_pool_reader_enforces_hash_schema_and_read_only_mode(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -933,6 +1186,356 @@ class V23GovernanceTests(unittest.TestCase):
             self.assertEqual(
                 (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
                 ledger_before,
+            )
+
+    def test_stage_carry_forward_preserves_three_df_artifacts_and_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, ledger_before = _bootstrap_synthetic_runtime(root)
+            contracts = {
+                dataset: _synthetic_aggregate_contracts(
+                    root,
+                    dataset=dataset,
+                    source_texts=(
+                        f"{dataset} alpha beta",
+                        f"{dataset} beta gamma",
+                    ),
+                )
+                for dataset in ("edgar", "enron", "pubmed")
+            }
+
+            def contract_for_dataset(_config: dict, dataset: str) -> dict:
+                return contracts[dataset]
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                side_effect=contract_for_dataset,
+            ):
+                authorizations = []
+                for dataset in ("edgar", "enron", "pubmed"):
+                    authorization = prepare_aggregate_df_authorization(
+                        project_root=root,
+                        dataset=dataset,
+                        user_authorization_record=f"test {dataset} df",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    authorizations.append(authorization)
+                    run_aggregate_df(
+                        project_root=root,
+                        dataset=dataset,
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                producer_bundle = authorizations[0]["runtime_bundle_sha256"]
+                producer_revision = authorizations[0]["protocol_revision_id"]
+                original_hashes = {
+                    dataset: {
+                        "rows": sha256_file(
+                            root
+                            / f"artifacts/v23/aggregate_df/{dataset}/token_df.jsonl"
+                        ),
+                        "manifest": sha256_file(
+                            root
+                            / f"artifacts/v23/aggregate_df/{dataset}/df_manifest.json"
+                        ),
+                    }
+                    for dataset in ("edgar", "enron", "pubmed")
+                }
+
+                fixture["runtime_path"].write_text("VALUE = 2\n", encoding="utf-8")
+                _run_git(root, "add", "runtime.py")
+                _run_git(root, "commit", "--quiet", "-m", "test: successor runtime")
+                successor_authorization = prepare_runtime_successor_freeze_authorization(
+                    project_root=root,
+                    user_authorization_record="test successor freeze",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                successor = run_runtime_successor_freeze(
+                    project_root=root,
+                    authorization_path=successor_authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                revisions = {
+                    producer_bundle: producer_revision,
+                    successor["runtime_bundle_sha256"]: successor[
+                        "protocol_revision_id"
+                    ],
+                }
+
+                def identity_for_bundle(
+                    _root: Path, *, stage: str, runtime_bundle_sha256: str
+                ) -> dict:
+                    revision = revisions[runtime_bundle_sha256]
+                    fingerprint = "f" * 64
+                    return {
+                        "stage": stage,
+                        "stage_dependency_fingerprint": fingerprint,
+                        "stage_execution_identity": canonical_sha256(
+                            {
+                                "stage": stage,
+                                "runtime_bundle_sha256": runtime_bundle_sha256,
+                                "protocol_revision_id": revision,
+                                "stage_dependency_fingerprint": fingerprint,
+                            }
+                        ),
+                    }
+
+                with patch(
+                    "src.prepare.restoration_first_v23._stage_identity_for_bundle",
+                    side_effect=identity_for_bundle,
+                ):
+                    carry_authorization = prepare_stage_carry_forward_authorization(
+                        project_root=root,
+                        stage="aggregate_df_precomputation",
+                        user_authorization_record="test carry forward",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    carried = run_stage_carry_forward(
+                        project_root=root,
+                        stage="aggregate_df_precomputation",
+                        authorization_path=carry_authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    self.assertEqual(carried["validation_mode"], "carried_forward")
+                    for dataset in ("edgar", "enron", "pubmed"):
+                        validated = validate_aggregate_df(
+                            project_root=root,
+                            dataset=dataset,
+                            runtime_files=fixture["runtime_files"],
+                            dependency_lock_path=fixture["dependency_lock_path"],
+                            model_lock_path=fixture["model_lock_path"],
+                        )
+                        self.assertEqual(
+                            validated["validation_mode"], "carried_forward"
+                        )
+                        self.assertEqual(
+                            validated["artifact_runtime_bundle_sha256"],
+                            producer_bundle,
+                        )
+                        self.assertEqual(
+                            sha256_file(
+                                root
+                                / f"artifacts/v23/aggregate_df/{dataset}/token_df.jsonl"
+                            ),
+                            original_hashes[dataset]["rows"],
+                        )
+                        self.assertEqual(
+                            sha256_file(
+                                root
+                                / f"artifacts/v23/aggregate_df/{dataset}/df_manifest.json"
+                            ),
+                            original_hashes[dataset]["manifest"],
+                        )
+
+                    attestation_path = (
+                        root
+                        / "artifacts/v23/protocol/stage_compatibility"
+                        / successor["protocol_revision_id"]
+                        / "aggregate_df_precomputation.json"
+                    )
+                    original_attestation = attestation_path.read_bytes()
+
+                    def validate_carried() -> dict:
+                        return validate_stage_carry_forward(
+                            project_root=root,
+                            stage="aggregate_df_precomputation",
+                            runtime_files=fixture["runtime_files"],
+                            dependency_lock_path=fixture[
+                                "dependency_lock_path"
+                            ],
+                            model_lock_path=fixture["model_lock_path"],
+                        )
+
+                    tamper_cases = (
+                        (
+                            "self hash drift",
+                            lambda payload: payload.__setitem__(
+                                "created_at", "2026-08-14T00:00:00Z"
+                            ),
+                            "attestation_hash_drift",
+                            False,
+                        ),
+                        (
+                            "incomplete dataset group",
+                            lambda payload: payload["datasets"].pop(),
+                            "dataset_group_incomplete",
+                            True,
+                        ),
+                        (
+                            "wrong target bundle",
+                            lambda payload: payload.__setitem__(
+                                "to_runtime_bundle_sha256", "e" * 64
+                            ),
+                            "attestation_identity_drift",
+                            True,
+                        ),
+                        (
+                            "wrong dependency fingerprint",
+                            lambda payload: payload.__setitem__(
+                                "stage_dependency_fingerprint", "e" * 64
+                            ),
+                            "dependency_drift",
+                            True,
+                        ),
+                        (
+                            "wrong artifact hash",
+                            lambda payload: payload["datasets"][0].__setitem__(
+                                "token_df_rows_file_sha256", "e" * 64
+                            ),
+                            "evidence_drift",
+                            True,
+                        ),
+                    )
+                    for name, mutate, expected_error, rehash in tamper_cases:
+                        with self.subTest(tamper=name):
+                            tampered = json.loads(original_attestation)
+                            mutate(tampered)
+                            if rehash:
+                                tampered["attestation_id"] = canonical_sha256(
+                                    {
+                                        key: value
+                                        for key, value in tampered.items()
+                                        if key != "attestation_id"
+                                    }
+                                )
+                            attestation_path.write_text(
+                                canonical_json(tampered) + "\n", encoding="utf-8"
+                            )
+                            with self.assertRaisesRegex(
+                                RuntimeError, expected_error
+                            ):
+                                validate_carried()
+                            attestation_path.write_bytes(original_attestation)
+
+                    evidence = json.loads(original_attestation)["datasets"][0]
+                    rows_path = (
+                        root / "artifacts/v23/aggregate_df/edgar/token_df.jsonl"
+                    )
+                    original_rows = rows_path.read_bytes()
+                    rows_path.write_bytes(original_rows + b"tampered\n")
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "evidence_drift"):
+                            validate_carried()
+                    finally:
+                        rows_path.write_bytes(original_rows)
+
+                    required_paths = {
+                        "checkpoint": (
+                            root
+                            / "artifacts/v23/checkpoints/aggregate_df_precomputation"
+                            / "edgar"
+                            / f"{evidence['attempt_id']}.json"
+                        ),
+                        "budget": (
+                            root
+                            / "artifacts/v23/governance/authorization_budgets"
+                            / f"{evidence['authorization_id']}.jsonl"
+                        ),
+                    }
+                    for name, required_path in required_paths.items():
+                        with self.subTest(missing=name):
+                            missing_path = required_path.with_name(
+                                required_path.name + ".missing"
+                            )
+                            required_path.replace(missing_path)
+                            try:
+                                with self.assertRaisesRegex(
+                                    RuntimeError, "evidence_drift"
+                                ):
+                                    validate_carried()
+                            finally:
+                                missing_path.replace(required_path)
+                    self.assertEqual(validate_carried()["status"], "passed")
+            self.assertEqual(
+                (root / "artifacts/v23/governance/consumed_source_ledger.jsonl").read_bytes(),
+                ledger_before,
+            )
+
+    def test_stage_status_reports_native_carried_stale_and_not_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = {
+                "stage_order": [
+                    "aggregate_df_precomputation",
+                    "development_pilot_and_capacity_gate",
+                ]
+            }
+            active = {
+                "runtime_bundle_sha256": "a" * 64,
+                "protocol_revision_id": "b" * 64,
+            }
+            common_patches = (
+                patch(
+                    "src.prepare.restoration_first_v23.load_execution_erratum",
+                    return_value=contract,
+                ),
+                patch(
+                    "src.prepare.restoration_first_v23.validate_active_runtime",
+                    return_value=active,
+                ),
+                patch(
+                    "src.prepare.restoration_first_v23.stage_identity",
+                    return_value={"stage_dependency_fingerprint": "c" * 64},
+                ),
+            )
+            with common_patches[0], common_patches[1], common_patches[2]:
+                missing = stage_status(root)
+            self.assertEqual(
+                [row["status"] for row in missing["stages"]],
+                ["not_started", "not_started"],
+            )
+
+            for dataset in ("edgar", "enron", "pubmed"):
+                path = root / f"artifacts/v23/aggregate_df/{dataset}/df_manifest.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n", encoding="utf-8")
+
+            for mode in ("native", "carried_forward"):
+                with patch(
+                    "src.prepare.restoration_first_v23.load_execution_erratum",
+                    return_value=contract,
+                ), patch(
+                    "src.prepare.restoration_first_v23.validate_active_runtime",
+                    return_value=active,
+                ), patch(
+                    "src.prepare.restoration_first_v23.stage_identity",
+                    return_value={"stage_dependency_fingerprint": "c" * 64},
+                ), patch(
+                    "src.prepare.restoration_first_v23.validate_aggregate_df",
+                    return_value={"validation_mode": mode},
+                ):
+                    current = stage_status(
+                        root, stage="aggregate_df_precomputation"
+                    )
+                self.assertEqual(current["stages"][0]["status"], mode)
+                self.assertIsNone(current["stages"][0]["reason"])
+
+            with patch(
+                "src.prepare.restoration_first_v23.load_execution_erratum",
+                return_value=contract,
+            ), patch(
+                "src.prepare.restoration_first_v23.validate_active_runtime",
+                return_value=active,
+            ), patch(
+                "src.prepare.restoration_first_v23.validate_aggregate_df",
+                side_effect=RuntimeError("stage_dependency_drift"),
+            ):
+                stale = stage_status(root, stage="aggregate_df_precomputation")
+            self.assertEqual(stale["stages"][0]["status"], "stale")
+            self.assertEqual(
+                stale["stages"][0]["reason"], "stage_dependency_drift"
             )
 
     def test_status_reports_active_successor_runtime_identity(self):

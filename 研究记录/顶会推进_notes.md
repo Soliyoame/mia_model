@@ -2386,3 +2386,16 @@
 - 当前 CLI 状态仍为 `runtime_implemented_unfrozen`：`runtime_bundle_frozen=false`、`pilot_started=false`、`external_calls_performed=0`，未创建真实 `artifacts/v23` bundle/genesis，未读取正式 source pool，未提交或推送。
 
 当前唯一下一步：按用户已给出的边界，先列出待提交 v23 文件清单和提交信息，等待用户明确确认后才提交；确认并提交完成后，使用用户本轮“开始吧”的现有授权只执行一次 bootstrap。bootstrap 之后 aggregate-DF 仍需独立 run authorization，其余 pilot、audit、formal、split、shadow、release、Luna、Gemma、Retriever 继续 blocked。
+
+### 2026-08-14：v23 Stage-Scoped Identity execution erratum e1 已实现，待提交与冻结
+
+- 用户明确选择路径B并授权实施 `v23 Stage-Scoped Identity 修复计划`。本轮身份为 `pcv-restoration-first-v23-design-r6-execution-e1`，不是方法 r7；没有修改 fact extraction、Restoration hard gates、rank、query 或统计定义。
+- 新增机器可读 erratum `configs/restoration_first_v23.execution_erratum_e1.yaml`，SHA-256=`4245105e0058a3f8e326f7f1e57175665a2199a1e9ca82bc82402c477b08c279`。其中冻结完整 stage DAG 与变更传播矩阵：Luna query 变化传播到 retrieval/RAG/LLM-only/evaluation；Retriever/index 变化不失效 query 或 LLM-only；parser/scoring 只失效 evaluation。
+- 新增 `src/utils/stage_identity.py`：Python 依赖可按整文件或指定 symbol 计算规范化 AST hash并忽略注释、格式、模块/类/函数 docstring；配置只哈希指定 YAML 子树；data/model/upstream artifact 可绑定精确文件 SHA-256。缺失 symbol、未知依赖、非法路径、未知 change class、DAG 环、缺失 runtime field或文件 loader均fail closed。
+- aggregate-DF fingerprint只绑定分词/归一化/DF与序列化逻辑、只读pool reader相关symbol、三套`frozen_v22_bindings.source_pools` identity和Python版本；fact extraction、Restoration、rank、reserve/pilot runner、CLI、README与研究记录不进入该fingerprint。合成测试确认fact extraction或pilot-only symbol变化不改变aggregate fingerprint，而分词/DF算法、YAML tokenization或任一pool hash变化会改变fingerprint并传播到全部下游。
+- runtime新增`stage-status`、`prepare-carry-forward-authorization`、`carry-forward`和`validate-carry-forward`；`validate-aggregate-df`支持producer bundle下`native`验证，以及successor bundle下经显式attestation的`carried_forward`验证。证明自哈希并绑定旧/新bundle、旧/新revision、两端stage execution identity、共同fingerprint、三套DF rows/manifest、各自run authorization/budget/checkpoint、ledger tip及anchor；任何不完整dataset group、错误bundle/fingerprint、artifact篡改或缺失budget/checkpoint均拒绝。
+- 本轮implementation authorization=`5036ed6f6df487454cee07bd56ace243d3199b6462ba90585bff34d1ed82245c`，只覆盖README、erratum、stage identity、runtime/CLI/test与两份项目总表，`external_calls_allowed=false`。该授权不包含successor freeze、真实carry-forward、reserve/pilot、GPU、API、victim、Retriever、提交或推送。
+- 现有EDGAR、Enron、PubMed DF rows/manifest/authorization/budget/checkpoint与ledger均未修改；没有创建 `artifacts/v23/protocol/stage_compatibility/<new_revision>/aggregate_df_precomputation.json`，没有读取88,160个source，也没有新增预算扣费或ledger mutation。真实carry-forward只有在提交并冻结successor后，旧/新aggregate fingerprint完全相等且用户再次明确授权时才允许生成。
+- 最终验证：v23定向测试`45/45`通过；全量`unittest discover -s tests`为`464/464`通过；内存AST、erratum固定hash、implementation authorization自哈希与scope、`git diff --check`均通过。测试仅使用mock或临时合成仓库/SQLite fixture，没有真实GPU/API/victim/Retriever调用。
+
+当前唯一下一步：等待用户确认提交本轮e1实现。确认前不执行`git add`/`git commit`；提交后successor runtime freeze仍需单独授权，freeze完成后的真实三数据集DF carry-forward还需再次单独授权。carry-forward验证通过前不实现或启动reserve/pilot，也不读取新的source。

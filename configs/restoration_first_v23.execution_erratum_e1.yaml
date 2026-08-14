@@ -1,0 +1,77 @@
+kind: pcv_v23_stage_dependency_contract
+execution_revision: pcv-restoration-first-v23-design-r6-execution-e1
+base_specification_version: pcv-restoration-first-v23-design-r6
+stage_order:
+  - aggregate_df_precomputation
+  - revision_audit_reserve_snapshot_and_write_ahead_registration
+  - development_pilot_and_capacity_gate
+  - fresh_blind_audit
+  - formal_source_scan
+  - source_exclusive_split
+  - reserve_only_shadow_gate
+  - release_finalize
+  - luna_query_generation
+  - main_index_build_and_retriever_matrix
+  - rag_victim_generation
+  - llm_only_victim_generation
+  - parsing_scoring_and_source_level_evaluation
+stage_graph:
+  aggregate_df_precomputation: {upstream: []}
+  development_pilot_and_capacity_gate: {upstream: [revision_audit_reserve_snapshot_and_write_ahead_registration]}
+  fresh_blind_audit: {upstream: [development_pilot_and_capacity_gate]}
+  formal_source_scan: {upstream: [fresh_blind_audit]}
+  llm_only_victim_generation: {upstream: [luna_query_generation]}
+  luna_query_generation: {upstream: [release_finalize]}
+  main_index_build_and_retriever_matrix: {upstream: [luna_query_generation]}
+  parsing_scoring_and_source_level_evaluation: {upstream: [llm_only_victim_generation, rag_victim_generation]}
+  rag_victim_generation: {upstream: [main_index_build_and_retriever_matrix]}
+  release_finalize: {upstream: [reserve_only_shadow_gate]}
+  reserve_only_shadow_gate: {upstream: [source_exclusive_split]}
+  revision_audit_reserve_snapshot_and_write_ahead_registration: {upstream: [aggregate_df_precomputation]}
+  source_exclusive_split: {upstream: [formal_source_scan]}
+change_impacts:
+  aggregate_df_contract: [aggregate_df_precomputation]
+  documentation_or_launcher: []
+  generator_or_prompt: [llm_only_victim_generation, rag_victim_generation]
+  luna_query_generation: [luna_query_generation]
+  parser_or_scoring: [parsing_scoring_and_source_level_evaluation]
+  pilot_runtime: [development_pilot_and_capacity_gate]
+  reserve_registration: [revision_audit_reserve_snapshot_and_write_ahead_registration]
+  retriever_or_index: [main_index_build_and_retriever_matrix]
+  selector_fact_restoration_rank: [development_pilot_and_capacity_gate]
+fingerprints:
+  aggregate_df_precomputation:
+    python_dependencies:
+      - path: src/attack/restoration_first_v23.py
+        symbols:
+          - CHUNK_FIELDS
+          - FORBIDDEN_SELECTION_FIELDS
+          - ROW_FIELDS
+          - SOURCE_FIELDS
+          - STOPWORDS
+          - TOKEN_RE
+          - _validate_exact_object
+          - aggregate_document_frequency
+          - canonical_json
+          - content_tokens
+          - normalize_text
+          - reject_forbidden_selection_fields
+          - validate_selector_source_input
+      - path: src/prepare/restoration_first_v23.py
+        symbols:
+          - FrozenSourcePoolReader.__init__
+          - FrozenSourcePoolReader._read_source_unchecked
+          - FrozenSourcePoolReader._validate_schema
+          - FrozenSourcePoolReader.read_source_for_aggregate_df
+          - _aggregate_df_contracts
+          - _verify_aggregate_df_pool_bindings
+          - write_aggregate_df_artifacts
+    config_dependencies:
+      - path: configs/restoration_first_v23.yaml
+        selectors:
+          - frozen_v22_bindings.source_pools
+          - selector_primitives.text_normalization
+          - selector_primitives.tokenization
+    file_dependencies: []
+    runtime_manifest_fields: [python_version]
+carry_forward_stages: [aggregate_df_precomputation]

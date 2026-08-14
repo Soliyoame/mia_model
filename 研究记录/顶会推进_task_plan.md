@@ -1865,3 +1865,21 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 用户确认清单并完成提交后，使用本轮“开始吧”的现有授权只运行一次 `runtime_bundle_and_commit_freeze` bootstrap并建立ledger genesis；之后每个aggregate-DF/dataset和所有下游阶段继续要求独立授权。
 
 当前唯一下一步：向用户展示待提交文件清单和提交信息，等待确认；在确认前不执行 `git add`、`git commit`，也不执行 bootstrap。
+
+### 2026-08-14：v23 Stage-Scoped Identity execution erratum e1 实现
+
+- [x] 用户选择路径B并授权实施独立stage-scoped identity；保持design-r6方法定义，不创建r7，不修改fact extraction、Restoration hard gates、rank或统计。
+- [x] 新增execution erratum e1与stage DAG/change-impact matrix；erratum SHA-256=`4245105e0058a3f8e326f7f1e57175665a2199a1e9ca82bc82402c477b08c279`。
+- [x] 实现整文件/指定symbol规范化AST hash、指定YAML子树hash、精确data/model/upstream artifact SHA-256和stage execution identity；缺失/漂移/未知依赖/DAG环一律fail closed。
+- [x] 将aggregate-DF fingerprint限定到tokenization、normalization、DF/serialization、只读pool reader、三套pool identity与Python环境；验证fact/pilot-only变化不失效DF，DF算法/tokenization/pool hash变化令三套DF及下游stale。
+- [x] 实现`stage-status`、carry-forward authorization/run/validation及aggregate-DF native/carried-forward双模式；Luna变化传播到retrieval，Retriever变化保留query/LLM-only，parser/scoring变化保留原始response。
+- [x] carry-forward attestation绑定旧/新bundle与revision、fingerprint、两端execution identity、三套DF rows/manifest、authorization、budget、checkpoint和ledger tip/anchor；自哈希、错误identity/hash、不完整三数据集组及缺失证据均fail closed。
+- [x] 记录并验证implementation authorization=`5036ed6f...245c`，scope限定为本轮8个实现/文档路径，`external_calls_allowed=false`。
+- [x] v23定向测试`45/45`、全量单元测试`464/464`通过；内存AST、erratum/authorization hash、`git diff --check`和敏感值扫描通过。
+- [x] 同步README与两份项目总表；三套既有DF和历史artifact原样保留，真实stage compatibility目录仍为空，source读取/新增预算扣费/ledger mutation/GPU/API/victim/Retriever调用均为0。
+- [ ] 等待用户确认后只提交e1计划范围文件，不推送、不带入其他脏工作树。
+- [ ] 提交后另行获得明确授权，再冻结successor runtime；不得把提交确认解释为freeze授权。
+- [ ] successor freeze后另行获得明确授权，仅当旧/新aggregate fingerprint完全相等时生成三数据集group carry-forward证明；不得重跑或改写原DF。
+- [ ] carry-forward验证通过后，再单独授权实现reserve/pilot runner与执行development pilot；fresh audit及下游继续blocked。
+
+当前唯一下一步：等待用户确认提交本轮e1实现。确认前不提交、不冻结successor、不生成真实carry-forward artifact、不读取source、不写ledger，也不启动pilot/GPU/API/victim/Retriever。

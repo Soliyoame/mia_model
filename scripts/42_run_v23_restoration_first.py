@@ -15,14 +15,18 @@ from src.prepare.restoration_first_v23 import (  # noqa: E402
     prepare_aggregate_df_authorization,
     prepare_runtime_bootstrap_authorization,
     prepare_runtime_successor_freeze_authorization,
+    prepare_stage_carry_forward_authorization,
     run_aggregate_df,
     run_runtime_bootstrap,
     run_runtime_successor_freeze,
+    run_stage_carry_forward,
+    stage_status,
     validate_aggregate_df,
     validate_design_bindings,
     validate_implementation_authorization,
     validate_runtime_bootstrap,
     validate_runtime_successor_freeze,
+    validate_stage_carry_forward,
     v23_status,
 )
 
@@ -33,7 +37,7 @@ DEFAULT_IMPLEMENTATION_AUTHORIZATION = (
     / "v23"
     / "governance"
     / "implementation_authorizations"
-    / "5c191b1b132a7376c152014c896bf8c4b0295ab46dadd39dce58ff0dff19751d.json"
+    / "5036ed6f6df487454cee07bd56ace243d3199b6462ba90585bff34d1ed82245c.json"
 )
 
 
@@ -43,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    scoped_status = commands.add_parser("stage-status")
+    scoped_status.add_argument("--stage")
     commands.add_parser("validate-design")
     prepare = commands.add_parser("prepare-bootstrap-authorization")
     prepare.add_argument("--user-authorization-record", required=True)
@@ -72,6 +78,20 @@ def parse_args() -> argparse.Namespace:
     validate_df.add_argument(
         "--dataset", required=True, choices=("edgar", "enron", "pubmed")
     )
+    prepare_carry = commands.add_parser("prepare-carry-forward-authorization")
+    prepare_carry.add_argument(
+        "--stage", required=True, choices=("aggregate_df_precomputation",)
+    )
+    prepare_carry.add_argument("--user-authorization-record", required=True)
+    carry = commands.add_parser("carry-forward")
+    carry.add_argument(
+        "--stage", required=True, choices=("aggregate_df_precomputation",)
+    )
+    carry.add_argument("--authorization", required=True)
+    validate_carry = commands.add_parser("validate-carry-forward")
+    validate_carry.add_argument(
+        "--stage", required=True, choices=("aggregate_df_precomputation",)
+    )
     authorization = commands.add_parser("validate-implementation-authorization")
     authorization.add_argument(
         "--authorization",
@@ -90,6 +110,8 @@ def main() -> int:
     args = parse_args()
     if args.command == "status":
         result = v23_status(PROJECT_ROOT)
+    elif args.command == "stage-status":
+        result = stage_status(PROJECT_ROOT, stage=args.stage)
     elif args.command == "validate-design":
         result = validate_design_bindings(PROJECT_ROOT)
     elif args.command == "prepare-bootstrap-authorization":
@@ -138,6 +160,23 @@ def main() -> int:
         result = validate_aggregate_df(
             project_root=PROJECT_ROOT,
             dataset=args.dataset,
+        )
+    elif args.command == "prepare-carry-forward-authorization":
+        result = prepare_stage_carry_forward_authorization(
+            project_root=PROJECT_ROOT,
+            stage=args.stage,
+            user_authorization_record=args.user_authorization_record,
+        )
+    elif args.command == "carry-forward":
+        result = run_stage_carry_forward(
+            project_root=PROJECT_ROOT,
+            stage=args.stage,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "validate-carry-forward":
+        result = validate_stage_carry_forward(
+            project_root=PROJECT_ROOT,
+            stage=args.stage,
         )
     else:
         result = validate_implementation_authorization(

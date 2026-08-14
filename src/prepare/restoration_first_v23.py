@@ -30,17 +30,27 @@ from ..attack.restoration_first_v23 import (
 )
 from ..utils.hash import sha256_file
 from ..utils.io import load_yaml
+from ..utils.stage_identity import (
+    affected_stages as resolve_affected_stages,
+    compute_stage_dependency_fingerprint,
+    load_stage_dependency_contract,
+    stage_execution_identity,
+)
 
 
 DESIGN_CONFIG = Path("configs/restoration_first_v23.yaml")
 DESIGN_MANIFEST = Path("configs/restoration_first_v23.design_manifest.json")
 DESIGN_MANIFEST_SHA256 = "6a7163830f36b65247b7d6222f5adecfb18c85695a885cc0384128c81ffbd6fe"
+EXECUTION_ERRATUM = Path("configs/restoration_first_v23.execution_erratum_e1.yaml")
+EXECUTION_ERRATUM_SHA256 = "4245105e0058a3f8e326f7f1e57175665a2199a1e9ca82bc82402c477b08c279"
+EXECUTION_REVISION = "pcv-restoration-first-v23-design-r6-execution-e1"
 IMPLEMENTATION_STAGE = "runtime_implementation_and_tests"
 ZERO_SHA256 = "0" * 64
 GENESIS_SENTINEL = "genesis_sentinel"
 DATASET_ORDER = ("edgar", "enron", "pubmed")
 RUNTIME_BUNDLE_FILES = (
     "configs/entity_type_policy_v21_r1.yaml",
+    "configs/restoration_first_v23.execution_erratum_e1.yaml",
     "configs/restoration_first_v23.design_manifest.json",
     "configs/restoration_first_v23.yaml",
     "configs/semantic_entity_models_v6_3.lock.yaml",
@@ -58,6 +68,7 @@ RUNTIME_BUNDLE_FILES = (
     "src/utils/hash.py",
     "src/utils/io.py",
     "src/utils/logger.py",
+    "src/utils/stage_identity.py",
     "\u7814\u7a76\u8bb0\u5f55/PCV-MIA_v23_Restoration-First_\u534f\u8bae\u9884\u6ce8\u518c_20260812.md",
 )
 ARTIFACT_ROOT = Path("artifacts/v23")
@@ -72,6 +83,66 @@ BUDGET_DIRECTORY = ARTIFACT_ROOT / "governance/authorization_budgets"
 ATTEMPT_REGISTRY = ARTIFACT_ROOT / "governance/attempt_registry.jsonl"
 RUN_AUTH_DIRECTORY = ARTIFACT_ROOT / "governance/run_authorizations"
 AGGREGATE_DF_DIRECTORY = ARTIFACT_ROOT / "aggregate_df"
+STAGE_COMPATIBILITY_DIRECTORY = ARTIFACT_ROOT / "protocol/stage_compatibility"
+STAGE_COMPATIBILITY_AUTH_DIRECTORY = (
+    ARTIFACT_ROOT / "governance/stage_compatibility_authorizations"
+)
+STAGE_CARRY_FORWARD = "stage_artifact_carry_forward"
+STAGE_COMPATIBILITY_AUTH_FIELDS = {
+    "kind",
+    "authorization_id",
+    "user_authorization_record",
+    "authorized_stage",
+    "execution_unit",
+    "stage",
+    "from_runtime_bundle_sha256",
+    "from_protocol_revision_id",
+    "to_runtime_bundle_sha256",
+    "to_protocol_revision_id",
+    "stage_dependency_fingerprint",
+    "issued_at",
+    "expires_at_or_null",
+    "design_manifest_sha256",
+    "execution_revision",
+    "execution_erratum_sha256",
+    "source_pool_contents_read_allowed",
+    "ledger_mutation_allowed",
+    "external_calls_allowed",
+}
+STAGE_COMPATIBILITY_FIELDS = {
+    "kind",
+    "attestation_id",
+    "authorization_id",
+    "stage",
+    "execution_revision",
+    "execution_erratum_sha256",
+    "from_runtime_bundle_sha256",
+    "from_protocol_revision_id",
+    "from_stage_execution_identity",
+    "to_runtime_bundle_sha256",
+    "to_protocol_revision_id",
+    "to_stage_execution_identity",
+    "stage_dependency_fingerprint",
+    "datasets",
+    "ledger_tip_sha256",
+    "ledger_tip_anchor_sha256",
+    "source_pool_contents_read",
+    "ledger_mutation",
+    "external_calls_performed",
+    "created_at",
+}
+STAGE_COMPATIBILITY_DATASET_FIELDS = {
+    "dataset",
+    "authorization_id",
+    "attempt_id",
+    "source_count",
+    "token_count",
+    "token_df_rows_file_sha256",
+    "df_manifest_file_sha256",
+    "run_authorization_file_sha256",
+    "budget_journal_file_sha256",
+    "checkpoint_file_sha256",
+}
 SUCCESSOR_FREEZE_AUTH_DIRECTORY = (
     ARTIFACT_ROOT / "governance/runtime_successor_freeze_authorizations"
 )
@@ -319,6 +390,23 @@ def load_design_config(project_root: str | Path = ".") -> dict[str, Any]:
         if config.get(key) != value:
             raise RuntimeError(f"v23_design_config_drift:{key}")
     return config
+
+
+def load_execution_erratum(project_root: str | Path = ".") -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    path = _resolve(EXECUTION_ERRATUM, root)
+    if not path.is_file() or sha256_file(path) != EXECUTION_ERRATUM_SHA256:
+        raise RuntimeError("v23_execution_erratum_hash_drift")
+    contract = load_stage_dependency_contract(path)
+    if contract["execution_revision"] != EXECUTION_REVISION:
+        raise RuntimeError("v23_execution_erratum_identity_drift")
+    return contract
+
+
+def stage_change_impact(
+    change_class: str, project_root: str | Path = "."
+) -> list[str]:
+    return resolve_affected_stages(load_execution_erratum(project_root), change_class)
 
 
 def validate_design_bindings(project_root: str | Path = ".") -> dict[str, Any]:
@@ -1007,6 +1095,82 @@ def _load_runtime_lineage(root: Path) -> dict[str, Any]:
         "active_revision": revisions[-1],
         "active_bundle": bundles[revisions[-1]["runtime_bundle_sha256"]],
     }
+
+
+def _stage_identity_for_bundle(
+    root: Path,
+    *,
+    stage: str,
+    runtime_bundle_sha256: str,
+) -> dict[str, Any]:
+    lineage = _load_runtime_lineage(root)
+    bundle = lineage["bundles"].get(runtime_bundle_sha256)
+    if bundle is None:
+        raise RuntimeError("stage_identity_runtime_bundle_unknown")
+    revisions = [
+        item
+        for item in lineage["revisions"]
+        if item["runtime_bundle_sha256"] == runtime_bundle_sha256
+    ]
+    if len(revisions) != 1:
+        raise RuntimeError("stage_identity_protocol_revision_ambiguous")
+    contract = load_execution_erratum(root)
+
+    def load_committed_text(path: str) -> str:
+        raw = _git_output(
+            root,
+            "show",
+            f"{bundle['code_commit']}:{path}",
+            text_output=False,
+        )
+        return bytes(raw).decode("utf-8")
+
+    def load_exact_bytes(path: str) -> bytes:
+        candidate = _resolve(path, root)
+        if not candidate.is_file():
+            raise RuntimeError(f"stage_dependency_file_missing:{path}")
+        return candidate.read_bytes()
+
+    fingerprint = compute_stage_dependency_fingerprint(
+        contract,
+        stage,
+        python_source_loader=load_committed_text,
+        config_source_loader=load_committed_text,
+        file_bytes_loader=load_exact_bytes,
+        runtime_manifest=bundle,
+    )
+    revision = revisions[0]
+    return {
+        **fingerprint,
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "runtime_bundle_sha256": runtime_bundle_sha256,
+        "protocol_revision_id": revision["protocol_revision_id"],
+        "stage_execution_identity": stage_execution_identity(
+            stage=stage,
+            stage_dependency_fingerprint=fingerprint[
+                "stage_dependency_fingerprint"
+            ],
+            runtime_bundle_sha256=runtime_bundle_sha256,
+            protocol_revision_id=revision["protocol_revision_id"],
+        ),
+    }
+
+
+def stage_identity(
+    *,
+    project_root: str | Path,
+    stage: str,
+    runtime_bundle_sha256: str | None = None,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    lineage = _load_runtime_lineage(root)
+    bundle_id = runtime_bundle_sha256 or lineage["active_revision"][
+        "runtime_bundle_sha256"
+    ]
+    return _stage_identity_for_bundle(
+        root, stage=stage, runtime_bundle_sha256=bundle_id
+    )
 
 
 def validate_active_runtime(
@@ -2992,28 +3156,21 @@ def _run_aggregate_df_unlocked(
     )
 
 
-def validate_aggregate_df(
+def _validate_aggregate_df_for_producer(
     *,
     project_root: str | Path,
     dataset: str,
-    runtime_files: Sequence[str] | None = None,
-    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
-    model_lock_path: str | Path = MODEL_LOCK_PATH,
+    producer_runtime_bundle_sha256: str,
+    producer_protocol_revision_id: str,
 ) -> dict[str, Any]:
     if dataset not in DATASET_ORDER:
         raise ValueError("aggregate_df_dataset_invalid")
     root = Path(project_root).resolve()
-    active = validate_active_runtime(
-        root,
-        runtime_files=runtime_files,
-        dependency_lock_path=dependency_lock_path,
-        model_lock_path=model_lock_path,
-    )
     config = load_design_config(root)
     contracts = _aggregate_df_contracts(config, dataset)
     pool = contracts["pool"]
     identity, tokenization_sha256 = _aggregate_df_input_identity(
-        runtime_bundle_sha256=active["runtime_bundle_sha256"],
+        runtime_bundle_sha256=producer_runtime_bundle_sha256,
         dataset=dataset,
         contracts=contracts,
     )
@@ -3038,7 +3195,7 @@ def validate_aggregate_df(
     _assert_exact_fields(manifest, expected_manifest_fields, kind="aggregate_df_manifest")
     expected_constants = {
         "kind": "v23_aggregate_document_frequency",
-        "protocol_revision_id": active["protocol_revision_id"],
+        "protocol_revision_id": producer_protocol_revision_id,
         "dataset": dataset,
         "input_identity_sha256": identity,
         "source_count": pool["source_count"],
@@ -3081,7 +3238,8 @@ def validate_aggregate_df(
         candidate = _read_json_exact(path)
         if (
             candidate.get("authorized_stage") == "aggregate_df_precomputation"
-            and candidate.get("runtime_bundle_sha256") == active["runtime_bundle_sha256"]
+            and candidate.get("runtime_bundle_sha256")
+            == producer_runtime_bundle_sha256
             and candidate.get("datasets") == [dataset]
         ):
             authorization_paths.append(path)
@@ -3112,13 +3270,14 @@ def validate_aggregate_df(
     if (
         authorization["budget_limit"] != pool["source_count"]
         or charged_count != pool["source_count"]
-        or checkpoint["protocol_revision_id"] != active["protocol_revision_id"]
+        or checkpoint["protocol_revision_id"] != producer_protocol_revision_id
         or checkpoint["attempt_id"] != authorization["attempt_id"]
         or checkpoint["execution_unit"] != "one_dataset"
         or checkpoint["authorization_id"] != authorization["authorization_id"]
         or checkpoint["authorization_budget_journal_tip_sha256"] != budget_tip
         or checkpoint["output_manifest_sha256"] != sha256_file(manifest_path)
-        or checkpoint["runtime_bundle_sha256"] != active["runtime_bundle_sha256"]
+        or checkpoint["runtime_bundle_sha256"]
+        != producer_runtime_bundle_sha256
         or checkpoint_tip != authorization["expected_prior_ledger_tip_sha256"]
         or checkpoint_tip not in ledger_tip_hashes
         or checkpoint["output_ledger_tip_sha256"] != checkpoint_tip
@@ -3130,8 +3289,8 @@ def validate_aggregate_df(
     return {
         "status": "passed",
         "dataset": dataset,
-        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
-        "protocol_revision_id": active["protocol_revision_id"],
+        "runtime_bundle_sha256": producer_runtime_bundle_sha256,
+        "protocol_revision_id": producer_protocol_revision_id,
         "authorization_id": authorization["authorization_id"],
         "attempt_id": authorization["attempt_id"],
         "source_count": pool["source_count"],
@@ -3139,6 +3298,584 @@ def validate_aggregate_df(
         "token_df_rows_file_sha256": manifest["token_df_rows_file_sha256"],
         "df_manifest_file_sha256": sha256_file(manifest_path),
         "budget_charge_count": charged_count,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
+def validate_aggregate_df(
+    *,
+    project_root: str | Path,
+    dataset: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if dataset not in DATASET_ORDER:
+        raise ValueError("aggregate_df_dataset_invalid")
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    manifest_path = _resolve(
+        AGGREGATE_DF_DIRECTORY / dataset / "df_manifest.json", root
+    )
+    if not manifest_path.is_file():
+        raise RuntimeError("aggregate_df_artifact_missing")
+    manifest = _read_json_exact(manifest_path)
+    producer_revision_id = manifest.get("protocol_revision_id")
+    lineage = _load_runtime_lineage(root)
+    revisions = [
+        item
+        for item in lineage["revisions"]
+        if item["protocol_revision_id"] == producer_revision_id
+    ]
+    if len(revisions) != 1:
+        raise RuntimeError("aggregate_df_producer_revision_unknown")
+    producer_revision = revisions[0]
+    producer_bundle_id = producer_revision["runtime_bundle_sha256"]
+    result = _validate_aggregate_df_for_producer(
+        project_root=root,
+        dataset=dataset,
+        producer_runtime_bundle_sha256=producer_bundle_id,
+        producer_protocol_revision_id=producer_revision_id,
+    )
+    validation_mode = "native"
+    compatibility_sha256: str | None = None
+    if (
+        producer_bundle_id != active["runtime_bundle_sha256"]
+        or producer_revision_id != active["protocol_revision_id"]
+    ):
+        compatibility = validate_stage_carry_forward(
+            project_root=root,
+            stage="aggregate_df_precomputation",
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        dataset_rows = {
+            item["dataset"]: item for item in compatibility["datasets"]
+        }
+        if (
+            dataset not in dataset_rows
+            or dataset_rows[dataset]["df_manifest_file_sha256"]
+            != result["df_manifest_file_sha256"]
+            or dataset_rows[dataset]["token_df_rows_file_sha256"]
+            != result["token_df_rows_file_sha256"]
+        ):
+            raise RuntimeError("aggregate_df_carry_forward_dataset_drift")
+        validation_mode = "carried_forward"
+        compatibility_sha256 = compatibility["attestation_file_sha256"]
+    return {
+        **result,
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "protocol_revision_id": active["protocol_revision_id"],
+        "artifact_runtime_bundle_sha256": producer_bundle_id,
+        "artifact_protocol_revision_id": producer_revision_id,
+        "validation_mode": validation_mode,
+        "stage_compatibility_file_sha256": compatibility_sha256,
+    }
+
+
+def _aggregate_df_producer_identity(root: Path) -> tuple[str, str]:
+    revision_ids: set[str] = set()
+    for dataset in DATASET_ORDER:
+        path = _resolve(
+            AGGREGATE_DF_DIRECTORY / dataset / "df_manifest.json", root
+        )
+        if not path.is_file():
+            raise RuntimeError("aggregate_df_artifact_missing")
+        revision_id = _read_json_exact(path).get("protocol_revision_id")
+        if not _is_sha256(revision_id):
+            raise RuntimeError("aggregate_df_producer_revision_invalid")
+        revision_ids.add(revision_id)
+    if len(revision_ids) != 1:
+        raise RuntimeError("aggregate_df_producer_revision_mixed")
+    revision_id = next(iter(revision_ids))
+    lineage = _load_runtime_lineage(root)
+    revisions = [
+        item
+        for item in lineage["revisions"]
+        if item["protocol_revision_id"] == revision_id
+    ]
+    if len(revisions) != 1:
+        raise RuntimeError("aggregate_df_producer_revision_unknown")
+    return revisions[0]["runtime_bundle_sha256"], revision_id
+
+
+def _aggregate_df_evidence(
+    root: Path,
+    *,
+    dataset: str,
+    producer_runtime_bundle_sha256: str,
+    producer_protocol_revision_id: str,
+) -> dict[str, Any]:
+    result = _validate_aggregate_df_for_producer(
+        project_root=root,
+        dataset=dataset,
+        producer_runtime_bundle_sha256=producer_runtime_bundle_sha256,
+        producer_protocol_revision_id=producer_protocol_revision_id,
+    )
+    authorization_path = _resolve(
+        RUN_AUTH_DIRECTORY / f"{result['authorization_id']}.json", root
+    )
+    budget_path = _resolve(
+        BUDGET_DIRECTORY / f"{result['authorization_id']}.jsonl", root
+    )
+    checkpoint_path = _aggregate_df_paths(
+        root, dataset, result["attempt_id"]
+    )["checkpoint"]
+    return {
+        "dataset": dataset,
+        "authorization_id": result["authorization_id"],
+        "attempt_id": result["attempt_id"],
+        "source_count": result["source_count"],
+        "token_count": result["token_count"],
+        "token_df_rows_file_sha256": result["token_df_rows_file_sha256"],
+        "df_manifest_file_sha256": result["df_manifest_file_sha256"],
+        "run_authorization_file_sha256": sha256_file(authorization_path),
+        "budget_journal_file_sha256": sha256_file(budget_path),
+        "checkpoint_file_sha256": sha256_file(checkpoint_path),
+    }
+
+
+def _validate_stage_compatibility_authorization(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    authorization = dict(value)
+    _assert_exact_fields(
+        authorization,
+        STAGE_COMPATIBILITY_AUTH_FIELDS,
+        kind="stage_compatibility_authorization",
+    )
+    constants = {
+        "kind": "v23_stage_compatibility_authorization",
+        "authorized_stage": STAGE_CARRY_FORWARD,
+        "execution_unit": "all_datasets_group",
+        "stage": "aggregate_df_precomputation",
+        "design_manifest_sha256": DESIGN_MANIFEST_SHA256,
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "source_pool_contents_read_allowed": False,
+        "ledger_mutation_allowed": False,
+        "external_calls_allowed": False,
+    }
+    if any(authorization[key] != expected for key, expected in constants.items()):
+        raise RuntimeError("stage_compatibility_authorization_constant_drift")
+    for key in (
+        "authorization_id",
+        "from_runtime_bundle_sha256",
+        "from_protocol_revision_id",
+        "to_runtime_bundle_sha256",
+        "to_protocol_revision_id",
+        "stage_dependency_fingerprint",
+    ):
+        if not _is_sha256(authorization[key]):
+            raise RuntimeError(f"stage_compatibility_authorization_hash_invalid:{key}")
+    if not str(authorization["user_authorization_record"]).strip():
+        raise RuntimeError("stage_compatibility_user_authorization_empty")
+    claimed = authorization["authorization_id"]
+    if claimed != canonical_sha256(
+        {key: item for key, item in authorization.items() if key != "authorization_id"}
+    ):
+        raise RuntimeError("stage_compatibility_authorization_identity_drift")
+    if authorization["expires_at_or_null"] is not None:
+        expiry = datetime.fromisoformat(
+            str(authorization["expires_at_or_null"]).replace("Z", "+00:00")
+        )
+        if expiry <= datetime.now(timezone.utc):
+            raise RuntimeError("stage_compatibility_authorization_expired")
+    return authorization
+
+
+def _stage_compatibility_path(root: Path, protocol_revision_id: str) -> Path:
+    return _resolve(
+        STAGE_COMPATIBILITY_DIRECTORY
+        / protocol_revision_id
+        / "aggregate_df_precomputation.json",
+        root,
+    )
+
+
+def prepare_stage_carry_forward_authorization(
+    *,
+    project_root: str | Path,
+    stage: str,
+    user_authorization_record: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if stage != "aggregate_df_precomputation" or not user_authorization_record.strip():
+        raise ValueError("stage_carry_forward_scope_invalid")
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    producer_bundle, producer_revision = _aggregate_df_producer_identity(root)
+    if (
+        producer_bundle == active["runtime_bundle_sha256"]
+        or producer_revision == active["protocol_revision_id"]
+    ):
+        raise RuntimeError("stage_carry_forward_transition_missing")
+    from_identity = _stage_identity_for_bundle(
+        root, stage=stage, runtime_bundle_sha256=producer_bundle
+    )
+    to_identity = _stage_identity_for_bundle(
+        root, stage=stage, runtime_bundle_sha256=active["runtime_bundle_sha256"]
+    )
+    if (
+        from_identity["stage_dependency_fingerprint"]
+        != to_identity["stage_dependency_fingerprint"]
+    ):
+        raise RuntimeError("stage_carry_forward_dependency_drift")
+    for dataset in DATASET_ORDER:
+        _aggregate_df_evidence(
+            root,
+            dataset=dataset,
+            producer_runtime_bundle_sha256=producer_bundle,
+            producer_protocol_revision_id=producer_revision,
+        )
+    target_path = _stage_compatibility_path(root, active["protocol_revision_id"])
+    if target_path.exists():
+        raise RuntimeError("stage_carry_forward_attestation_already_exists")
+    existing = []
+    auth_dir = _resolve(STAGE_COMPATIBILITY_AUTH_DIRECTORY, root)
+    if auth_dir.exists():
+        for path in auth_dir.glob("*.json"):
+            candidate = _read_json_exact(path)
+            if (
+                candidate.get("stage") == stage
+                and candidate.get("to_protocol_revision_id")
+                == active["protocol_revision_id"]
+            ):
+                existing.append(path)
+    if existing:
+        raise RuntimeError("stage_carry_forward_authorization_already_exists")
+    authorization = {
+        "kind": "v23_stage_compatibility_authorization",
+        "user_authorization_record": user_authorization_record,
+        "authorized_stage": STAGE_CARRY_FORWARD,
+        "execution_unit": "all_datasets_group",
+        "stage": stage,
+        "from_runtime_bundle_sha256": producer_bundle,
+        "from_protocol_revision_id": producer_revision,
+        "to_runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "to_protocol_revision_id": active["protocol_revision_id"],
+        "stage_dependency_fingerprint": from_identity[
+            "stage_dependency_fingerprint"
+        ],
+        "issued_at": utc_now(),
+        "expires_at_or_null": None,
+        "design_manifest_sha256": DESIGN_MANIFEST_SHA256,
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "source_pool_contents_read_allowed": False,
+        "ledger_mutation_allowed": False,
+        "external_calls_allowed": False,
+    }
+    authorization["authorization_id"] = canonical_sha256(authorization)
+    path = _resolve(
+        STAGE_COMPATIBILITY_AUTH_DIRECTORY
+        / f"{authorization['authorization_id']}.json",
+        root,
+    )
+    _write_new_canonical_json(path, authorization)
+    return {
+        **authorization,
+        "authorization_path": _relative(path, root),
+        "source_pool_contents_read": False,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
+def _load_stage_compatibility_authorization(
+    root: Path, authorization_path: str | Path
+) -> dict[str, Any]:
+    path = _resolve(authorization_path, root)
+    authorization = _validate_stage_compatibility_authorization(
+        _read_json_exact(path)
+    )
+    expected = _resolve(
+        STAGE_COMPATIBILITY_AUTH_DIRECTORY
+        / f"{authorization['authorization_id']}.json",
+        root,
+    )
+    if path != expected:
+        raise RuntimeError("stage_compatibility_authorization_path_drift")
+    return authorization
+
+
+def run_stage_carry_forward(
+    *,
+    project_root: str | Path,
+    stage: str,
+    authorization_path: str | Path,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if stage != "aggregate_df_precomputation":
+        raise ValueError("stage_carry_forward_scope_invalid")
+    root = Path(project_root).resolve()
+    authorization = _load_stage_compatibility_authorization(
+        root, authorization_path
+    )
+    lock_path = _resolve(
+        ARTIFACT_ROOT / "governance/stage_compatibility.lock", root
+    )
+    with exclusive_lock(lock_path):
+        active = validate_active_runtime(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        producer_bundle, producer_revision = _aggregate_df_producer_identity(root)
+        if (
+            authorization["stage"] != stage
+            or authorization["from_runtime_bundle_sha256"] != producer_bundle
+            or authorization["from_protocol_revision_id"] != producer_revision
+            or authorization["to_runtime_bundle_sha256"]
+            != active["runtime_bundle_sha256"]
+            or authorization["to_protocol_revision_id"]
+            != active["protocol_revision_id"]
+        ):
+            raise RuntimeError("stage_carry_forward_authorization_runtime_drift")
+        from_identity = _stage_identity_for_bundle(
+            root, stage=stage, runtime_bundle_sha256=producer_bundle
+        )
+        to_identity = _stage_identity_for_bundle(
+            root,
+            stage=stage,
+            runtime_bundle_sha256=active["runtime_bundle_sha256"],
+        )
+        fingerprints = {
+            authorization["stage_dependency_fingerprint"],
+            from_identity["stage_dependency_fingerprint"],
+            to_identity["stage_dependency_fingerprint"],
+        }
+        if len(fingerprints) != 1:
+            raise RuntimeError("stage_carry_forward_dependency_drift")
+        evidence = [
+            _aggregate_df_evidence(
+                root,
+                dataset=dataset,
+                producer_runtime_bundle_sha256=producer_bundle,
+                producer_protocol_revision_id=producer_revision,
+            )
+            for dataset in DATASET_ORDER
+        ]
+        ledger = validate_ledger(_resolve(CONSUMPTION_LEDGER, root))
+        ledger_anchor = _ledger_tip_anchor(root, ledger["tip_sha256"])
+        attestation = {
+            "kind": "v23_stage_carry_forward_attestation",
+            "authorization_id": authorization["authorization_id"],
+            "stage": stage,
+            "execution_revision": EXECUTION_REVISION,
+            "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+            "from_runtime_bundle_sha256": producer_bundle,
+            "from_protocol_revision_id": producer_revision,
+            "from_stage_execution_identity": from_identity[
+                "stage_execution_identity"
+            ],
+            "to_runtime_bundle_sha256": active["runtime_bundle_sha256"],
+            "to_protocol_revision_id": active["protocol_revision_id"],
+            "to_stage_execution_identity": to_identity[
+                "stage_execution_identity"
+            ],
+            "stage_dependency_fingerprint": from_identity[
+                "stage_dependency_fingerprint"
+            ],
+            "datasets": evidence,
+            "ledger_tip_sha256": ledger["tip_sha256"],
+            "ledger_tip_anchor_sha256": sha256_file(ledger_anchor),
+            "source_pool_contents_read": False,
+            "ledger_mutation": False,
+            "external_calls_performed": 0,
+            "created_at": utc_now(),
+        }
+        attestation["attestation_id"] = canonical_sha256(attestation)
+        path = _stage_compatibility_path(root, active["protocol_revision_id"])
+        _write_new_canonical_json(path, attestation)
+    return validate_stage_carry_forward(
+        project_root=root,
+        stage=stage,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+
+
+def _assert_aggregate_evidence_files(
+    root: Path, evidence: Mapping[str, Any]
+) -> None:
+    _assert_exact_fields(
+        evidence,
+        STAGE_COMPATIBILITY_DATASET_FIELDS,
+        kind="stage_compatibility_dataset",
+    )
+    dataset = evidence["dataset"]
+    if dataset not in DATASET_ORDER:
+        raise RuntimeError("stage_compatibility_dataset_invalid")
+    paths = {
+        "token_df_rows_file_sha256": _resolve(
+            AGGREGATE_DF_DIRECTORY / dataset / "token_df.jsonl", root
+        ),
+        "df_manifest_file_sha256": _resolve(
+            AGGREGATE_DF_DIRECTORY / dataset / "df_manifest.json", root
+        ),
+        "run_authorization_file_sha256": _resolve(
+            RUN_AUTH_DIRECTORY / f"{evidence['authorization_id']}.json", root
+        ),
+        "budget_journal_file_sha256": _resolve(
+            BUDGET_DIRECTORY / f"{evidence['authorization_id']}.jsonl", root
+        ),
+        "checkpoint_file_sha256": _aggregate_df_paths(
+            root, dataset, evidence["attempt_id"]
+        )["checkpoint"],
+    }
+    for field, path in paths.items():
+        if not path.is_file() or sha256_file(path) != evidence[field]:
+            raise RuntimeError(f"stage_compatibility_evidence_drift:{dataset}:{field}")
+
+
+def validate_stage_carry_forward(
+    *,
+    project_root: str | Path,
+    stage: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if stage != "aggregate_df_precomputation":
+        raise ValueError("stage_carry_forward_scope_invalid")
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    path = _stage_compatibility_path(root, active["protocol_revision_id"])
+    if not path.is_file():
+        raise RuntimeError("stage_carry_forward_attestation_missing")
+    attestation = _read_json_exact(path)
+    _assert_exact_fields(
+        attestation,
+        STAGE_COMPATIBILITY_FIELDS,
+        kind="stage_compatibility_attestation",
+    )
+    claimed_attestation_id = attestation["attestation_id"]
+    if (
+        not _is_sha256(claimed_attestation_id)
+        or claimed_attestation_id
+        != canonical_sha256(
+            {
+                key: value
+                for key, value in attestation.items()
+                if key != "attestation_id"
+            }
+        )
+    ):
+        raise RuntimeError("stage_carry_forward_attestation_hash_drift")
+    authorization_path = _resolve(
+        STAGE_COMPATIBILITY_AUTH_DIRECTORY
+        / f"{attestation['authorization_id']}.json",
+        root,
+    )
+    authorization = _load_stage_compatibility_authorization(
+        root, authorization_path
+    )
+    producer_bundle, producer_revision = _aggregate_df_producer_identity(root)
+    constants = {
+        "kind": "v23_stage_carry_forward_attestation",
+        "authorization_id": authorization["authorization_id"],
+        "stage": stage,
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "from_runtime_bundle_sha256": producer_bundle,
+        "from_protocol_revision_id": producer_revision,
+        "to_runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "to_protocol_revision_id": active["protocol_revision_id"],
+        "source_pool_contents_read": False,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+    if any(attestation[key] != expected for key, expected in constants.items()):
+        raise RuntimeError("stage_carry_forward_attestation_identity_drift")
+    from_identity = _stage_identity_for_bundle(
+        root, stage=stage, runtime_bundle_sha256=producer_bundle
+    )
+    to_identity = _stage_identity_for_bundle(
+        root, stage=stage, runtime_bundle_sha256=active["runtime_bundle_sha256"]
+    )
+    expected_identity = {
+        "stage_dependency_fingerprint": from_identity[
+            "stage_dependency_fingerprint"
+        ],
+        "from_stage_execution_identity": from_identity[
+            "stage_execution_identity"
+        ],
+        "to_stage_execution_identity": to_identity["stage_execution_identity"],
+    }
+    if (
+        from_identity["stage_dependency_fingerprint"]
+        != to_identity["stage_dependency_fingerprint"]
+        or any(
+            attestation[key] != expected
+            for key, expected in expected_identity.items()
+        )
+        or authorization["stage_dependency_fingerprint"]
+        != from_identity["stage_dependency_fingerprint"]
+    ):
+        raise RuntimeError("stage_carry_forward_dependency_drift")
+    datasets = attestation["datasets"]
+    if (
+        not isinstance(datasets, list)
+        or [item.get("dataset") for item in datasets if isinstance(item, Mapping)]
+        != list(DATASET_ORDER)
+    ):
+        raise RuntimeError("stage_carry_forward_dataset_group_incomplete")
+    for evidence in datasets:
+        if not isinstance(evidence, Mapping):
+            raise RuntimeError("stage_compatibility_dataset_schema_drift")
+        _assert_aggregate_evidence_files(root, evidence)
+    ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+    validate_ledger(ledger_path)
+    ledger_hashes = {
+        json.loads(line)["row_sha256"]
+        for line in ledger_path.read_text(encoding="utf-8").splitlines()
+    }
+    if attestation["ledger_tip_sha256"] not in ledger_hashes:
+        raise RuntimeError("stage_carry_forward_ledger_tip_not_ancestor")
+    anchor = _ledger_tip_anchor(root, attestation["ledger_tip_sha256"])
+    if sha256_file(anchor) != attestation["ledger_tip_anchor_sha256"]:
+        raise RuntimeError("stage_carry_forward_ledger_anchor_drift")
+    return {
+        "status": "passed",
+        "stage": stage,
+        "validation_mode": "carried_forward",
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "from_runtime_bundle_sha256": producer_bundle,
+        "from_protocol_revision_id": producer_revision,
+        "to_runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "to_protocol_revision_id": active["protocol_revision_id"],
+        "stage_dependency_fingerprint": attestation[
+            "stage_dependency_fingerprint"
+        ],
+        "datasets": datasets,
+        "attestation_file_sha256": sha256_file(path),
+        "attestation_id": claimed_attestation_id,
+        "source_pool_contents_read": False,
         "ledger_mutation": False,
         "external_calls_performed": 0,
     }
@@ -3425,12 +4162,87 @@ def validate_index_allowlist(split_rows: Sequence[Mapping[str, Any]], *, allowed
         raise RuntimeError("index_group_contamination")
 
 
+def stage_status(
+    project_root: str | Path = ".", *, stage: str | None = None
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    contract = load_execution_erratum(root)
+    stages = contract["stage_order"]
+    if stage is not None and stage not in stages:
+        raise ValueError("stage_status_stage_invalid")
+    active = validate_active_runtime(root)
+    requested = [stage] if stage is not None else list(stages)
+    rows: list[dict[str, Any]] = []
+    for name in requested:
+        if name != "aggregate_df_precomputation":
+            rows.append(
+                {
+                    "stage": name,
+                    "status": "not_started",
+                    "reason": "canonical_stage_artifact_missing",
+                }
+            )
+            continue
+        if any(
+            not _resolve(
+                AGGREGATE_DF_DIRECTORY / dataset / "df_manifest.json", root
+            ).is_file()
+            for dataset in DATASET_ORDER
+        ):
+            rows.append(
+                {
+                    "stage": name,
+                    "status": "not_started",
+                    "reason": "aggregate_df_group_incomplete",
+                }
+            )
+            continue
+        try:
+            validations = [
+                validate_aggregate_df(project_root=root, dataset=dataset)
+                for dataset in DATASET_ORDER
+            ]
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+            rows.append(
+                {"stage": name, "status": "stale", "reason": str(error)}
+            )
+        else:
+            modes = {item["validation_mode"] for item in validations}
+            if len(modes) != 1:
+                raise RuntimeError("stage_status_aggregate_validation_mode_mixed")
+            rows.append(
+                {
+                    "stage": name,
+                    "status": modes.pop(),
+                    "reason": None,
+                    "stage_dependency_fingerprint": stage_identity(
+                        project_root=root,
+                        stage=name,
+                        runtime_bundle_sha256=active["runtime_bundle_sha256"],
+                    )["stage_dependency_fingerprint"],
+                }
+            )
+    return {
+        "status": "passed",
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "protocol_revision_id": active["protocol_revision_id"],
+        "stages": rows,
+        "source_pool_contents_read": False,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
 def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
     root = Path(project_root).resolve()
     bindings = validate_bootstrap_design_identity(root)
+    load_execution_erratum(root)
     implementation_files = [
         "src/attack/restoration_first_v23.py",
         "src/prepare/restoration_first_v23.py",
+        "src/utils/stage_identity.py",
         "src/evaluation/restoration_first_v23.py",
         "scripts/42_run_v23_restoration_first.py",
         "tests/test_restoration_first_v23.py",
@@ -3481,6 +4293,8 @@ def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
         "protocol_version": PROTOCOL_VERSION,
         "method_version": METHOD_VERSION,
         "specification_version": SPECIFICATION_VERSION,
+        "execution_revision": EXECUTION_REVISION,
+        "execution_erratum_sha256": EXECUTION_ERRATUM_SHA256,
         "status": (
             "runtime_frozen_downstream_blocked"
             if frozen
