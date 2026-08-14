@@ -20,6 +20,9 @@ from src.prepare.entity_policy_release import (
     RELEASE_GATE_PROTOCOL,
     validate_release_gate,
 )
+from src.prepare.entity_policy_audit_schema import (
+    blinded_audit_schema_metadata,
+)
 from src.prepare.formal_evidence_scope import (
     DIAGNOSTIC_ONLY_SEMANTIC_ENTITY_TYPES,
     FORMAL_AUDIT_TOTAL_ROWS,
@@ -173,6 +176,7 @@ class EntityPolicyValidationTests(unittest.TestCase):
                 "formal_dataset_role_scope": (
                     formal_dataset_role_scope_metadata()
                 ),
+                "blinded_schema": blinded_audit_schema_metadata(),
                 "blinded_path": str(blinded.resolve()),
                 "blinded_sha256": sha256_file(blinded),
                 "key_path": str(key_path.resolve()),
@@ -188,6 +192,7 @@ class EntityPolicyValidationTests(unittest.TestCase):
             audit_manifest_path = root / "audit_manifest.json"
             write_json(audit_manifest, audit_manifest_path)
             audit_report = {
+                "protocol": AUDIT_PROTOCOL,
                 "status": "passed",
                 "formal_evidence_scope": formal_evidence_scope_metadata(),
                 "formal_dataset_role_scope": (
@@ -375,6 +380,10 @@ class EntityPolicyValidationTests(unittest.TestCase):
             )
             self.assertEqual(manifest["protocol"], AUDIT_PROTOCOL)
             self.assertEqual(
+                manifest["blinded_schema"],
+                blinded_audit_schema_metadata(),
+            )
+            self.assertEqual(
                 manifest["formal_dataset_role_scope"],
                 formal_dataset_role_scope_metadata(),
             )
@@ -440,9 +449,40 @@ class EntityPolicyValidationTests(unittest.TestCase):
             self.assertEqual(report["status"], "passed")
 
             blinded_rows = list(read_jsonl(manifest["blinded_path"]))
-            blinded_rows[0]["dataset"] = "fixture"
+            self.assertTrue(
+                all("semantic_subtype" not in row for row in blinded_rows)
+            )
+            self.assertFalse(
+                any(
+                    value == "mismatched_donor_type"
+                    for row in blinded_rows
+                    for value in row.values()
+                )
+            )
+
+            blinded_rows[0]["semantic_subtype"] = "mismatched_donor_type"
             write_jsonl(blinded_rows, manifest["blinded_path"])
             manifest_path = audit_dir / "entity_policy_audit_manifest.json"
+            leaked_manifest = read_json(manifest_path)
+            leaked_manifest["blinded_sha256"] = sha256_file(
+                manifest["blinded_path"]
+            )
+            leaked_manifest["audit_identity_sha256"] = sha256_obj(
+                {
+                    key: value
+                    for key, value in leaked_manifest.items()
+                    if key not in {"created_at", "audit_identity_sha256"}
+                }
+            )
+            write_json(leaked_manifest, manifest_path)
+            with self.assertRaisesRegex(
+                RuntimeError, "Blinded audit schema violation"
+            ):
+                evaluate_audit(manifest_path, labels_path, reviews_path)
+
+            blinded_rows[0].pop("semantic_subtype")
+            blinded_rows[0]["dataset"] = "fixture"
+            write_jsonl(blinded_rows, manifest["blinded_path"])
             drifted_manifest = read_json(manifest_path)
             drifted_manifest["blinded_sha256"] = sha256_file(
                 manifest["blinded_path"]

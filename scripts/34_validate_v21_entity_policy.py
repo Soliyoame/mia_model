@@ -72,7 +72,7 @@ from src.utils.io import (  # noqa: E402
 
 DEFAULT_WORKSPACE = PROJECT_ROOT / "artifacts" / "v21" / "entity_policy_r1"
 DEFAULT_RELEASE_WORKSPACE = (
-    PROJECT_ROOT / "artifacts" / "v21" / "entity_policy_r2"
+    PROJECT_ROOT / "artifacts" / "v21" / "entity_policy_r3"
 )
 DEFAULT_INVENTORY = DEFAULT_WORKSPACE / "inventory" / "historical_inventory.json"
 DEFAULT_PILOT_PLAN = DEFAULT_WORKSPACE / "pilots" / "pilot_cohorts.json"

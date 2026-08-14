@@ -19,6 +19,12 @@ from ..attack.entity_type_policy import (
 )
 from ..utils.hash import sha256_file, sha256_obj
 from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
+from .entity_policy_audit_schema import (
+    AUDIT_PROTOCOL,
+    blinded_audit_schema_metadata,
+    validate_blinded_audit_rows,
+    validate_blinded_audit_schema_metadata,
+)
 from .entity_policy_release import (
     FORMAL_SCAN_PROTOCOL,
     RELEASE_GATE_PROTOCOL,
@@ -70,7 +76,6 @@ from .eligibility_scan import (
 ENTITY_POLICY_VALIDATION_PROTOCOL = "v21_entity_policy_validation_v1"
 HISTORICAL_REPLAY_PROTOCOL = "v21_entity_policy_historical_replay_v1"
 PILOT_PROTOCOL = "v21_entity_policy_pilot_v1"
-AUDIT_PROTOCOL = "v21_entity_policy_audit_v4_dataset_stratified_r1"
 PILOT_SALT = "pcv-v21-entity-policy-pilot-20260805"
 PILOT_COHORTS = ("A", "B", "C")
 PILOT_SOURCES_PER_DATASET = 500
@@ -797,11 +802,6 @@ def prepare_blinded_audit(
                     "dataset": dataset,
                     "source_key": row.get("source_key"),
                     "entity_type": entity_type,
-                    "semantic_subtype": (
-                        (row.get("original_semantic_resolution") or {}).get("subtype")
-                        if isinstance(row.get("original_semantic_resolution"), dict)
-                        else row.get("semantic_subtype")
-                    ),
                     "true_claim": row.get("true_claim"),
                     "counterfactual_claim": row.get("counterfactual_claim"),
                     "original_entity": row.get("original_entity"),
@@ -832,6 +832,7 @@ def prepare_blinded_audit(
 
     blinded.sort(key=lambda row: sha256_obj([AUDIT_PROTOCOL, row["audit_id"]]))
     key_rows.sort(key=lambda row: row["audit_id"])
+    validate_blinded_audit_rows(blinded)
     output = ensure_dir(output_dir)
     blinded_path = output / "entity_policy_audit_blinded.jsonl"
     key_path = output / "entity_policy_audit_key.jsonl"
@@ -880,6 +881,7 @@ def prepare_blinded_audit(
         "hard_negatives_per_semantic_type": FORMAL_AUDIT_HARD_NEGATIVES_PER_TYPE,
         "formal_evidence_scope": formal_evidence_scope_metadata(),
         "formal_dataset_role_scope": formal_dataset_role_scope_metadata(),
+        "blinded_schema": blinded_audit_schema_metadata(),
         "blinded_path": str(blinded_path.resolve()),
         "blinded_sha256": sha256_file(blinded_path),
         "key_path": str(key_path.resolve()),
@@ -909,6 +911,7 @@ def evaluate_audit(
     validate_formal_dataset_role_scope_metadata(
         manifest.get("formal_dataset_role_scope")
     )
+    validate_blinded_audit_schema_metadata(manifest.get("blinded_schema"))
     manifest_identity = {
         key: value
         for key, value in manifest.items()
@@ -922,7 +925,14 @@ def evaluate_audit(
     ):
         if sha256_file(manifest[path_key]) != manifest.get(hash_key):
             raise RuntimeError(f"Audit evidence drift: {path_key}")
-    for row in read_jsonl(manifest["blinded_path"]):
+    blinded_rows = list(read_jsonl(manifest["blinded_path"]))
+    validate_blinded_audit_rows(blinded_rows)
+    if (
+        len(blinded_rows) != FORMAL_AUDIT_TOTAL_ROWS
+        or int(manifest.get("rows") or 0) != FORMAL_AUDIT_TOTAL_ROWS
+    ):
+        raise RuntimeError("Blinded audit row count mismatch")
+    for row in blinded_rows:
         validate_audit_dataset(str(row.get("dataset") or ""))
     key = {str(row["audit_id"]): row for row in read_jsonl(manifest["key_path"])}
     for row in key.values():

@@ -11,6 +11,11 @@ from ..attack.entity_type_policy import (
 )
 from ..utils.hash import sha256_file, sha256_obj
 from ..utils.io import read_json, read_jsonl
+from .entity_policy_audit_schema import (
+    AUDIT_PROTOCOL,
+    validate_blinded_audit_rows,
+    validate_blinded_audit_schema_metadata,
+)
 from .formal_dataset_role_scope import (
     ENRON_CAPACITY_PROMOTION_PROTOCOL,
     MAIN_TABLE_DATASETS,
@@ -118,6 +123,8 @@ def _validate_dataset_report_contents(path: Path) -> None:
 
 
 def _validate_audit_contents(audit_report: dict[str, Any]) -> None:
+    if audit_report.get("protocol") != AUDIT_PROTOCOL:
+        raise RuntimeError("Release gate audit report protocol mismatch")
     validate_formal_evidence_scope_metadata(
         audit_report.get("formal_evidence_scope")
     )
@@ -134,6 +141,8 @@ def _validate_audit_contents(audit_report: dict[str, Any]) -> None:
             audit_report.get(hash_key),
         )
     manifest = read_json(audit_report["audit_manifest_path"])
+    if manifest.get("protocol") != AUDIT_PROTOCOL:
+        raise RuntimeError("Release gate audit manifest protocol mismatch")
     identity = {
         key: value
         for key, value in manifest.items()
@@ -145,6 +154,7 @@ def _validate_audit_contents(audit_report: dict[str, Any]) -> None:
     validate_formal_dataset_role_scope_metadata(
         manifest.get("formal_dataset_role_scope")
     )
+    validate_blinded_audit_schema_metadata(manifest.get("blinded_schema"))
     for path_key, hash_key in (
         ("blinded_path", "blinded_sha256"),
         ("key_path", "key_sha256"),
@@ -153,7 +163,9 @@ def _validate_audit_contents(audit_report: dict[str, Any]) -> None:
             Path(str(manifest.get(path_key) or "")),
             manifest.get(hash_key),
         )
-    for row in read_jsonl(manifest["blinded_path"]):
+    blinded_rows = list(read_jsonl(manifest["blinded_path"]))
+    validate_blinded_audit_rows(blinded_rows)
+    for row in blinded_rows:
         validate_audit_dataset(str(row.get("dataset") or ""))
 
 
