@@ -42,6 +42,7 @@ from src.prepare.restoration_first_v23 import (
     FrozenSourcePoolReader,
     GENESIS_SENTINEL,
     IMPLEMENTATION_STAGE,
+    RUNTIME_BUNDLE_FILES,
     ZERO_SHA256,
     append_reservation_batch,
     allocate_bootstrap_attempt,
@@ -833,6 +834,9 @@ class V23StageIdentityTests(unittest.TestCase):
 
 
 class V23GovernanceTests(unittest.TestCase):
+    def test_runtime_bundle_file_closure_is_canonical(self):
+        self.assertEqual(list(RUNTIME_BUNDLE_FILES), sorted(RUNTIME_BUNDLE_FILES))
+
     def test_frozen_source_pool_reader_enforces_hash_schema_and_read_only_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

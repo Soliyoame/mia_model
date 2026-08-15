@@ -50,8 +50,8 @@ GENESIS_SENTINEL = "genesis_sentinel"
 DATASET_ORDER = ("edgar", "enron", "pubmed")
 RUNTIME_BUNDLE_FILES = (
     "configs/entity_type_policy_v21_r1.yaml",
-    "configs/restoration_first_v23.execution_erratum_e1.yaml",
     "configs/restoration_first_v23.design_manifest.json",
+    "configs/restoration_first_v23.execution_erratum_e1.yaml",
     "configs/restoration_first_v23.yaml",
     "configs/semantic_entity_models_v6_3.lock.yaml",
     "requirements.txt",
