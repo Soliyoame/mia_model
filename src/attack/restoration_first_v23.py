@@ -471,6 +471,7 @@ def build_pair_candidates(
     *,
     token_df: Mapping[str, int],
     source_count: int,
+    token_df_prevalidated: bool = False,
 ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
     """Recompute all v23 hard gates and rank features for one fact candidate."""
 
@@ -482,7 +483,14 @@ def build_pair_candidates(
         raise ValueError("candidate_source_order_rank_mismatch")
     if source_count <= 0:
         raise ValueError("source_count_invalid")
-    if any(not isinstance(token, str) or isinstance(df, bool) or not isinstance(df, int) or df < 1 or df > source_count for token, df in token_df.items()):
+    if not token_df_prevalidated and any(
+        not isinstance(token, str)
+        or isinstance(df, bool)
+        or not isinstance(df, int)
+        or df < 1
+        or df > source_count
+        for token, df in token_df.items()
+    ):
         raise ValueError("token_df_invalid")
     base_reasons = _candidate_base_reasons(candidate, source_text)
     if base_reasons:

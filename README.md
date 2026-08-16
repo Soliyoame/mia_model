@@ -21,6 +21,11 @@ P0 正式类型固定为 `CONTRACT_TERM`、`LOCATION`、`ORG`、`PERSON`、`PROD
 `DATE`、`MONEY`、`EMAIL`、`PHONE`、`IDENTIFIER` 只作为诊断与次要扩展，不能填充
 P0 所需 pair。类型多样性本身不是优化目标。
 
+v23 当前 Generator 实验矩阵为 `Phi-4-14B`、`Llama-3.1-8B`、`Command-R-7B`
+和 `Gemma 2 2B`，首个实验 Generator 为 `Gemma 2 2B`。Luna 仅承担后续 query
+generation，不属于这四个被测 Generator；各 Generator 的具体 model ID、revision、
+snapshot、precision 与 decoding contract 必须在各自首次调用前冻结。
+
 selector 禁止读取或利用 membership、split/group、victim/RAG response、
 LLM-only response、Retriever 输出、attack score/AUC 或 v22 calibration
 label/threshold。完整 source pool 只允许在受控 aggregate-DF stage 按 producer
@@ -28,20 +33,23 @@ execution identity/dataset 读取一次；跨 runtime bundle 复用必须有显�
 证明。其输出只包含 aggregate token DF，不包含 source 映射或逐 source 行，也不得
 据此声称低频 token 不可反演。
 
-### v23 当前状态（2026-08-14）
+### v23 当前状态（2026-08-15）
 
 | 阶段 | 状态 | 可核验证据 |
 |---|---|---|
-| Runtime 实现、bootstrap 与 successor freeze | 已完成 | 隔离 runtime bundle、protocol revision 与 append-only governance 链已生成 |
+| Runtime 实现、bootstrap 与 revision 3 freeze | 已完成 | active bundle `1c2c933d...a8cb8` / revision `7add7622...54bff` |
 | Edgar aggregate-DF | `passed` | 5,210 sources / 116,953 token rows / 0 external calls |
 | Enron aggregate-DF | `passed` | 35,000 sources / 181,394 token rows / 0 external calls |
 | PubMed aggregate-DF | `passed` | 47,950 sources / 1,284,757 token rows / 0 external calls |
-| Stage-Scoped Identity execution erratum e1 | 已实现、待提交与 successor freeze | 不创建方法 r7；尚未生成真实 carry-forward artifact |
-| v23 fact extraction、selector pilot 与 capacity gate | 未启动 | 等待 e1 提交、successor freeze、DF carry-forward 与独立运行授权 |
-| formal scan、split、fresh audit、shadow、Luna、Gemma victim、Retriever 与 evaluation | 未启动且 blocked | 必须依次通过上游 gate，并分别取得长任务/GPU/API/victim/Retriever 授权 |
+| Stage-Scoped Identity execution erratum e1 | `passed` | aggregate-DF fingerprint `9fc3c9d...c8011`；三数据集 carry-forward 已验证 |
+| reserve snapshot/write-ahead 与 development-pilot runner | 已实现、未冻结 | 仅完成离线合成测试；真实 reservation/pilot 均未启动 |
+| v23 fact extraction、selector pilot 与 capacity gate | 未启动且 blocked | 等待 runner 提交、successor freeze 与独立真实运行授权 |
+| fresh audit、formal scan、split、shadow、Luna query generation、四个 Generator victim、Retriever 与 evaluation | 未启动且 blocked | 必须依次通过上游 gate，并分别取得长任务/GPU/API/victim/Retriever 授权 |
 
-当前 aggregate-DF protocol revision 为
-`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+三套 aggregate-DF 的 producer revision 为
+`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`，并已通过
+attestation `c3f1b179...a95db3` carry-forward 到 active revision
+`7add7622b9bf76e1547a6ce98fa5178e0a6e9a26eb147fb3553a7b9b0ab54bff`。
 三套 manifest 均记录 `external_calls_performed: 0`；当前没有 v23 victim、
 LLM-only 或 Retriever 响应可用于选样或报告结果。
 
@@ -51,8 +59,19 @@ LLM-only 或 Retriever 响应可用于选样或报告结果。
 非计算 launcher 不传播实验失效；aggregate-DF 分词、归一化、DF 算法或任一 source
 pool identity 变化会令三套 DF 及全部下游 stale。任何跨 bundle 复用都必须单独授权并
 生成 `artifacts/v23/protocol/stage_compatibility/<new_revision>/aggregate_df_precomputation.json`，
-不会改写原 DF、读取 88,160 个 source、增加预算扣费或修改 ledger。当前尚未冻结
-successor runtime，也没有该 carry-forward artifact。
+不会改写原 DF、读取 88,160 个 source、增加预算扣费或修改 ledger。revision 3 的
+carry-forward artifact 已生成并通过验证，原 DF、budget、checkpoint 与 ledger 未改写。
+
+本轮新增的 reservation/pilot runner 将一次 revision 的三套 fresh-audit reserve 从同一
+prior ledger snapshot 推导，先冻结 snapshot，再按 EDGAR、Enron、PubMed 顺序完成
+development 与 reserve write-ahead batch。development pilot 按 dataset 独立授权，逐
+source 先扣预算再读，逐条持久化 source result，并复算两次选择结果；最终同时检查
+exact-three、hard-gate、capacity 下界和三数据集 source/text hash 零重叠。validator
+只读取登记 identity、hash、budget、checkpoint 和输出 artifact，不重新读取 source。
+当前实现尚未提交或冻结，因此这些新入口不能用于真实实验。
+离线验证为 v23 定向测试 `49/49`、全量 `unittest` `468/468`、298 个 Python
+文件内存 AST、implementation authorization scope/self-hash、`git diff --check` 与
+敏感值扫描全部通过；锁定环境未安装 `ruff`，本轮未联网安装。
 
 只读校验命令：
 
@@ -61,11 +80,14 @@ python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-design
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset edgar
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset enron
 python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-aggregate-df --dataset pubmed
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-revision-reservation
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-development-pilot --dataset edgar
+python -X utf8 -B scripts/42_run_v23_restoration_first.py validate-development-pilot-group
 ```
 
-e1 随 successor runtime 冻结后，可用 `stage-status` 查看每阶段的 `native`、
-`carried_forward`、`stale` 或 `not_started`；successor freeze 与真实 carry-forward
-artifact 生成都需要分别取得明确授权。
+可用 `stage-status` 查看每阶段的 `native`、`carried_forward`、`stale` 或
+`not_started`。本轮 runner 提交后的 successor freeze，以及真实 reservation/pilot
+执行，都仍需分别取得明确授权；实现授权不允许读取新的 source 或启动 GPU。
 
 `status` 会重算冻结输入与 runtime 身份哈希，在大型 source pool 上可能耗时较长：
 

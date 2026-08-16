@@ -13,7 +13,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections import Counter
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence, TypeVar
@@ -23,10 +25,22 @@ from ..attack.restoration_first_v23 import (
     PROTOCOL_VERSION,
     SPECIFICATION_VERSION,
     aggregate_document_frequency,
+    build_pair_candidates,
     canonical_json,
     canonical_sha256,
+    fresh_extract_candidates,
+    normalized_text_sha256,
+    reject_forbidden_selection_fields,
+    segment_propositions,
+    select_top_three,
     text_sha256,
     validate_selector_source_input,
+)
+from ..attack.semantic_entity_resolver import (
+    ALL_SEMANTIC_SCHEMA,
+    SemanticPredictionBackend,
+    _load_backend,
+    _verify_model_lock,
 )
 from ..utils.hash import sha256_file
 from ..utils.io import load_yaml
@@ -87,6 +101,9 @@ STAGE_COMPATIBILITY_DIRECTORY = ARTIFACT_ROOT / "protocol/stage_compatibility"
 STAGE_COMPATIBILITY_AUTH_DIRECTORY = (
     ARTIFACT_ROOT / "governance/stage_compatibility_authorizations"
 )
+REVISION_RESERVATION_DIRECTORY = ARTIFACT_ROOT / "governance/revision_reservations"
+DEVELOPMENT_SELECTION_DIRECTORY = ARTIFACT_ROOT / "selection/development"
+DEVELOPMENT_GATE_DIRECTORY = ARTIFACT_ROOT / "selection/development_gate"
 STAGE_CARRY_FORWARD = "stage_artifact_carry_forward"
 STAGE_COMPATIBILITY_AUTH_FIELDS = {
     "kind",
@@ -262,6 +279,125 @@ STAGE_CHECKPOINT_FIELDS = {
     "output_manifest_sha256",
     "completed_at",
 }
+RESERVATION_STAGE = "revision_audit_reserve_snapshot_and_write_ahead_registration"
+DEVELOPMENT_PILOT_STAGE = "development_pilot_and_capacity_gate"
+RESERVE_SNAPSHOT_FIELDS = {
+    "kind",
+    "specification_version",
+    "protocol_revision_id",
+    "dataset",
+    "prior_ledger_tip_sha256",
+    "source_order_file_sha256",
+    "ordered_sources",
+}
+RESERVATION_PRIOR_SNAPSHOT_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "common_prior_ledger_tip_sha256",
+    "common_prior_tip_anchor_sha256",
+    "dataset_order",
+    "ordered_reserve_snapshot_sha256",
+}
+RESERVATION_PLAN_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "attempt_id",
+    "role",
+    "dataset",
+    "expected_prior_ledger_tip_sha256",
+    "ordered_source_identity_objects",
+}
+RESERVATION_GROUP_COMPLETION_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "common_prior_snapshot_sha256",
+    "ordered_reservation_batch_ids",
+    "final_ledger_tip_sha256",
+    "final_tip_anchor_sha256",
+    "created_at",
+}
+DEVELOPMENT_SOURCE_RESULT_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "runtime_bundle_sha256",
+    "attempt_id",
+    "dataset",
+    "source_order_index",
+    "source_key",
+    "source_hash",
+    "normalized_text_hash",
+    "eligible",
+    "selected_pairs",
+    "rejection_reasons",
+    "candidate_count",
+    "pair_candidate_count",
+    "hard_gate_violation_count",
+    "deterministic_rerun_hash_match",
+    "source_result_sha256",
+    "completed_at",
+}
+SELECTED_PAIR_FIELDS = {
+    "kind",
+    "specification_version",
+    "protocol_revision_id",
+    "dataset",
+    "source_key",
+    "source_hash",
+    "normalized_text_hash",
+    "source_order_rank",
+    "pair_order",
+    "pair_id",
+    "fact_signature",
+    "relation_signature",
+    "supporting_sentence",
+    "original_span",
+    "original_entity",
+    "counterfactual_entity",
+    "effective_type",
+    "semantic_subtype",
+    "true_claim",
+    "counterfactual_claim",
+    "rank_tuple",
+}
+DEVELOPMENT_PILOT_MANIFEST_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "runtime_bundle_sha256",
+    "authorization_id",
+    "attempt_id",
+    "dataset",
+    "reservation_group_completion_sha256",
+    "development_batch_anchor_sha256",
+    "aggregate_df_manifest_sha256",
+    "aggregate_df_rows_sha256",
+    "model_runtime_identity",
+    "source_count",
+    "eligible_source_count",
+    "selected_pair_count",
+    "selected_pairs_path",
+    "selected_pairs_file_sha256",
+    "source_result_directory",
+    "source_result_group_sha256",
+    "rejection_reasons",
+    "deterministic_rerun_hash_match",
+    "hard_gate_violation_count",
+    "capacity_decision",
+    "status",
+    "external_calls_performed",
+    "completed_at",
+}
+DEVELOPMENT_GATE_MANIFEST_FIELDS = {
+    "kind",
+    "protocol_revision_id",
+    "runtime_bundle_sha256",
+    "dataset_order",
+    "pilot_manifest_sha256_by_dataset",
+    "selected_pairs_file_sha256_by_dataset",
+    "cross_dataset_source_hash_overlap",
+    "cross_dataset_normalized_text_hash_overlap",
+    "status",
+    "created_at",
+}
 LEDGER_ROLES = frozenset(
     {"development", "fresh_audit_reserve", "human_viewed", "diagnostic_viewed", "formal_scan_viewed"}
 )
@@ -351,6 +487,33 @@ def _write_new_canonical_json(path: Path, value: Mapping[str, Any]) -> None:
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _write_new_atomic_canonical_json(
+    path: Path, value: Mapping[str, Any]
+) -> None:
+    expected = (canonical_json(value) + "\n").encode("utf-8")
+    if path.exists():
+        if path.read_bytes() != expected:
+            raise RuntimeError(f"existing_artifact_identity_drift:{path}")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(expected).hexdigest()[:16]
+    temporary = path.with_name(f"{path.name}.{digest}.tmp")
+    if temporary.exists():
+        if temporary.read_bytes() == expected:
+            os.replace(temporary, path)
+            return
+        temporary = path.with_name(f"{path.name}.{digest}.{time.time_ns()}.tmp")
+    with temporary.open("xb") as handle:
+        handle.write(expected)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if path.exists():
+        if path.read_bytes() != expected:
+            raise RuntimeError(f"existing_artifact_identity_drift:{path}")
+        return
+    os.replace(temporary, path)
 
 
 @contextmanager
@@ -2158,10 +2321,15 @@ def append_reservation_batch(
     allowed_roles = RESERVATION_ROLES_BY_STAGE.get(
         validated_authorization["authorized_stage"], frozenset()
     )
+    grouped_reservation = (
+        validated_authorization["authorized_stage"] == RESERVATION_STAGE
+        and validated_authorization["execution_unit"] == "all_datasets_group"
+    )
     if (
         validated_authorization["protocol_revision_id"] != protocol_revision
         or validated_authorization["attempt_id"] != attempt
-        or validated_authorization["expected_prior_ledger_tip_sha256"]
+        or not grouped_reservation
+        and validated_authorization["expected_prior_ledger_tip_sha256"]
         != expected_prior_tip
         or role not in allowed_roles
         or role not in validated_authorization["run_roles"]
@@ -2192,6 +2360,18 @@ def append_reservation_batch(
         ]
         if len(prior_sequences) != 1:
             raise RuntimeError("reservation_prior_ledger_tip_missing")
+        if grouped_reservation:
+            authorization_prior_sequences = [
+                index
+                for index, row in enumerate(ledger_rows)
+                if row["row_sha256"]
+                == validated_authorization["expected_prior_ledger_tip_sha256"]
+            ]
+            if (
+                len(authorization_prior_sequences) != 1
+                or authorization_prior_sequences[0] > prior_sequences[0]
+            ):
+                raise RuntimeError("reservation_group_prior_ledger_tip_drift")
         first_sequence = prior_sequences[0] + 1
         prefix = ledger_rows[first_sequence:]
         if len(prefix) > len(ordered):
@@ -2415,7 +2595,7 @@ def write_stage_checkpoint(path: str | Path, checkpoint: Mapping[str, Any]) -> N
         or row["input_tip_anchor_sha256"] != row["output_tip_anchor_sha256"]
     ):
         raise RuntimeError("stage_checkpoint_no_mutation_tip_drift")
-    _write_new_canonical_json(Path(path), row)
+    _write_new_atomic_canonical_json(Path(path), row)
 
 
 def require_passed_checkpoint(path: str | Path, *, stage: str | None = None) -> dict[str, Any]:
@@ -2521,6 +2701,25 @@ class FrozenSourcePoolReader:
             "source_key": self.source_order[source_order_index],
         }
 
+    def registration_identity(self, source_key: str) -> dict[str, str]:
+        """Return only trusted write-ahead hashes, never source content or features."""
+
+        if source_key not in self.source_order:
+            raise KeyError(f"source_order_key_missing:{source_key}")
+        row = self._connection.execute(
+            "SELECT full_text FROM sources WHERE source_key = ?", (source_key,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"source_pool_source_missing:{source_key}")
+        full_text = row["full_text"]
+        if not isinstance(full_text, str) or not full_text:
+            raise RuntimeError("source_pool_registration_text_invalid")
+        return {
+            "source_key": source_key,
+            "source_hash": text_sha256(full_text),
+            "normalized_text_hash": normalized_text_sha256(full_text),
+        }
+
     def read_source(self, source_key: str) -> dict[str, Any]:
         raise RuntimeError("unguarded_source_read_forbidden")
 
@@ -2597,6 +2796,7 @@ class FrozenSourcePoolReader:
         authorization: Mapping[str, Any],
         attempt_registry_row: Mapping[str, Any],
         budget_journal_path: str | Path,
+        resume_existing_charge: bool = False,
     ) -> dict[str, Any]:
         validated_authorization = validate_run_authorization(
             authorization,
@@ -2629,10 +2829,15 @@ class FrozenSourcePoolReader:
             "created_at",
         }
         _assert_exact_fields(anchor, expected_anchor_fields, kind="reserved_source_anchor")
+        anchor_revision_matches = (
+            anchor["protocol_revision_id"]
+            == validated_authorization["protocol_revision_id"]
+            or required_role == "development"
+            and _is_sha256(anchor["protocol_revision_id"])
+        )
         if (
             anchor["kind"] != "v23_ledger_tip_anchor"
-            or anchor["protocol_revision_id"]
-            != validated_authorization["protocol_revision_id"]
+            or not anchor_revision_matches
             or not _is_sha256(anchor["attempt_id"])
             or not _is_sha256(anchor["reservation_batch_id"])
             or not _is_sha256(anchor["prior_ledger_tip_sha256"])
@@ -2669,12 +2874,17 @@ class FrozenSourcePoolReader:
             for index, row in enumerate(batch_rows)
         ):
             raise RuntimeError("reserved_source_anchor_batch_drift")
-        found = False
+        found_row: Mapping[str, Any] | None = None
         for row in batch_rows:
+            row_revision_matches = (
+                row.get("protocol_revision_id") == anchor["protocol_revision_id"]
+                if required_role == "development"
+                else row.get("protocol_revision_id")
+                == validated_authorization["protocol_revision_id"]
+            )
             if (
                 row.get("source_key") == source_key
-                and row.get("protocol_revision_id")
-                == validated_authorization["protocol_revision_id"]
+                and row_revision_matches
                 and row.get("role") == required_role
             ):
                 if (
@@ -2682,27 +2892,42 @@ class FrozenSourcePoolReader:
                     and row.get("attempt_id") != validated_authorization["attempt_id"]
                 ):
                     raise RuntimeError("reserved_source_formal_attempt_drift")
-                found = True
+                found_row = row
                 break
-        if not found:
+        if found_row is None:
             raise RuntimeError("reserved_source_not_in_durable_batch")
         if source_key not in self.source_order:
             raise RuntimeError("reserved_source_not_in_frozen_order")
         if stage in {"development_pilot_and_capacity_gate", "fresh_blind_audit"}:
-            charge_authorization_budget(
-                validated_authorization,
-                journal_path=budget_journal_path,
-                operation_identity_sha256=canonical_sha256(
-                    {
-                        "kind": "v23_reserved_source_selector_read",
-                        "authorization_id": validated_authorization["authorization_id"],
-                        "dataset": self.dataset,
-                        "source_key": source_key,
-                        "reservation_batch_id": anchor["reservation_batch_id"],
-                    }
-                ),
+            operation_identity = canonical_sha256(
+                {
+                    "kind": "v23_reserved_source_selector_read",
+                    "authorization_id": validated_authorization["authorization_id"],
+                    "dataset": self.dataset,
+                    "source_key": source_key,
+                    "reservation_batch_id": anchor["reservation_batch_id"],
+                }
             )
-        return self._read_source_unchecked(source_key)
+            if resume_existing_charge:
+                _, _, charged_operations = _read_budget_state(
+                    Path(budget_journal_path), validated_authorization
+                )
+                if operation_identity not in charged_operations:
+                    raise RuntimeError("reserved_source_resume_charge_missing")
+            else:
+                charge_authorization_budget(
+                    validated_authorization,
+                    journal_path=budget_journal_path,
+                    operation_identity_sha256=operation_identity,
+                )
+        source = self._read_source_unchecked(source_key)
+        if (
+            text_sha256(source["full_text"]) != found_row["source_hash"]
+            or normalized_text_sha256(source["full_text"])
+            != found_row["normalized_text_hash"]
+        ):
+            raise RuntimeError("reserved_source_content_identity_drift")
+        return source
 
 
 def write_aggregate_df_artifacts(
@@ -3881,6 +4106,1111 @@ def validate_stage_carry_forward(
     }
 
 
+def _load_stage_run_authorization_file(
+    *,
+    root: Path,
+    authorization_path: str | Path,
+    stage: str,
+    execution_unit: str,
+    datasets: Sequence[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = _resolve(authorization_path, root)
+    authorization = _read_json_exact(path)
+    expected_path = _resolve(
+        RUN_AUTH_DIRECTORY / f"{authorization.get('authorization_id')}.json", root
+    )
+    if path != expected_path:
+        raise RuntimeError("run_authorization_path_drift")
+    rows = _read_attempt_registry(_resolve(ATTEMPT_REGISTRY, root))
+    matches = [
+        row for row in rows if row["attempt_id"] == authorization.get("attempt_id")
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("run_authorization_attempt_registry_missing")
+    validated = validate_run_authorization(
+        authorization,
+        stage=stage,
+        execution_unit=execution_unit,
+        attempt_registry_row=matches[0],
+    )
+    expected_datasets = sorted(datasets)
+    if validated["datasets"] != expected_datasets:
+        raise RuntimeError("run_authorization_dataset_group_drift")
+    return validated, matches[0]
+
+
+def _stage_authorization_paths(
+    root: Path,
+    *,
+    stage: str,
+    runtime_bundle_sha256: str,
+    datasets: Sequence[str] | None = None,
+) -> list[Path]:
+    expected_datasets = sorted(datasets) if datasets is not None else None
+    directory = _resolve(RUN_AUTH_DIRECTORY, root)
+    matches: list[Path] = []
+    for path in directory.glob("*.json") if directory.exists() else ():
+        value = _read_json_exact(path)
+        if (
+            value.get("authorized_stage") == stage
+            and value.get("runtime_bundle_sha256") == runtime_bundle_sha256
+            and (expected_datasets is None or value.get("datasets") == expected_datasets)
+        ):
+            matches.append(path)
+    return sorted(matches)
+
+
+def _bound_source_order(
+    root: Path, *, dataset: str, pool: Mapping[str, Any]
+) -> tuple[str, ...]:
+    verify_bound_file(
+        _resolve(pool["source_order_path"], root),
+        str(pool["source_order_file_sha256"]),
+    )
+    value = _read_json_exact(_resolve(pool["source_order_path"], root))
+    if set(value) != {
+        "protocol",
+        "dataset",
+        "selection_seed",
+        "source_order",
+        "source_order_sha256",
+        "label_fields_read",
+    }:
+        raise RuntimeError("source_order_schema_drift")
+    order = value["source_order"]
+    if (
+        value["dataset"] != dataset
+        or not isinstance(order, list)
+        or len(order) != pool["source_count"]
+        or len(set(order)) != len(order)
+        or not all(isinstance(item, str) and item for item in order)
+    ):
+        raise RuntimeError("source_order_identity_drift")
+    return tuple(order)
+
+
+def _reservation_counts(config: Mapping[str, Any]) -> tuple[int, int]:
+    evidence = config.get("evidence_partition")
+    development = config.get("development_gate")
+    if not isinstance(evidence, Mapping) or not isinstance(development, Mapping):
+        raise RuntimeError("reservation_count_config_missing")
+    development_count = evidence.get("v22_pilot_source_count_per_dataset")
+    reserve_count = evidence.get("fresh_audit_reserve_source_count_per_dataset")
+    if (
+        isinstance(development_count, bool)
+        or not isinstance(development_count, int)
+        or development_count < 1
+        or development.get("source_count_per_dataset") != development_count
+        or isinstance(reserve_count, bool)
+        or not isinstance(reserve_count, int)
+        or reserve_count < 1
+    ):
+        raise RuntimeError("reservation_count_config_drift")
+    return development_count, reserve_count
+
+
+def _reservation_directory(root: Path, protocol_revision: str) -> Path:
+    return _resolve(REVISION_RESERVATION_DIRECTORY / protocol_revision, root)
+
+
+def _reservation_checkpoint_path(
+    root: Path, *, protocol_revision: str, attempt: str
+) -> Path:
+    return _resolve(
+        ARTIFACT_ROOT
+        / "checkpoints"
+        / protocol_revision
+        / RESERVATION_STAGE
+        / f"{attempt}.json",
+        root,
+    )
+
+
+def _reservation_batch_id(
+    *,
+    protocol_revision: str,
+    attempt: str,
+    role: str,
+    dataset: str,
+    identities: Sequence[Mapping[str, str]],
+    expected_prior_tip: str,
+) -> str:
+    return canonical_sha256(
+        {
+            "kind": "v23_reservation_batch",
+            "protocol_revision_id": protocol_revision,
+            "attempt_id": attempt,
+            "role": role,
+            "dataset": dataset,
+            "expected_batch_size": len(identities),
+            "ordered_source_identity_sha256": canonical_sha256(
+                [dict(item) for item in identities]
+            ),
+            "expected_prior_ledger_tip_sha256": expected_prior_tip,
+        }
+    )
+
+
+def _write_or_validate_canonical(path: Path, value: Mapping[str, Any]) -> None:
+    if path.exists():
+        if _read_json_exact(path) != dict(value):
+            raise RuntimeError(f"existing_artifact_identity_drift:{path}")
+        return
+    _write_new_atomic_canonical_json(path, value)
+
+
+def _reservation_plan_path(
+    root: Path, *, protocol_revision: str, role: str, dataset: str
+) -> Path:
+    return _reservation_directory(root, protocol_revision) / "plans" / role / f"{dataset}.json"
+
+
+def _completed_reservation_batch(
+    root: Path,
+    *,
+    batch_id: str,
+    identities: Sequence[Mapping[str, str]],
+) -> dict[str, Any] | None:
+    ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+    rows = [
+        json.loads(line)
+        for line in ledger_path.read_text(encoding="utf-8").splitlines()
+    ]
+    batch_rows = [row for row in rows if row.get("reservation_batch_id") == batch_id]
+    if not batch_rows:
+        return None
+    if len(batch_rows) != len(identities):
+        return None
+    batch_rows.sort(key=lambda row: row["reservation_batch_index"])
+    if any(
+        row["reservation_batch_index"] != index
+        or row["reservation_batch_size"] != len(identities)
+        or any(row.get(key) != value for key, value in identity.items())
+        for index, (row, identity) in enumerate(zip(batch_rows, identities, strict=True))
+    ):
+        raise RuntimeError("reservation_completed_batch_drift")
+    for left, right in zip(batch_rows, batch_rows[1:]):
+        if right["sequence"] != left["sequence"] + 1 or right[
+            "previous_row_sha256"
+        ] != left["row_sha256"]:
+            raise RuntimeError("reservation_completed_batch_chain_drift")
+    tip = batch_rows[-1]["row_sha256"]
+    try:
+        anchor = _ledger_tip_anchor(root, tip)
+    except RuntimeError as error:
+        if str(error) == "ledger_tip_anchor_count_invalid":
+            return None
+        raise
+    return {
+        "reservation_batch_id": batch_id,
+        "ledger_tip_sha256": tip,
+        "anchor_path": str(anchor),
+        "anchor_sha256": sha256_file(anchor),
+    }
+
+
+def _validate_aggregate_group(
+    root: Path,
+    *,
+    runtime_files: Sequence[str] | None,
+    dependency_lock_path: str | Path,
+    model_lock_path: str | Path,
+) -> list[dict[str, Any]]:
+    return [
+        validate_aggregate_df(
+            project_root=root,
+            dataset=dataset,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        for dataset in DATASET_ORDER
+    ]
+
+
+def prepare_revision_reservation_authorization(
+    *,
+    project_root: str | Path,
+    user_authorization_record: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if not user_authorization_record.strip():
+        raise ValueError("revision_reservation_user_authorization_empty")
+    root = Path(project_root).resolve()
+    lock = _resolve(
+        ARTIFACT_ROOT / "governance/revision_reservation_preparation.lock", root
+    )
+    with exclusive_lock(lock):
+        active = validate_active_runtime(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        _validate_aggregate_group(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        if _stage_authorization_paths(
+            root,
+            stage=RESERVATION_STAGE,
+            runtime_bundle_sha256=active["runtime_bundle_sha256"],
+        ) or _reservation_directory(root, active["protocol_revision_id"]).exists():
+            raise RuntimeError("revision_reservation_attempt_or_artifact_already_exists")
+        config = load_design_config(root)
+        development_count, reserve_count = _reservation_counts(config)
+        ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+        ledger = validate_ledger(ledger_path)
+        rows = [
+            json.loads(line)
+            for line in ledger_path.read_text(encoding="utf-8").splitlines()
+        ]
+        development_counts = {
+            dataset: sum(
+                row.get("role") == "development" and row.get("dataset") == dataset
+                for row in rows[1:]
+            )
+            for dataset in DATASET_ORDER
+        }
+        if any(count not in {0, development_count} for count in development_counts.values()) or len(
+            set(development_counts.values())
+        ) != 1:
+            raise RuntimeError("revision_reservation_development_prefix_incomplete")
+        development_required = next(iter(development_counts.values())) == 0
+        budget_limit = len(DATASET_ORDER) * (
+            reserve_count + (development_count if development_required else 0)
+        )
+        registry = allocate_attempt(
+            registry_path=_resolve(ATTEMPT_REGISTRY, root),
+            protocol_revision=active["protocol_revision_id"],
+            stage=RESERVATION_STAGE,
+            execution_unit="all_datasets_group",
+            expected_prior_ledger_tip_sha256=ledger["tip_sha256"],
+        )
+        authorization = {
+            "kind": "v23_run_authorization",
+            "user_authorization_record": user_authorization_record,
+            "protocol_revision_id": active["protocol_revision_id"],
+            "attempt_id": registry["attempt_id"],
+            "authorized_stage": RESERVATION_STAGE,
+            "execution_unit": "all_datasets_group",
+            "expected_prior_ledger_tip_sha256": ledger["tip_sha256"],
+            "datasets": sorted(DATASET_ORDER),
+            "run_roles": ["development", "fresh_audit_reserve"],
+            "model_or_retriever_cells": [],
+            "budget_kind": "sources",
+            "budget_limit": budget_limit,
+            "issued_at": utc_now(),
+            "expires_at_or_null": None,
+            "design_manifest_sha256": DESIGN_MANIFEST_SHA256,
+            "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        }
+        authorization["authorization_id"] = canonical_sha256(authorization)
+        path = _resolve(
+            RUN_AUTH_DIRECTORY / f"{authorization['authorization_id']}.json", root
+        )
+        _write_new_canonical_json(path, authorization)
+    return {
+        **authorization,
+        "authorization_path": _relative(path, root),
+        "source_pool_contents_read": False,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
+def _collect_registration_identities(
+    *,
+    root: Path,
+    config: Mapping[str, Any],
+    prior_rows: Sequence[Mapping[str, Any]],
+    development_count: int,
+    reserve_count: int,
+) -> tuple[
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, str]]],
+    dict[str, list[dict[str, Any]]],
+]:
+    prior_keys = {
+        dataset: {
+            str(row["source_key"])
+            for row in prior_rows
+            if row.get("dataset") == dataset and row.get("role") != "genesis"
+        }
+        for dataset in DATASET_ORDER
+    }
+    excluded_hashes = {
+        str(row["source_hash"])
+        for row in prior_rows
+        if row.get("role") != "genesis"
+    }
+    excluded_normalized = {
+        str(row["normalized_text_hash"])
+        for row in prior_rows
+        if row.get("role") != "genesis"
+    }
+    existing_development = {
+        dataset: [
+            dict(row)
+            for row in prior_rows
+            if row.get("dataset") == dataset and row.get("role") == "development"
+        ]
+        for dataset in DATASET_ORDER
+    }
+    development: dict[str, list[dict[str, str]]] = {}
+    reserves: dict[str, list[dict[str, str]]] = {}
+    snapshots: dict[str, list[dict[str, Any]]] = {}
+    for dataset in DATASET_ORDER:
+        pool = _aggregate_df_contracts(config, dataset)["pool"]
+        order = _bound_source_order(root, dataset=dataset, pool=pool)
+        if development_count + reserve_count > len(order):
+            raise RuntimeError("revision_reservation_source_pool_too_small")
+        with FrozenSourcePoolReader(
+            project_root=root,
+            dataset=dataset,
+            database_path=pool["database_path"],
+            database_sha256=pool["database_sha256"],
+            source_order_path=pool["source_order_path"],
+            source_order_file_sha256=pool["source_order_file_sha256"],
+            source_pool_manifest_path=pool["manifest_path"],
+            source_pool_manifest_sha256=pool["manifest_sha256"],
+            expected_source_count=pool["source_count"],
+        ) as reader:
+            calculated_development = [
+                reader.registration_identity(source_key)
+                for source_key in order[:development_count]
+            ]
+            prior_development = existing_development[dataset]
+            if prior_development:
+                prior_development.sort(key=lambda row: row["reservation_batch_index"])
+                expected = [
+                    {
+                        "source_key": row["source_key"],
+                        "source_hash": row["source_hash"],
+                        "normalized_text_hash": row["normalized_text_hash"],
+                    }
+                    for row in prior_development
+                ]
+                if expected != calculated_development:
+                    raise RuntimeError("revision_reservation_development_identity_drift")
+                development[dataset] = []
+            else:
+                development[dataset] = calculated_development
+            for identity in calculated_development:
+                excluded_hashes.add(identity["source_hash"])
+                excluded_normalized.add(identity["normalized_text_hash"])
+            selected: list[dict[str, str]] = []
+            snapshot: list[dict[str, Any]] = []
+            for index in range(development_count, len(order)):
+                source_key = order[index]
+                if source_key in prior_keys[dataset]:
+                    continue
+                identity = reader.registration_identity(source_key)
+                if (
+                    identity["source_hash"] in excluded_hashes
+                    or identity["normalized_text_hash"] in excluded_normalized
+                ):
+                    continue
+                selected.append(identity)
+                snapshot.append(
+                    {"source_order_index": index, "source_key": source_key}
+                )
+                excluded_hashes.add(identity["source_hash"])
+                excluded_normalized.add(identity["normalized_text_hash"])
+                if len(selected) == reserve_count:
+                    break
+            if len(selected) != reserve_count:
+                raise RuntimeError("revision_reservation_capacity_shortfall")
+            reserves[dataset] = selected
+            snapshots[dataset] = snapshot
+    return development, reserves, snapshots
+
+
+def _append_or_resume_reservation_plan(
+    *,
+    root: Path,
+    authorization: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    role: str,
+    dataset: str,
+    identities: Sequence[Mapping[str, str]],
+    expected_prior_tip: str,
+    budget_path: Path,
+) -> dict[str, Any]:
+    plan_path = _reservation_plan_path(
+        root,
+        protocol_revision=authorization["protocol_revision_id"],
+        role=role,
+        dataset=dataset,
+    )
+    plan = {
+        "kind": "v23_reservation_plan",
+        "protocol_revision_id": authorization["protocol_revision_id"],
+        "attempt_id": authorization["attempt_id"],
+        "role": role,
+        "dataset": dataset,
+        "expected_prior_ledger_tip_sha256": expected_prior_tip,
+        "ordered_source_identity_objects": [dict(item) for item in identities],
+    }
+    _write_or_validate_canonical(plan_path, plan)
+    batch_id = _reservation_batch_id(
+        protocol_revision=authorization["protocol_revision_id"],
+        attempt=authorization["attempt_id"],
+        role=role,
+        dataset=dataset,
+        identities=identities,
+        expected_prior_tip=expected_prior_tip,
+    )
+    completed = _completed_reservation_batch(
+        root, batch_id=batch_id, identities=identities
+    )
+    if completed is not None:
+        return completed
+    return append_reservation_batch(
+        ledger_path=_resolve(CONSUMPTION_LEDGER, root),
+        anchor_directory=_resolve(LEDGER_ANCHOR_DIRECTORY, root),
+        protocol_revision=authorization["protocol_revision_id"],
+        attempt=authorization["attempt_id"],
+        role=role,
+        dataset=dataset,
+        identities=identities,
+        expected_prior_tip=expected_prior_tip,
+        reason=(
+            "v23_development_write_ahead_registration"
+            if role == "development"
+            else "v23_revision_fresh_audit_reserve_registration"
+        ),
+        authorization=authorization,
+        attempt_registry_row=registry,
+        budget_journal_path=budget_path,
+    )
+
+
+def _ledger_rows(root: Path) -> list[dict[str, Any]]:
+    ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+    validate_ledger(ledger_path)
+    return [
+        json.loads(line)
+        for line in ledger_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _ledger_sequence_for_tip(
+    rows: Sequence[Mapping[str, Any]], ledger_tip_sha256: str
+) -> int:
+    matches = [
+        index
+        for index, row in enumerate(rows)
+        if row.get("row_sha256") == ledger_tip_sha256
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("revision_reservation_prior_tip_not_in_ledger")
+    return matches[0]
+
+
+def _validate_reservation_plan_batch(
+    *,
+    root: Path,
+    plan: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    authorization: Mapping[str, Any],
+) -> dict[str, Any]:
+    _assert_exact_fields(plan, RESERVATION_PLAN_FIELDS, kind="reservation_plan")
+    identities = plan["ordered_source_identity_objects"]
+    if (
+        plan["kind"] != "v23_reservation_plan"
+        or plan["protocol_revision_id"] != authorization["protocol_revision_id"]
+        or plan["attempt_id"] != authorization["attempt_id"]
+        or plan["role"] not in {"development", "fresh_audit_reserve"}
+        or plan["dataset"] not in DATASET_ORDER
+        or not _is_sha256(plan["expected_prior_ledger_tip_sha256"])
+        or not isinstance(identities, list)
+        or not identities
+    ):
+        raise RuntimeError("revision_reservation_plan_identity_drift")
+    for identity in identities:
+        if (
+            not isinstance(identity, Mapping)
+            or set(identity)
+            != {"source_key", "source_hash", "normalized_text_hash"}
+            or not isinstance(identity["source_key"], str)
+            or not identity["source_key"]
+            or not _is_sha256(identity["source_hash"])
+            or not _is_sha256(identity["normalized_text_hash"])
+        ):
+            raise RuntimeError("revision_reservation_plan_source_identity_drift")
+    batch_id = _reservation_batch_id(
+        protocol_revision=str(plan["protocol_revision_id"]),
+        attempt=str(plan["attempt_id"]),
+        role=str(plan["role"]),
+        dataset=str(plan["dataset"]),
+        identities=identities,
+        expected_prior_tip=str(plan["expected_prior_ledger_tip_sha256"]),
+    )
+    batch_rows = [
+        row for row in rows if row.get("reservation_batch_id") == batch_id
+    ]
+    if len(batch_rows) != len(identities):
+        raise RuntimeError("revision_reservation_batch_incomplete")
+    batch_rows.sort(key=lambda row: row["reservation_batch_index"])
+    prior_sequence = _ledger_sequence_for_tip(
+        rows, str(plan["expected_prior_ledger_tip_sha256"])
+    )
+    for index, (row, identity) in enumerate(
+        zip(batch_rows, identities, strict=True)
+    ):
+        expected = {
+            "sequence": prior_sequence + index + 1,
+            "protocol_revision_id": authorization["protocol_revision_id"],
+            "attempt_id": authorization["attempt_id"],
+            "reservation_batch_id": batch_id,
+            "reservation_batch_index": index,
+            "reservation_batch_size": len(identities),
+            "role": plan["role"],
+            "dataset": plan["dataset"],
+            **dict(identity),
+        }
+        if any(row.get(key) != value for key, value in expected.items()):
+            raise RuntimeError("revision_reservation_batch_identity_drift")
+        expected_previous = (
+            plan["expected_prior_ledger_tip_sha256"]
+            if index == 0
+            else batch_rows[index - 1]["row_sha256"]
+        )
+        if row["previous_row_sha256"] != expected_previous:
+            raise RuntimeError("revision_reservation_batch_chain_drift")
+    anchor_path = _ledger_tip_anchor(root, batch_rows[-1]["row_sha256"])
+    anchor = _read_json_exact(anchor_path)
+    if (
+        anchor.get("kind") != "v23_ledger_tip_anchor"
+        or anchor.get("reservation_batch_id") != batch_id
+        or anchor.get("prior_ledger_tip_sha256")
+        != plan["expected_prior_ledger_tip_sha256"]
+        or anchor.get("first_sequence") != prior_sequence + 1
+        or anchor.get("last_sequence") != prior_sequence + len(identities)
+        or anchor.get("batch_size") != len(identities)
+    ):
+        raise RuntimeError("revision_reservation_batch_anchor_drift")
+    return {
+        "batch_id": batch_id,
+        "role": plan["role"],
+        "dataset": plan["dataset"],
+        "identities": [dict(item) for item in identities],
+        "prior_tip_sha256": plan["expected_prior_ledger_tip_sha256"],
+        "tip_sha256": batch_rows[-1]["row_sha256"],
+        "anchor_sha256": sha256_file(anchor_path),
+    }
+
+
+def run_revision_reservation(
+    *,
+    project_root: str | Path,
+    authorization_path: str | Path,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    lock = _resolve(ARTIFACT_ROOT / "governance/revision_reservation.lock", root)
+    with exclusive_lock(lock):
+        active = validate_active_runtime(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        authorization, registry = _load_stage_run_authorization_file(
+            root=root,
+            authorization_path=authorization_path,
+            stage=RESERVATION_STAGE,
+            execution_unit="all_datasets_group",
+            datasets=DATASET_ORDER,
+        )
+        if (
+            authorization["runtime_bundle_sha256"]
+            != active["runtime_bundle_sha256"]
+            or authorization["protocol_revision_id"]
+            != active["protocol_revision_id"]
+        ):
+            raise RuntimeError("revision_reservation_active_runtime_drift")
+        _validate_aggregate_group(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        directory = _reservation_directory(root, active["protocol_revision_id"])
+        checkpoint_path = _reservation_checkpoint_path(
+            root,
+            protocol_revision=active["protocol_revision_id"],
+            attempt=authorization["attempt_id"],
+        )
+        completion_path = directory / "group_completion.json"
+        if checkpoint_path.exists():
+            return validate_revision_reservation(
+                project_root=root,
+                runtime_files=runtime_files,
+                dependency_lock_path=dependency_lock_path,
+                model_lock_path=model_lock_path,
+            )
+        ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+        ledger = validate_ledger(ledger_path)
+        all_rows = [
+            json.loads(line)
+            for line in ledger_path.read_text(encoding="utf-8").splitlines()
+        ]
+        prior_sequence = _ledger_sequence_for_tip(
+            all_rows, authorization["expected_prior_ledger_tip_sha256"]
+        )
+        prior_rows = all_rows[: prior_sequence + 1]
+        input_anchor = _ledger_tip_anchor(
+            root, authorization["expected_prior_ledger_tip_sha256"]
+        )
+        input_anchor_sha256 = sha256_file(input_anchor)
+        config = load_design_config(root)
+        development_count, reserve_count = _reservation_counts(config)
+        development, reserves, snapshots = _collect_registration_identities(
+            root=root,
+            config=config,
+            prior_rows=prior_rows,
+            development_count=development_count,
+            reserve_count=reserve_count,
+        )
+        reserve_snapshot_hashes: list[str] = []
+        for dataset in DATASET_ORDER:
+            pool = _aggregate_df_contracts(config, dataset)["pool"]
+            snapshot = {
+                "kind": "v23_fresh_audit_reserve_snapshot",
+                "specification_version": SPECIFICATION_VERSION,
+                "protocol_revision_id": active["protocol_revision_id"],
+                "dataset": dataset,
+                "prior_ledger_tip_sha256": authorization[
+                    "expected_prior_ledger_tip_sha256"
+                ],
+                "source_order_file_sha256": pool["source_order_file_sha256"],
+                "ordered_sources": snapshots[dataset],
+            }
+            path = directory / f"{dataset}_reserve_snapshot.json"
+            _write_or_validate_canonical(path, snapshot)
+            reserve_snapshot_hashes.append(sha256_file(path))
+        prior_snapshot = {
+            "kind": "v23_revision_reservation_prior_snapshot",
+            "protocol_revision_id": active["protocol_revision_id"],
+            "common_prior_ledger_tip_sha256": authorization[
+                "expected_prior_ledger_tip_sha256"
+            ],
+            "common_prior_tip_anchor_sha256": input_anchor_sha256,
+            "dataset_order": list(DATASET_ORDER),
+            "ordered_reserve_snapshot_sha256": reserve_snapshot_hashes,
+        }
+        prior_snapshot_path = directory / "prior_snapshot.json"
+        _write_or_validate_canonical(prior_snapshot_path, prior_snapshot)
+        budget_path = _resolve(
+            BUDGET_DIRECTORY / f"{authorization['authorization_id']}.jsonl", root
+        )
+        current_tip = authorization["expected_prior_ledger_tip_sha256"]
+        for dataset in DATASET_ORDER:
+            if development[dataset]:
+                result = _append_or_resume_reservation_plan(
+                    root=root,
+                    authorization=authorization,
+                    registry=registry,
+                    role="development",
+                    dataset=dataset,
+                    identities=development[dataset],
+                    expected_prior_tip=current_tip,
+                    budget_path=budget_path,
+                )
+                current_tip = result["ledger_tip_sha256"]
+        reserve_batch_ids: list[str] = []
+        for dataset in DATASET_ORDER:
+            result = _append_or_resume_reservation_plan(
+                root=root,
+                authorization=authorization,
+                registry=registry,
+                role="fresh_audit_reserve",
+                dataset=dataset,
+                identities=reserves[dataset],
+                expected_prior_tip=current_tip,
+                budget_path=budget_path,
+            )
+            current_tip = result["ledger_tip_sha256"]
+            reserve_batch_ids.append(result["reservation_batch_id"])
+        output_anchor = _ledger_tip_anchor(root, current_tip)
+        completion_created_at = utc_now()
+        if completion_path.exists():
+            completion_created_at = str(
+                _read_json_exact(completion_path).get("created_at")
+            )
+        completion = {
+            "kind": "v23_revision_reservation_group_complete",
+            "protocol_revision_id": active["protocol_revision_id"],
+            "common_prior_snapshot_sha256": sha256_file(prior_snapshot_path),
+            "ordered_reservation_batch_ids": reserve_batch_ids,
+            "final_ledger_tip_sha256": current_tip,
+            "final_tip_anchor_sha256": sha256_file(output_anchor),
+            "created_at": completion_created_at,
+        }
+        _write_or_validate_canonical(completion_path, completion)
+        charged_count, budget_tip, _ = _read_budget_state(
+            budget_path, authorization
+        )
+        if charged_count != authorization["budget_limit"]:
+            raise RuntimeError("revision_reservation_budget_count_incomplete")
+        checkpoint = {
+            "kind": "v23_stage_checkpoint",
+            "protocol_revision_id": active["protocol_revision_id"],
+            "attempt_id": authorization["attempt_id"],
+            "stage": RESERVATION_STAGE,
+            "execution_unit": "all_datasets_group",
+            "status": "passed",
+            "input_ledger_tip_sha256": authorization[
+                "expected_prior_ledger_tip_sha256"
+            ],
+            "input_tip_anchor_sha256": input_anchor_sha256,
+            "output_ledger_tip_sha256": current_tip,
+            "output_tip_anchor_sha256": sha256_file(output_anchor),
+            "ledger_mutation": True,
+            "authorization_id": authorization["authorization_id"],
+            "authorization_budget_journal_tip_sha256": budget_tip,
+            "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+            "output_manifest_sha256": sha256_file(completion_path),
+            "completed_at": utc_now(),
+        }
+        write_stage_checkpoint(checkpoint_path, checkpoint)
+    return validate_revision_reservation(
+        project_root=root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+
+
+def validate_revision_reservation(
+    *,
+    project_root: str | Path,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    """Validate the reservation transaction without reading source contents."""
+
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    _validate_aggregate_group(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    authorization_paths = _stage_authorization_paths(
+        root,
+        stage=RESERVATION_STAGE,
+        runtime_bundle_sha256=active["runtime_bundle_sha256"],
+        datasets=DATASET_ORDER,
+    )
+    if len(authorization_paths) != 1:
+        raise RuntimeError("revision_reservation_authorization_count_invalid")
+    authorization, _ = _load_stage_run_authorization_file(
+        root=root,
+        authorization_path=authorization_paths[0],
+        stage=RESERVATION_STAGE,
+        execution_unit="all_datasets_group",
+        datasets=DATASET_ORDER,
+    )
+    if (
+        authorization["protocol_revision_id"] != active["protocol_revision_id"]
+        or authorization["run_roles"]
+        != ["development", "fresh_audit_reserve"]
+    ):
+        raise RuntimeError("revision_reservation_authorization_identity_drift")
+    rows = _ledger_rows(root)
+    prior_sequence = _ledger_sequence_for_tip(
+        rows, authorization["expected_prior_ledger_tip_sha256"]
+    )
+    directory = _reservation_directory(root, active["protocol_revision_id"])
+    prior_snapshot_path = directory / "prior_snapshot.json"
+    completion_path = directory / "group_completion.json"
+    prior_snapshot = _read_json_exact(prior_snapshot_path)
+    completion = _read_json_exact(completion_path)
+    _assert_exact_fields(
+        prior_snapshot,
+        RESERVATION_PRIOR_SNAPSHOT_FIELDS,
+        kind="reservation_prior_snapshot",
+    )
+    _assert_exact_fields(
+        completion,
+        RESERVATION_GROUP_COMPLETION_FIELDS,
+        kind="reservation_group_completion",
+    )
+    prior_anchor = _ledger_tip_anchor(
+        root, authorization["expected_prior_ledger_tip_sha256"]
+    )
+    if (
+        prior_snapshot["kind"]
+        != "v23_revision_reservation_prior_snapshot"
+        or prior_snapshot["protocol_revision_id"]
+        != active["protocol_revision_id"]
+        or prior_snapshot["common_prior_ledger_tip_sha256"]
+        != authorization["expected_prior_ledger_tip_sha256"]
+        or prior_snapshot["common_prior_tip_anchor_sha256"]
+        != sha256_file(prior_anchor)
+        or prior_snapshot["dataset_order"] != list(DATASET_ORDER)
+        or not isinstance(prior_snapshot["ordered_reserve_snapshot_sha256"], list)
+        or len(prior_snapshot["ordered_reserve_snapshot_sha256"])
+        != len(DATASET_ORDER)
+    ):
+        raise RuntimeError("revision_reservation_prior_snapshot_drift")
+    config = load_design_config(root)
+    development_count, reserve_count = _reservation_counts(config)
+    snapshot_hashes: list[str] = []
+    reserve_snapshot_by_dataset: dict[str, dict[str, Any]] = {}
+    for dataset in DATASET_ORDER:
+        path = directory / f"{dataset}_reserve_snapshot.json"
+        snapshot = _read_json_exact(path)
+        _assert_exact_fields(
+            snapshot, RESERVE_SNAPSHOT_FIELDS, kind="reserve_snapshot"
+        )
+        pool = _aggregate_df_contracts(config, dataset)["pool"]
+        order = _bound_source_order(root, dataset=dataset, pool=pool)
+        ordered_sources = snapshot["ordered_sources"]
+        if (
+            snapshot["kind"] != "v23_fresh_audit_reserve_snapshot"
+            or snapshot["specification_version"] != SPECIFICATION_VERSION
+            or snapshot["protocol_revision_id"]
+            != active["protocol_revision_id"]
+            or snapshot["dataset"] != dataset
+            or snapshot["prior_ledger_tip_sha256"]
+            != authorization["expected_prior_ledger_tip_sha256"]
+            or snapshot["source_order_file_sha256"]
+            != pool["source_order_file_sha256"]
+            or not isinstance(ordered_sources, list)
+            or len(ordered_sources) != reserve_count
+        ):
+            raise RuntimeError("revision_reservation_snapshot_identity_drift")
+        previous_index = development_count - 1
+        for item in ordered_sources:
+            if (
+                not isinstance(item, Mapping)
+                or set(item) != {"source_order_index", "source_key"}
+                or isinstance(item["source_order_index"], bool)
+                or not isinstance(item["source_order_index"], int)
+                or item["source_order_index"] <= previous_index
+                or item["source_order_index"] >= len(order)
+                or order[item["source_order_index"]] != item["source_key"]
+            ):
+                raise RuntimeError("revision_reservation_snapshot_order_drift")
+            previous_index = item["source_order_index"]
+        snapshot_hashes.append(sha256_file(path))
+        reserve_snapshot_by_dataset[dataset] = snapshot
+    if prior_snapshot["ordered_reserve_snapshot_sha256"] != snapshot_hashes:
+        raise RuntimeError("revision_reservation_snapshot_hash_drift")
+
+    plan_results: list[dict[str, Any]] = []
+    for role in ("development", "fresh_audit_reserve"):
+        for dataset in DATASET_ORDER:
+            path = _reservation_plan_path(
+                root,
+                protocol_revision=active["protocol_revision_id"],
+                role=role,
+                dataset=dataset,
+            )
+            if role == "development" and not path.is_file():
+                continue
+            if not path.is_file():
+                raise RuntimeError("revision_reservation_plan_missing")
+            plan_results.append(
+                _validate_reservation_plan_batch(
+                    root=root,
+                    plan=_read_json_exact(path),
+                    rows=rows,
+                    authorization=authorization,
+                )
+            )
+    current_rows = [
+        row
+        for row in rows[prior_sequence + 1 :]
+        if row.get("attempt_id") == authorization["attempt_id"]
+    ]
+    if len(current_rows) != authorization["budget_limit"]:
+        raise RuntimeError("revision_reservation_current_row_count_drift")
+    if sum(len(item["identities"]) for item in plan_results) != len(current_rows):
+        raise RuntimeError("revision_reservation_plan_row_count_drift")
+    expected_order = [
+        (role, dataset)
+        for role in ("development", "fresh_audit_reserve")
+        for dataset in DATASET_ORDER
+        if any(
+            item["role"] == role and item["dataset"] == dataset
+            for item in plan_results
+        )
+    ]
+    actual_order: list[tuple[str, str]] = []
+    for row in current_rows:
+        key = (str(row["role"]), str(row["dataset"]))
+        if not actual_order or key != actual_order[-1]:
+            actual_order.append(key)
+    if actual_order != expected_order:
+        raise RuntimeError("revision_reservation_batch_order_drift")
+
+    development_rows = [
+        row for row in rows if row.get("role") == "development"
+    ]
+    prior_consumed = rows[1 : prior_sequence + 1]
+    all_excluded_hashes = {
+        row["source_hash"] for row in [*prior_consumed, *development_rows]
+    }
+    all_excluded_normalized = {
+        row["normalized_text_hash"]
+        for row in [*prior_consumed, *development_rows]
+    }
+    reserve_results = [
+        item for item in plan_results if item["role"] == "fresh_audit_reserve"
+    ]
+    if [item["dataset"] for item in reserve_results] != list(DATASET_ORDER):
+        raise RuntimeError("revision_reservation_reserve_group_incomplete")
+    seen_reserve_hashes: set[str] = set()
+    seen_reserve_normalized: set[str] = set()
+    for result in reserve_results:
+        snapshot_keys = [
+            item["source_key"]
+            for item in reserve_snapshot_by_dataset[result["dataset"]][
+                "ordered_sources"
+            ]
+        ]
+        if (
+            len(result["identities"]) != reserve_count
+            or [item["source_key"] for item in result["identities"]]
+            != snapshot_keys
+        ):
+            raise RuntimeError("revision_reservation_snapshot_plan_drift")
+        for identity in result["identities"]:
+            if (
+                identity["source_hash"] in all_excluded_hashes
+                or identity["normalized_text_hash"] in all_excluded_normalized
+                or identity["source_hash"] in seen_reserve_hashes
+                or identity["normalized_text_hash"] in seen_reserve_normalized
+            ):
+                raise RuntimeError("revision_reservation_source_overlap")
+            seen_reserve_hashes.add(identity["source_hash"])
+            seen_reserve_normalized.add(identity["normalized_text_hash"])
+    development_by_dataset = {
+        dataset: [
+            row
+            for row in development_rows
+            if row["dataset"] == dataset
+        ]
+        for dataset in DATASET_ORDER
+    }
+    for dataset, dataset_rows in development_by_dataset.items():
+        dataset_rows.sort(key=lambda row: row["reservation_batch_index"])
+        order = _bound_source_order(
+            root,
+            dataset=dataset,
+            pool=_aggregate_df_contracts(config, dataset)["pool"],
+        )
+        if (
+            len(dataset_rows) != development_count
+            or [row["source_key"] for row in dataset_rows]
+            != list(order[:development_count])
+        ):
+            raise RuntimeError("revision_reservation_development_identity_drift")
+
+    budget_path = _resolve(
+        BUDGET_DIRECTORY / f"{authorization['authorization_id']}.jsonl", root
+    )
+    charged_count, budget_tip, charged_operations = _read_budget_state(
+        budget_path, authorization
+    )
+    expected_operations = {
+        canonical_sha256(
+            {
+                "kind": "v23_source_reservation",
+                "reservation_batch_id": row["reservation_batch_id"],
+                "reservation_batch_index": row["reservation_batch_index"],
+                "source_key": row["source_key"],
+            }
+        )
+        for row in current_rows
+    }
+    if (
+        charged_count != authorization["budget_limit"]
+        or charged_operations != expected_operations
+    ):
+        raise RuntimeError("revision_reservation_budget_drift")
+    final_tip = reserve_results[-1]["tip_sha256"]
+    final_anchor = _ledger_tip_anchor(root, final_tip)
+    if (
+        completion["kind"] != "v23_revision_reservation_group_complete"
+        or completion["protocol_revision_id"] != active["protocol_revision_id"]
+        or completion["common_prior_snapshot_sha256"]
+        != sha256_file(prior_snapshot_path)
+        or completion["ordered_reservation_batch_ids"]
+        != [item["batch_id"] for item in reserve_results]
+        or completion["final_ledger_tip_sha256"] != final_tip
+        or completion["final_tip_anchor_sha256"] != sha256_file(final_anchor)
+    ):
+        raise RuntimeError("revision_reservation_group_completion_drift")
+    checkpoint_path = _reservation_checkpoint_path(
+        root,
+        protocol_revision=active["protocol_revision_id"],
+        attempt=authorization["attempt_id"],
+    )
+    checkpoint = require_passed_checkpoint(
+        checkpoint_path, stage=RESERVATION_STAGE
+    )
+    if (
+        checkpoint["protocol_revision_id"] != active["protocol_revision_id"]
+        or checkpoint["attempt_id"] != authorization["attempt_id"]
+        or checkpoint["execution_unit"] != "all_datasets_group"
+        or checkpoint["input_ledger_tip_sha256"]
+        != authorization["expected_prior_ledger_tip_sha256"]
+        or checkpoint["input_tip_anchor_sha256"] != sha256_file(prior_anchor)
+        or checkpoint["output_ledger_tip_sha256"] != final_tip
+        or checkpoint["output_tip_anchor_sha256"] != sha256_file(final_anchor)
+        or checkpoint["ledger_mutation"] is not True
+        or checkpoint["authorization_id"] != authorization["authorization_id"]
+        or checkpoint["authorization_budget_journal_tip_sha256"] != budget_tip
+        or checkpoint["runtime_bundle_sha256"]
+        != active["runtime_bundle_sha256"]
+        or checkpoint["output_manifest_sha256"] != sha256_file(completion_path)
+    ):
+        raise RuntimeError("revision_reservation_checkpoint_drift")
+    return {
+        "status": "passed",
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "protocol_revision_id": active["protocol_revision_id"],
+        "authorization_id": authorization["authorization_id"],
+        "attempt_id": authorization["attempt_id"],
+        "development_source_count_by_dataset": {
+            dataset: len(rows) for dataset, rows in development_by_dataset.items()
+        },
+        "reserve_source_count_by_dataset": {
+            item["dataset"]: len(item["identities"])
+            for item in reserve_results
+        },
+        "common_prior_ledger_tip_sha256": authorization[
+            "expected_prior_ledger_tip_sha256"
+        ],
+        "final_ledger_tip_sha256": final_tip,
+        "group_completion_file_sha256": sha256_file(completion_path),
+        "checkpoint_file_sha256": sha256_file(checkpoint_path),
+        "budget_charge_count": charged_count,
+        "source_pool_contents_read": False,
+        "ledger_mutation_validated": True,
+        "external_calls_performed": 0,
+    }
+
+
 def _log_combination(n: int, k: int) -> float:
     if k < 0 or k > n:
         return -math.inf
@@ -3958,6 +5288,1356 @@ def capacity_decision(
         "formal_eligible_lower": formal_lower,
         "required_formal": required_formal,
         "status": "passed" if formal_lower >= required_formal else "failed_capacity_shortfall",
+    }
+
+
+def _development_pilot_paths(
+    root: Path, *, dataset: str, attempt: str
+) -> dict[str, Path]:
+    directory = _resolve(DEVELOPMENT_SELECTION_DIRECTORY / dataset, root)
+    return {
+        "directory": directory,
+        "source_results": directory / "source_results",
+        "selected_pairs": directory / "selected_pairs.jsonl",
+        "manifest": directory / "pilot_manifest.json",
+        "checkpoint": _resolve(
+            ARTIFACT_ROOT
+            / "checkpoints"
+            / DEVELOPMENT_PILOT_STAGE
+            / dataset
+            / f"{attempt}.json",
+            root,
+        ),
+    }
+
+
+def _development_gate_manifest_path(root: Path, protocol_revision: str) -> Path:
+    return _resolve(
+        DEVELOPMENT_GATE_DIRECTORY / protocol_revision / "group_manifest.json",
+        root,
+    )
+
+
+def _development_batch_evidence(
+    root: Path, *, dataset: str, expected_count: int
+) -> dict[str, Any]:
+    rows = _ledger_rows(root)
+    batch_rows = [
+        row
+        for row in rows
+        if row.get("role") == "development" and row.get("dataset") == dataset
+    ]
+    if len(batch_rows) != expected_count:
+        raise RuntimeError("development_batch_count_drift")
+    batch_ids = {row["reservation_batch_id"] for row in batch_rows}
+    if len(batch_ids) != 1:
+        raise RuntimeError("development_batch_identity_mixed")
+    batch_rows.sort(key=lambda row: row["reservation_batch_index"])
+    if any(
+        row["reservation_batch_index"] != index
+        or row["reservation_batch_size"] != expected_count
+        for index, row in enumerate(batch_rows)
+    ):
+        raise RuntimeError("development_batch_order_drift")
+    anchor_path = _ledger_tip_anchor(root, batch_rows[-1]["row_sha256"])
+    anchor = _read_json_exact(anchor_path)
+    if (
+        anchor.get("kind") != "v23_ledger_tip_anchor"
+        or anchor.get("reservation_batch_id") != next(iter(batch_ids))
+        or anchor.get("batch_size") != expected_count
+    ):
+        raise RuntimeError("development_batch_anchor_drift")
+    return {
+        "rows": batch_rows,
+        "anchor_path": anchor_path,
+        "anchor_sha256": sha256_file(anchor_path),
+        "reservation_batch_id": next(iter(batch_ids)),
+    }
+
+
+def prepare_development_pilot_authorization(
+    *,
+    project_root: str | Path,
+    dataset: str,
+    user_authorization_record: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    if dataset not in DATASET_ORDER or not user_authorization_record.strip():
+        raise ValueError("development_pilot_authorization_scope_invalid")
+    root = Path(project_root).resolve()
+    lock = _resolve(
+        ARTIFACT_ROOT / "governance/development_pilot_preparation.lock", root
+    )
+    with exclusive_lock(lock):
+        active = validate_active_runtime(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        validate_revision_reservation(
+            project_root=root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        validate_aggregate_df(
+            project_root=root,
+            dataset=dataset,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        for prior_dataset in DATASET_ORDER[: DATASET_ORDER.index(dataset)]:
+            prior = validate_development_pilot(
+                project_root=root,
+                dataset=prior_dataset,
+                runtime_files=runtime_files,
+                dependency_lock_path=dependency_lock_path,
+                model_lock_path=model_lock_path,
+            )
+            if prior["status"] != "passed":
+                raise RuntimeError("development_pilot_prior_dataset_not_passed")
+        config = load_design_config(root)
+        development_count, _ = _reservation_counts(config)
+        _development_batch_evidence(
+            root, dataset=dataset, expected_count=development_count
+        )
+        existing = _stage_authorization_paths(
+            root,
+            stage=DEVELOPMENT_PILOT_STAGE,
+            runtime_bundle_sha256=active["runtime_bundle_sha256"],
+            datasets=[dataset],
+        )
+        directory = _resolve(DEVELOPMENT_SELECTION_DIRECTORY / dataset, root)
+        checkpoint_directory = _resolve(
+            ARTIFACT_ROOT / "checkpoints" / DEVELOPMENT_PILOT_STAGE / dataset,
+            root,
+        )
+        if (
+            existing
+            or directory.exists()
+            or _directory_has_entries(checkpoint_directory)
+        ):
+            raise RuntimeError("development_pilot_attempt_or_artifact_already_exists")
+        ledger = validate_ledger(_resolve(CONSUMPTION_LEDGER, root))
+        registry = allocate_attempt(
+            registry_path=_resolve(ATTEMPT_REGISTRY, root),
+            protocol_revision=active["protocol_revision_id"],
+            stage=DEVELOPMENT_PILOT_STAGE,
+            execution_unit="one_dataset",
+            expected_prior_ledger_tip_sha256=ledger["tip_sha256"],
+        )
+        authorization = {
+            "kind": "v23_run_authorization",
+            "user_authorization_record": user_authorization_record,
+            "protocol_revision_id": active["protocol_revision_id"],
+            "attempt_id": registry["attempt_id"],
+            "authorized_stage": DEVELOPMENT_PILOT_STAGE,
+            "execution_unit": "one_dataset",
+            "expected_prior_ledger_tip_sha256": ledger["tip_sha256"],
+            "datasets": [dataset],
+            "run_roles": ["development"],
+            "model_or_retriever_cells": [],
+            "budget_kind": "sources",
+            "budget_limit": development_count,
+            "issued_at": utc_now(),
+            "expires_at_or_null": None,
+            "design_manifest_sha256": DESIGN_MANIFEST_SHA256,
+            "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        }
+        authorization["authorization_id"] = canonical_sha256(authorization)
+        path = _resolve(
+            RUN_AUTH_DIRECTORY / f"{authorization['authorization_id']}.json", root
+        )
+        _write_new_canonical_json(path, authorization)
+    return {
+        **authorization,
+        "authorization_path": _relative(path, root),
+        "source_pool_contents_read": False,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
+def _load_validated_token_df(
+    root: Path, *, dataset: str, source_count: int
+) -> dict[str, int]:
+    path = _resolve(AGGREGATE_DF_DIRECTORY / dataset / "token_df.jsonl", root)
+    token_df: dict[str, int] = {}
+    previous: str | None = None
+    raw = path.read_bytes()
+    if not raw or not raw.endswith(b"\n"):
+        raise RuntimeError("development_pilot_token_df_partial")
+    for line in raw.decode("utf-8").splitlines():
+        row = json.loads(line)
+        if set(row) != {"kind", "token", "document_frequency"}:
+            raise RuntimeError("development_pilot_token_df_schema_drift")
+        token = row["token"]
+        frequency = row["document_frequency"]
+        if (
+            row["kind"] != "v23_token_document_frequency"
+            or not isinstance(token, str)
+            or not token
+            or previous is not None
+            and token <= previous
+            or isinstance(frequency, bool)
+            or not isinstance(frequency, int)
+            or not 1 <= frequency <= source_count
+        ):
+            raise RuntimeError("development_pilot_token_df_value_drift")
+        token_df[token] = frequency
+        previous = token
+    return token_df
+
+
+def _load_development_model_emitter(
+    root: Path, *, model_lock_path: str | Path
+) -> Callable[[str, str], Sequence[Mapping[str, Any]]]:
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("development_pilot_cuda_required")
+    torch.use_deterministic_algorithms(True)
+    lock = load_yaml(_resolve(model_lock_path, root))
+    models = lock.get("models") if isinstance(lock, Mapping) else None
+    matches = [
+        item
+        for item in models or []
+        if isinstance(item, Mapping) and item.get("role") == "gliner2_base"
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("development_pilot_gliner2_base_lock_missing")
+    local_path, _ = _verify_model_lock(matches[0], workspace_root=root)
+    backend: SemanticPredictionBackend = _load_backend(
+        matches[0],
+        local_path,
+        runtime_device="cuda",
+        use_fp16=True,
+    )
+
+    def emit(text: str, _dataset: str) -> Sequence[Mapping[str, Any]]:
+        return [
+            {
+                "label": prediction.label,
+                "text": prediction.text,
+                "start": prediction.start,
+                "end": prediction.end,
+                "score": prediction.score,
+            }
+            for prediction in backend.predict(text, ALL_SEMANTIC_SCHEMA)
+        ]
+
+    return emit
+
+
+def _default_source_selection(
+    *,
+    source: Mapping[str, Any],
+    token_df: Mapping[str, int],
+    source_count: int,
+    model_emitter: Callable[[str, str], Sequence[Mapping[str, Any]]],
+    entity_policy_path: str,
+) -> dict[str, Any]:
+    candidates = fresh_extract_candidates(
+        source,
+        model_emitter=model_emitter,
+        entity_policy_path=entity_policy_path,
+    )
+    pair_candidates: list[dict[str, Any]] = []
+    rejection_reasons: Counter[str] = Counter()
+    for candidate in candidates:
+        pairs, reasons = build_pair_candidates(
+            source,
+            candidate,
+            token_df=token_df,
+            source_count=source_count,
+            token_df_prevalidated=True,
+        )
+        pair_candidates.extend(pairs)
+        rejection_reasons.update(reasons)
+    selected = select_top_three(pair_candidates)
+    if len(selected) != 3:
+        selected = []
+        rejection_reasons.update(["fewer_than_three_selected_pairs"])
+    return {
+        "selected_pairs": selected,
+        "rejection_reasons": sorted(rejection_reasons),
+        "candidate_count": len(candidates),
+        "pair_candidate_count": len(pair_candidates),
+        "hard_gate_violation_count": 0,
+    }
+
+
+def _validate_selected_pair(
+    pair: Mapping[str, Any],
+    *,
+    protocol_revision: str,
+    dataset: str,
+    source_key: str,
+    source_hash: str,
+    normalized_text_hash: str,
+    pair_order: int,
+) -> dict[str, Any]:
+    value = dict(pair)
+    value.setdefault("protocol_revision_id", protocol_revision)
+    _assert_exact_fields(value, SELECTED_PAIR_FIELDS, kind="selected_pair")
+    reject_forbidden_selection_fields(value, path="selected_pair")
+    string_fields = (
+        "dataset",
+        "source_key",
+        "source_hash",
+        "normalized_text_hash",
+        "pair_id",
+        "fact_signature",
+        "relation_signature",
+        "supporting_sentence",
+        "original_entity",
+        "counterfactual_entity",
+        "effective_type",
+        "semantic_subtype",
+        "true_claim",
+        "counterfactual_claim",
+    )
+    if (
+        value["kind"] != "v23_selected_pair"
+        or value["specification_version"] != SPECIFICATION_VERSION
+        or value["protocol_revision_id"] != protocol_revision
+        or value["dataset"] != dataset
+        or value["source_key"] != source_key
+        or value["source_hash"] != source_hash
+        or value["normalized_text_hash"] != normalized_text_hash
+        or value["pair_order"] != pair_order
+        or not _is_sha256(value["pair_id"])
+        or not _is_sha256(value["fact_signature"])
+        or not _is_sha256(value["relation_signature"])
+        or any(not isinstance(value[key], str) for key in string_fields)
+        or isinstance(value["source_order_rank"], bool)
+        or not isinstance(value["source_order_rank"], int)
+        or isinstance(value["pair_order"], bool)
+        or not isinstance(value["pair_order"], int)
+        or not isinstance(value["original_span"], list)
+        or len(value["original_span"]) != 2
+        or not all(
+            isinstance(item, int) and not isinstance(item, bool)
+            for item in value["original_span"]
+        )
+        or not isinstance(value["rank_tuple"], list)
+        or len(value["rank_tuple"]) != 17
+    ):
+        raise RuntimeError("development_pilot_selected_pair_drift")
+    return value
+
+
+def _normalize_source_selection(
+    raw: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    source: Mapping[str, Any],
+    protocol_revision: str,
+) -> dict[str, Any]:
+    reject_forbidden_selection_fields(raw, path="selector_output")
+    if isinstance(raw, Mapping):
+        expected = {
+            "selected_pairs",
+            "rejection_reasons",
+            "candidate_count",
+            "pair_candidate_count",
+            "hard_gate_violation_count",
+        }
+        if set(raw) != expected:
+            raise RuntimeError("development_pilot_selector_output_schema_drift")
+        selected_pairs = raw["selected_pairs"]
+        rejection_reasons = raw["rejection_reasons"]
+        candidate_count = raw["candidate_count"]
+        pair_candidate_count = raw["pair_candidate_count"]
+        hard_gate_violation_count = raw["hard_gate_violation_count"]
+    else:
+        selected_pairs = list(raw)
+        rejection_reasons = []
+        candidate_count = len(selected_pairs)
+        pair_candidate_count = len(selected_pairs)
+        hard_gate_violation_count = 0
+    if (
+        not isinstance(selected_pairs, list)
+        or not isinstance(rejection_reasons, list)
+        or not all(isinstance(item, str) for item in rejection_reasons)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (
+                candidate_count,
+                pair_candidate_count,
+                hard_gate_violation_count,
+            )
+        )
+    ):
+        raise RuntimeError("development_pilot_selector_output_value_drift")
+    if rejection_reasons != sorted(set(rejection_reasons)):
+        raise RuntimeError("development_pilot_selector_output_value_drift")
+    source_hash = text_sha256(str(source["full_text"]))
+    normalized_hash = normalized_text_sha256(str(source["full_text"]))
+    validated_pairs = [
+        _validate_selected_pair(
+            item,
+            protocol_revision=protocol_revision,
+            dataset=str(source["dataset"]),
+            source_key=str(source["source_key"]),
+            source_hash=source_hash,
+            normalized_text_hash=normalized_hash,
+            pair_order=index,
+        )
+        for index, item in enumerate(selected_pairs)
+    ]
+    if len(validated_pairs) not in {0, 3}:
+        validated_pairs = []
+        rejection_reasons = sorted(
+            {*rejection_reasons, "fewer_than_three_selected_pairs"}
+        )
+    return {
+        "selected_pairs": validated_pairs,
+        "rejection_reasons": rejection_reasons,
+        "candidate_count": candidate_count,
+        "pair_candidate_count": pair_candidate_count,
+        "hard_gate_violation_count": hard_gate_violation_count,
+    }
+
+
+def _validate_development_source_result(
+    value: Mapping[str, Any],
+    *,
+    protocol_revision: str,
+    runtime_bundle_sha256: str,
+    attempt: str,
+    dataset: str,
+) -> dict[str, Any]:
+    row = dict(value)
+    _assert_exact_fields(
+        row, DEVELOPMENT_SOURCE_RESULT_FIELDS, kind="development_source_result"
+    )
+    reject_forbidden_selection_fields(row, path="development_source_result")
+    claimed = row["source_result_sha256"]
+    if (
+        row["kind"] != "v23_development_source_result"
+        or row["protocol_revision_id"] != protocol_revision
+        or row["runtime_bundle_sha256"] != runtime_bundle_sha256
+        or row["attempt_id"] != attempt
+        or row["dataset"] != dataset
+        or not _is_sha256(row["source_hash"])
+        or not _is_sha256(row["normalized_text_hash"])
+        or not _is_sha256(claimed)
+        or canonical_sha256(
+            {key: item for key, item in row.items() if key != "source_result_sha256"}
+        )
+        != claimed
+        or not isinstance(row["eligible"], bool)
+        or row["eligible"] != (len(row["selected_pairs"]) == 3)
+        or not isinstance(row["deterministic_rerun_hash_match"], bool)
+    ):
+        raise RuntimeError("development_source_result_identity_drift")
+    for key in (
+        "source_order_index",
+        "candidate_count",
+        "pair_candidate_count",
+        "hard_gate_violation_count",
+    ):
+        if isinstance(row[key], bool) or not isinstance(row[key], int) or row[key] < 0:
+            raise RuntimeError("development_source_result_count_drift")
+    if not isinstance(row["rejection_reasons"], list) or not all(
+        isinstance(item, str) for item in row["rejection_reasons"]
+    ):
+        raise RuntimeError("development_source_result_reasons_drift")
+    if row["rejection_reasons"] != sorted(set(row["rejection_reasons"])):
+        raise RuntimeError("development_source_result_reasons_drift")
+    validated_pairs = [
+        _validate_selected_pair(
+            item,
+            protocol_revision=protocol_revision,
+            dataset=dataset,
+            source_key=str(row["source_key"]),
+            source_hash=str(row["source_hash"]),
+            normalized_text_hash=str(row["normalized_text_hash"]),
+            pair_order=index,
+        )
+        for index, item in enumerate(row["selected_pairs"])
+    ]
+    if validated_pairs != row["selected_pairs"]:
+        raise RuntimeError("development_source_result_pair_drift")
+    return row
+
+
+def _write_or_validate_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    expected = "".join(canonical_json(dict(row)) + "\n" for row in rows).encode(
+        "utf-8"
+    )
+    if path.exists():
+        if path.read_bytes() != expected:
+            raise RuntimeError(f"existing_artifact_identity_drift:{path}")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(expected).hexdigest()[:16]
+    temporary = path.with_name(f"{path.name}.{digest}.tmp")
+    if temporary.exists():
+        if temporary.read_bytes() == expected:
+            os.replace(temporary, path)
+            return
+        temporary = path.with_name(
+            f"{path.name}.{digest}.{time.time_ns()}.tmp"
+        )
+    with temporary.open("xb") as handle:
+        handle.write(expected)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if path.exists():
+        if path.read_bytes() != expected:
+            raise RuntimeError(f"existing_artifact_identity_drift:{path}")
+        return
+    os.replace(temporary, path)
+
+
+def _pilot_authorization(
+    root: Path, *, dataset: str, active: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    paths = _stage_authorization_paths(
+        root,
+        stage=DEVELOPMENT_PILOT_STAGE,
+        runtime_bundle_sha256=str(active["runtime_bundle_sha256"]),
+        datasets=[dataset],
+    )
+    if len(paths) != 1:
+        raise RuntimeError("development_pilot_authorization_count_invalid")
+    authorization, registry = _load_stage_run_authorization_file(
+        root=root,
+        authorization_path=paths[0],
+        stage=DEVELOPMENT_PILOT_STAGE,
+        execution_unit="one_dataset",
+        datasets=[dataset],
+    )
+    if (
+        authorization["protocol_revision_id"] != active["protocol_revision_id"]
+        or authorization["run_roles"] != ["development"]
+    ):
+        raise RuntimeError("development_pilot_authorization_identity_drift")
+    return authorization, registry, paths[0]
+
+
+def run_development_pilot(
+    *,
+    project_root: str | Path,
+    dataset: str,
+    authorization_path: str | Path,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+    selector: Callable[
+        [Mapping[str, Any], Mapping[str, int], int],
+        Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    ]
+    | None = None,
+    model_emitter: Callable[[str, str], Sequence[Mapping[str, Any]]] | None = None,
+    model_runtime_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if dataset not in DATASET_ORDER:
+        raise ValueError("development_pilot_dataset_invalid")
+    root = Path(project_root).resolve()
+    lock = _resolve(
+        ARTIFACT_ROOT / "governance" / f"development_pilot_{dataset}.lock", root
+    )
+    with exclusive_lock(lock):
+        active = validate_active_runtime(
+            root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        authorization, registry = _load_stage_run_authorization_file(
+            root=root,
+            authorization_path=authorization_path,
+            stage=DEVELOPMENT_PILOT_STAGE,
+            execution_unit="one_dataset",
+            datasets=[dataset],
+        )
+        if (
+            authorization["runtime_bundle_sha256"]
+            != active["runtime_bundle_sha256"]
+            or authorization["protocol_revision_id"]
+            != active["protocol_revision_id"]
+            or authorization["run_roles"] != ["development"]
+        ):
+            raise RuntimeError("development_pilot_active_runtime_drift")
+        validate_revision_reservation(
+            project_root=root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        aggregate = validate_aggregate_df(
+            project_root=root,
+            dataset=dataset,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        config = load_design_config(root)
+        development_count, _ = _reservation_counts(config)
+        if authorization["budget_limit"] != development_count:
+            raise RuntimeError("development_pilot_budget_limit_drift")
+        paths = _development_pilot_paths(
+            root, dataset=dataset, attempt=authorization["attempt_id"]
+        )
+        if paths["checkpoint"].exists():
+            completed = validate_development_pilot(
+                project_root=root,
+                dataset=dataset,
+                runtime_files=runtime_files,
+                dependency_lock_path=dependency_lock_path,
+                model_lock_path=model_lock_path,
+            )
+            if (
+                dataset == DATASET_ORDER[-1]
+                and completed["status"] == "passed"
+                and not _development_gate_manifest_path(
+                    root, active["protocol_revision_id"]
+                ).exists()
+            ):
+                _write_development_gate_manifest(
+                    root,
+                    active=active,
+                    runtime_files=runtime_files,
+                    dependency_lock_path=dependency_lock_path,
+                    model_lock_path=model_lock_path,
+                )
+            return completed
+        ledger_path = _resolve(CONSUMPTION_LEDGER, root)
+        ledger = validate_ledger(ledger_path)
+        ledger_rows = _ledger_rows(root)
+        prior_sequence = _ledger_sequence_for_tip(
+            ledger_rows, authorization["expected_prior_ledger_tip_sha256"]
+        )
+        input_anchor = _ledger_tip_anchor(
+            root, authorization["expected_prior_ledger_tip_sha256"]
+        )
+        development = _development_batch_evidence(
+            root, dataset=dataset, expected_count=development_count
+        )
+        reservation_completion = (
+            _reservation_directory(root, active["protocol_revision_id"])
+            / "group_completion.json"
+        )
+        reservation_completion_sha256 = sha256_file(reservation_completion)
+        pool = _aggregate_df_contracts(config, dataset)["pool"]
+        token_df = _load_validated_token_df(
+            root, dataset=dataset, source_count=pool["source_count"]
+        )
+        if selector is None and model_emitter is None:
+            model_emitter = _load_development_model_emitter(
+                root, model_lock_path=model_lock_path
+            )
+        if selector is None and model_emitter is None:
+            raise RuntimeError("development_pilot_model_emitter_missing")
+        if model_runtime_identity is not None and selector is None:
+            raise RuntimeError("development_pilot_injected_identity_without_selector")
+        runtime_identity = (
+            dict(model_runtime_identity)
+            if model_runtime_identity is not None
+            else dict(_load_runtime_lineage(root)["active_bundle"]["gliner_runtime_identity"])
+        )
+        reject_forbidden_selection_fields(
+            runtime_identity, path="model_runtime_identity"
+        )
+        entity_policy_path = str(
+            _resolve(
+                config["frozen_v22_bindings"]["extraction_rule_bindings"][
+                    "entity_type_policy_path"
+                ],
+                root,
+            )
+        )
+        budget_path = _resolve(
+            BUDGET_DIRECTORY / f"{authorization['authorization_id']}.jsonl", root
+        )
+        charged_count, _, charged_operations = _read_budget_state(
+            budget_path, authorization
+        )
+        paths["source_results"].mkdir(parents=True, exist_ok=True)
+        with FrozenSourcePoolReader(
+            project_root=root,
+            dataset=dataset,
+            database_path=pool["database_path"],
+            database_sha256=pool["database_sha256"],
+            source_order_path=pool["source_order_path"],
+            source_order_file_sha256=pool["source_order_file_sha256"],
+            source_pool_manifest_path=pool["manifest_path"],
+            source_pool_manifest_sha256=pool["manifest_sha256"],
+            expected_source_count=pool["source_count"],
+        ) as reader:
+            for source_order_index, ledger_row in enumerate(development["rows"]):
+                result_path = (
+                    paths["source_results"] / f"{source_order_index:06d}.json"
+                )
+                operation_identity = canonical_sha256(
+                    {
+                        "kind": "v23_reserved_source_selector_read",
+                        "authorization_id": authorization["authorization_id"],
+                        "dataset": dataset,
+                        "source_key": ledger_row["source_key"],
+                        "reservation_batch_id": development[
+                            "reservation_batch_id"
+                        ],
+                    }
+                )
+                if result_path.exists():
+                    existing = _validate_development_source_result(
+                        _read_json_exact(result_path),
+                        protocol_revision=active["protocol_revision_id"],
+                        runtime_bundle_sha256=active["runtime_bundle_sha256"],
+                        attempt=authorization["attempt_id"],
+                        dataset=dataset,
+                    )
+                    if (
+                        existing["source_order_index"] != source_order_index
+                        or existing["source_key"] != ledger_row["source_key"]
+                        or operation_identity not in charged_operations
+                    ):
+                        raise RuntimeError("development_pilot_resume_identity_drift")
+                    continue
+                source = reader.read_reserved_source(
+                    str(ledger_row["source_key"]),
+                    ledger_path=ledger_path,
+                    anchor_path=development["anchor_path"],
+                    authorization=authorization,
+                    attempt_registry_row=registry,
+                    budget_journal_path=budget_path,
+                    resume_existing_charge=(operation_identity in charged_operations),
+                )
+
+                def evaluate_once() -> dict[str, Any]:
+                    raw = (
+                        selector(source, token_df, int(pool["source_count"]))
+                        if selector is not None
+                        else _default_source_selection(
+                            source=source,
+                            token_df=token_df,
+                            source_count=int(pool["source_count"]),
+                            model_emitter=model_emitter,
+                            entity_policy_path=entity_policy_path,
+                        )
+                    )
+                    return _normalize_source_selection(
+                        raw,
+                        source=source,
+                        protocol_revision=active["protocol_revision_id"],
+                    )
+
+                first = evaluate_once()
+                second = evaluate_once()
+                deterministic = canonical_sha256(first) == canonical_sha256(second)
+                source_result = {
+                    "kind": "v23_development_source_result",
+                    "protocol_revision_id": active["protocol_revision_id"],
+                    "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+                    "attempt_id": authorization["attempt_id"],
+                    "dataset": dataset,
+                    "source_order_index": source_order_index,
+                    "source_key": source["source_key"],
+                    "source_hash": text_sha256(source["full_text"]),
+                    "normalized_text_hash": normalized_text_sha256(
+                        source["full_text"]
+                    ),
+                    "eligible": len(first["selected_pairs"]) == 3,
+                    "selected_pairs": first["selected_pairs"],
+                    "rejection_reasons": first["rejection_reasons"],
+                    "candidate_count": first["candidate_count"],
+                    "pair_candidate_count": first["pair_candidate_count"],
+                    "hard_gate_violation_count": first[
+                        "hard_gate_violation_count"
+                    ],
+                    "deterministic_rerun_hash_match": deterministic,
+                    "completed_at": utc_now(),
+                }
+                source_result["source_result_sha256"] = canonical_sha256(
+                    source_result
+                )
+                _write_new_atomic_canonical_json(result_path, source_result)
+                charged_operations.add(operation_identity)
+                charged_count += 1
+        source_results = [
+            _validate_development_source_result(
+                _read_json_exact(
+                    paths["source_results"] / f"{index:06d}.json"
+                ),
+                protocol_revision=active["protocol_revision_id"],
+                runtime_bundle_sha256=active["runtime_bundle_sha256"],
+                attempt=authorization["attempt_id"],
+                dataset=dataset,
+            )
+            for index in range(development_count)
+        ]
+        charged_count, budget_tip, _ = _read_budget_state(
+            budget_path, authorization
+        )
+        if charged_count != development_count:
+            raise RuntimeError("development_pilot_budget_count_incomplete")
+        selected_pairs = [
+            pair
+            for result in source_results
+            for pair in result["selected_pairs"]
+        ]
+        _write_or_validate_jsonl(paths["selected_pairs"], selected_pairs)
+        consumed_non_development = len(
+            {
+                row["source_key"]
+                for row in ledger_rows[1 : prior_sequence + 1]
+                if row.get("dataset") == dataset
+                and row.get("role") != "development"
+            }
+        )
+        eligible_count = sum(result["eligible"] for result in source_results)
+        capacity = capacity_decision(
+            population=int(pool["source_count"]),
+            sample=development_count,
+            observed_eligible=eligible_count,
+            consumed_non_development=consumed_non_development,
+        )
+        rejection_counts: Counter[str] = Counter(
+            reason
+            for result in source_results
+            for reason in result["rejection_reasons"]
+        )
+        deterministic = all(
+            result["deterministic_rerun_hash_match"] for result in source_results
+        )
+        hard_gate_violations = sum(
+            result["hard_gate_violation_count"] for result in source_results
+        )
+        manifest_status = (
+            "passed"
+            if deterministic
+            and hard_gate_violations == 0
+            and capacity["status"] == "passed"
+            else "failed_development_gate"
+        )
+        manifest_completed_at = utc_now()
+        if paths["manifest"].exists():
+            manifest_completed_at = str(
+                _read_json_exact(paths["manifest"]).get("completed_at")
+            )
+        manifest = {
+            "kind": "v23_development_pilot_manifest",
+            "protocol_revision_id": active["protocol_revision_id"],
+            "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+            "authorization_id": authorization["authorization_id"],
+            "attempt_id": authorization["attempt_id"],
+            "dataset": dataset,
+            "reservation_group_completion_sha256": reservation_completion_sha256,
+            "development_batch_anchor_sha256": development["anchor_sha256"],
+            "aggregate_df_manifest_sha256": aggregate[
+                "df_manifest_file_sha256"
+            ],
+            "aggregate_df_rows_sha256": aggregate[
+                "token_df_rows_file_sha256"
+            ],
+            "model_runtime_identity": runtime_identity,
+            "source_count": development_count,
+            "eligible_source_count": eligible_count,
+            "selected_pair_count": len(selected_pairs),
+            "selected_pairs_path": _relative(paths["selected_pairs"], root),
+            "selected_pairs_file_sha256": sha256_file(paths["selected_pairs"]),
+            "source_result_directory": _relative(paths["source_results"], root),
+            "source_result_group_sha256": canonical_sha256(
+                [result["source_result_sha256"] for result in source_results]
+            ),
+            "rejection_reasons": dict(sorted(rejection_counts.items())),
+            "deterministic_rerun_hash_match": deterministic,
+            "hard_gate_violation_count": hard_gate_violations,
+            "capacity_decision": capacity,
+            "status": manifest_status,
+            "external_calls_performed": 0,
+            "completed_at": manifest_completed_at,
+        }
+        _write_or_validate_canonical(paths["manifest"], manifest)
+        checkpoint = {
+            "kind": "v23_stage_checkpoint",
+            "protocol_revision_id": active["protocol_revision_id"],
+            "attempt_id": authorization["attempt_id"],
+            "stage": DEVELOPMENT_PILOT_STAGE,
+            "execution_unit": "one_dataset",
+            "status": "passed" if manifest_status == "passed" else "failed",
+            "input_ledger_tip_sha256": authorization[
+                "expected_prior_ledger_tip_sha256"
+            ],
+            "input_tip_anchor_sha256": sha256_file(input_anchor),
+            "output_ledger_tip_sha256": authorization[
+                "expected_prior_ledger_tip_sha256"
+            ],
+            "output_tip_anchor_sha256": sha256_file(input_anchor),
+            "ledger_mutation": False,
+            "authorization_id": authorization["authorization_id"],
+            "authorization_budget_journal_tip_sha256": budget_tip,
+            "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+            "output_manifest_sha256": sha256_file(paths["manifest"]),
+            "completed_at": utc_now(),
+        }
+        write_stage_checkpoint(paths["checkpoint"], checkpoint)
+        if dataset == DATASET_ORDER[-1] and manifest_status == "passed":
+            _write_development_gate_manifest(
+                root,
+                active=active,
+                runtime_files=runtime_files,
+                dependency_lock_path=dependency_lock_path,
+                model_lock_path=model_lock_path,
+            )
+    return validate_development_pilot(
+        project_root=root,
+        dataset=dataset,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+
+
+def _read_development_source_results(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    authorization: Mapping[str, Any],
+    dataset: str,
+    expected_count: int,
+) -> list[dict[str, Any]]:
+    paths = _development_pilot_paths(
+        root, dataset=dataset, attempt=str(authorization["attempt_id"])
+    )
+    actual_paths = sorted(paths["source_results"].glob("*.json"))
+    expected_paths = [
+        paths["source_results"] / f"{index:06d}.json"
+        for index in range(expected_count)
+    ]
+    if actual_paths != expected_paths:
+        raise RuntimeError("development_pilot_source_result_set_drift")
+    return [
+        _validate_development_source_result(
+            _read_json_exact(path),
+            protocol_revision=str(active["protocol_revision_id"]),
+            runtime_bundle_sha256=str(active["runtime_bundle_sha256"]),
+            attempt=str(authorization["attempt_id"]),
+            dataset=dataset,
+        )
+        for path in expected_paths
+    ]
+
+
+def validate_development_pilot(
+    *,
+    project_root: str | Path,
+    dataset: str,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    """Validate a pilot artifact using only durable rows and registered hashes."""
+
+    if dataset not in DATASET_ORDER:
+        raise ValueError("development_pilot_dataset_invalid")
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    reservation = validate_revision_reservation(
+        project_root=root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    aggregate = validate_aggregate_df(
+        project_root=root,
+        dataset=dataset,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    authorization, _, authorization_path = _pilot_authorization(
+        root, dataset=dataset, active=active
+    )
+    config = load_design_config(root)
+    development_count, _ = _reservation_counts(config)
+    if authorization["budget_limit"] != development_count:
+        raise RuntimeError("development_pilot_budget_limit_drift")
+    development = _development_batch_evidence(
+        root, dataset=dataset, expected_count=development_count
+    )
+    paths = _development_pilot_paths(
+        root, dataset=dataset, attempt=authorization["attempt_id"]
+    )
+    manifest = _read_json_exact(paths["manifest"])
+    _assert_exact_fields(
+        manifest, DEVELOPMENT_PILOT_MANIFEST_FIELDS, kind="development_pilot_manifest"
+    )
+    reject_forbidden_selection_fields(manifest, path="development_pilot_manifest")
+    source_results = _read_development_source_results(
+        root,
+        active=active,
+        authorization=authorization,
+        dataset=dataset,
+        expected_count=development_count,
+    )
+    for index, (result, ledger_row) in enumerate(
+        zip(source_results, development["rows"], strict=True)
+    ):
+        if (
+            result["source_order_index"] != index
+            or result["source_key"] != ledger_row["source_key"]
+            or result["source_hash"] != ledger_row["source_hash"]
+            or result["normalized_text_hash"]
+            != ledger_row["normalized_text_hash"]
+        ):
+            raise RuntimeError("development_pilot_source_identity_drift")
+    selected_pairs = [
+        pair
+        for result in source_results
+        for pair in result["selected_pairs"]
+    ]
+    raw_selected = paths["selected_pairs"].read_bytes()
+    expected_selected = "".join(
+        canonical_json(pair) + "\n" for pair in selected_pairs
+    ).encode("utf-8")
+    if raw_selected != expected_selected:
+        raise RuntimeError("development_pilot_selected_pairs_file_drift")
+    eligible_count = sum(result["eligible"] for result in source_results)
+    rejection_counts: Counter[str] = Counter(
+        reason
+        for result in source_results
+        for reason in result["rejection_reasons"]
+    )
+    deterministic = all(
+        result["deterministic_rerun_hash_match"] for result in source_results
+    )
+    hard_gate_violations = sum(
+        result["hard_gate_violation_count"] for result in source_results
+    )
+    ledger_rows = _ledger_rows(root)
+    prior_sequence = _ledger_sequence_for_tip(
+        ledger_rows, authorization["expected_prior_ledger_tip_sha256"]
+    )
+    consumed_non_development = len(
+        {
+            row["source_key"]
+            for row in ledger_rows[1 : prior_sequence + 1]
+            if row.get("dataset") == dataset
+            and row.get("role") != "development"
+        }
+    )
+    pool = _aggregate_df_contracts(config, dataset)["pool"]
+    capacity = capacity_decision(
+        population=int(pool["source_count"]),
+        sample=development_count,
+        observed_eligible=eligible_count,
+        consumed_non_development=consumed_non_development,
+    )
+    expected_status = (
+        "passed"
+        if deterministic
+        and hard_gate_violations == 0
+        and capacity["status"] == "passed"
+        else "failed_development_gate"
+    )
+    reservation_completion_path = (
+        _reservation_directory(root, active["protocol_revision_id"])
+        / "group_completion.json"
+    )
+    if (
+        manifest["kind"] != "v23_development_pilot_manifest"
+        or manifest["protocol_revision_id"] != active["protocol_revision_id"]
+        or manifest["runtime_bundle_sha256"]
+        != active["runtime_bundle_sha256"]
+        or manifest["authorization_id"] != authorization["authorization_id"]
+        or manifest["attempt_id"] != authorization["attempt_id"]
+        or manifest["dataset"] != dataset
+        or manifest["reservation_group_completion_sha256"]
+        != sha256_file(reservation_completion_path)
+        or manifest["reservation_group_completion_sha256"]
+        != reservation["group_completion_file_sha256"]
+        or manifest["development_batch_anchor_sha256"]
+        != development["anchor_sha256"]
+        or manifest["aggregate_df_manifest_sha256"]
+        != aggregate["df_manifest_file_sha256"]
+        or manifest["aggregate_df_rows_sha256"]
+        != aggregate["token_df_rows_file_sha256"]
+        or not isinstance(manifest["model_runtime_identity"], Mapping)
+        or not manifest["model_runtime_identity"]
+        or manifest["source_count"] != development_count
+        or manifest["eligible_source_count"] != eligible_count
+        or manifest["selected_pair_count"] != len(selected_pairs)
+        or manifest["selected_pairs_path"]
+        != _relative(paths["selected_pairs"], root)
+        or manifest["selected_pairs_file_sha256"]
+        != sha256_file(paths["selected_pairs"])
+        or manifest["source_result_directory"]
+        != _relative(paths["source_results"], root)
+        or manifest["source_result_group_sha256"]
+        != canonical_sha256(
+            [result["source_result_sha256"] for result in source_results]
+        )
+        or manifest["rejection_reasons"]
+        != dict(sorted(rejection_counts.items()))
+        or manifest["deterministic_rerun_hash_match"] != deterministic
+        or manifest["hard_gate_violation_count"] != hard_gate_violations
+        or manifest["capacity_decision"] != capacity
+        or manifest["status"] != expected_status
+        or manifest["external_calls_performed"] != 0
+    ):
+        raise RuntimeError("development_pilot_manifest_drift")
+    budget_path = _resolve(
+        BUDGET_DIRECTORY / f"{authorization['authorization_id']}.jsonl", root
+    )
+    charged_count, budget_tip, charged_operations = _read_budget_state(
+        budget_path, authorization
+    )
+    expected_operations = {
+        canonical_sha256(
+            {
+                "kind": "v23_reserved_source_selector_read",
+                "authorization_id": authorization["authorization_id"],
+                "dataset": dataset,
+                "source_key": row["source_key"],
+                "reservation_batch_id": development["reservation_batch_id"],
+            }
+        )
+        for row in development["rows"]
+    }
+    if (
+        charged_count != development_count
+        or charged_operations != expected_operations
+    ):
+        raise RuntimeError("development_pilot_budget_drift")
+    checkpoint = _read_json_exact(paths["checkpoint"])
+    _assert_exact_fields(checkpoint, STAGE_CHECKPOINT_FIELDS, kind="stage_checkpoint")
+    input_anchor = _ledger_tip_anchor(
+        root, authorization["expected_prior_ledger_tip_sha256"]
+    )
+    expected_checkpoint_status = "passed" if expected_status == "passed" else "failed"
+    if (
+        checkpoint["kind"] != "v23_stage_checkpoint"
+        or checkpoint["protocol_revision_id"] != active["protocol_revision_id"]
+        or checkpoint["attempt_id"] != authorization["attempt_id"]
+        or checkpoint["stage"] != DEVELOPMENT_PILOT_STAGE
+        or checkpoint["execution_unit"] != "one_dataset"
+        or checkpoint["status"] != expected_checkpoint_status
+        or checkpoint["input_ledger_tip_sha256"]
+        != authorization["expected_prior_ledger_tip_sha256"]
+        or checkpoint["output_ledger_tip_sha256"]
+        != authorization["expected_prior_ledger_tip_sha256"]
+        or checkpoint["input_tip_anchor_sha256"] != sha256_file(input_anchor)
+        or checkpoint["output_tip_anchor_sha256"] != sha256_file(input_anchor)
+        or checkpoint["ledger_mutation"] is not False
+        or checkpoint["authorization_id"] != authorization["authorization_id"]
+        or checkpoint["authorization_budget_journal_tip_sha256"] != budget_tip
+        or checkpoint["runtime_bundle_sha256"]
+        != active["runtime_bundle_sha256"]
+        or checkpoint["output_manifest_sha256"] != sha256_file(paths["manifest"])
+    ):
+        raise RuntimeError("development_pilot_checkpoint_drift")
+    return {
+        "status": expected_status,
+        "dataset": dataset,
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "protocol_revision_id": active["protocol_revision_id"],
+        "authorization_id": authorization["authorization_id"],
+        "authorization_file_sha256": sha256_file(authorization_path),
+        "attempt_id": authorization["attempt_id"],
+        "source_count": development_count,
+        "eligible_source_count": eligible_count,
+        "selected_pair_count": len(selected_pairs),
+        "capacity_decision": capacity,
+        "pilot_manifest_file_sha256": sha256_file(paths["manifest"]),
+        "selected_pairs_file_sha256": sha256_file(paths["selected_pairs"]),
+        "source_result_group_sha256": manifest["source_result_group_sha256"],
+        "budget_charge_count": charged_count,
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
+    }
+
+
+def _development_cross_dataset_overlap(
+    source_results_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]]
+) -> tuple[int, int]:
+    source_hashes: set[str] = set()
+    normalized_hashes: set[str] = set()
+    source_overlap = 0
+    normalized_overlap = 0
+    for dataset in DATASET_ORDER:
+        for row in source_results_by_dataset[dataset]:
+            if row["source_hash"] in source_hashes:
+                source_overlap += 1
+            if row["normalized_text_hash"] in normalized_hashes:
+                normalized_overlap += 1
+            source_hashes.add(str(row["source_hash"]))
+            normalized_hashes.add(str(row["normalized_text_hash"]))
+    return source_overlap, normalized_overlap
+
+
+def _development_group_evidence(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+]:
+    validations: dict[str, dict[str, Any]] = {}
+    results: dict[str, list[dict[str, Any]]] = {}
+    config = load_design_config(root)
+    development_count, _ = _reservation_counts(config)
+    for dataset in DATASET_ORDER:
+        validation = validate_development_pilot(
+            project_root=root,
+            dataset=dataset,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+        if validation["status"] != "passed":
+            raise RuntimeError("development_pilot_group_dataset_not_passed")
+        authorization, _, _ = _pilot_authorization(
+            root, dataset=dataset, active=active
+        )
+        validations[dataset] = validation
+        results[dataset] = _read_development_source_results(
+            root,
+            active=active,
+            authorization=authorization,
+            dataset=dataset,
+            expected_count=development_count,
+        )
+    return validations, results
+
+
+def _write_development_gate_manifest(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    validations, results = _development_group_evidence(
+        root,
+        active=active,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    source_overlap, normalized_overlap = _development_cross_dataset_overlap(results)
+    status = (
+        "passed"
+        if source_overlap == 0 and normalized_overlap == 0
+        else "failed_cross_dataset_overlap"
+    )
+    path = _development_gate_manifest_path(
+        root, str(active["protocol_revision_id"])
+    )
+    manifest = {
+        "kind": "v23_development_gate_manifest",
+        "protocol_revision_id": active["protocol_revision_id"],
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "dataset_order": list(DATASET_ORDER),
+        "pilot_manifest_sha256_by_dataset": {
+            dataset: validations[dataset]["pilot_manifest_file_sha256"]
+            for dataset in DATASET_ORDER
+        },
+        "selected_pairs_file_sha256_by_dataset": {
+            dataset: validations[dataset]["selected_pairs_file_sha256"]
+            for dataset in DATASET_ORDER
+        },
+        "cross_dataset_source_hash_overlap": source_overlap,
+        "cross_dataset_normalized_text_hash_overlap": normalized_overlap,
+        "status": status,
+        "created_at": (
+            str(_read_json_exact(path).get("created_at"))
+            if path.exists()
+            else utc_now()
+        ),
+    }
+    _write_or_validate_canonical(path, manifest)
+    if status != "passed":
+        raise RuntimeError("development_pilot_group_cross_dataset_overlap")
+    return manifest
+
+
+def validate_development_pilot_group(
+    *,
+    project_root: str | Path,
+    runtime_files: Sequence[str] | None = None,
+    dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
+    model_lock_path: str | Path = MODEL_LOCK_PATH,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    active = validate_active_runtime(
+        root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    validations, results = _development_group_evidence(
+        root,
+        active=active,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+    )
+    source_overlap, normalized_overlap = _development_cross_dataset_overlap(results)
+    path = _development_gate_manifest_path(
+        root, active["protocol_revision_id"]
+    )
+    manifest = _read_json_exact(path)
+    _assert_exact_fields(
+        manifest, DEVELOPMENT_GATE_MANIFEST_FIELDS, kind="development_gate_manifest"
+    )
+    if (
+        manifest["kind"] != "v23_development_gate_manifest"
+        or manifest["protocol_revision_id"] != active["protocol_revision_id"]
+        or manifest["runtime_bundle_sha256"]
+        != active["runtime_bundle_sha256"]
+        or manifest["dataset_order"] != list(DATASET_ORDER)
+        or manifest["pilot_manifest_sha256_by_dataset"]
+        != {
+            dataset: validations[dataset]["pilot_manifest_file_sha256"]
+            for dataset in DATASET_ORDER
+        }
+        or manifest["selected_pairs_file_sha256_by_dataset"]
+        != {
+            dataset: validations[dataset]["selected_pairs_file_sha256"]
+            for dataset in DATASET_ORDER
+        }
+        or manifest["cross_dataset_source_hash_overlap"] != source_overlap
+        or manifest["cross_dataset_normalized_text_hash_overlap"]
+        != normalized_overlap
+        or manifest["status"] != "passed"
+        or source_overlap != 0
+        or normalized_overlap != 0
+    ):
+        raise RuntimeError("development_pilot_group_manifest_drift")
+    return {
+        "status": "passed",
+        "runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "protocol_revision_id": active["protocol_revision_id"],
+        "dataset_order": list(DATASET_ORDER),
+        "pilot_manifest_sha256_by_dataset": manifest[
+            "pilot_manifest_sha256_by_dataset"
+        ],
+        "selected_pairs_file_sha256_by_dataset": manifest[
+            "selected_pairs_file_sha256_by_dataset"
+        ],
+        "cross_dataset_source_hash_overlap": 0,
+        "cross_dataset_normalized_text_hash_overlap": 0,
+        "group_manifest_file_sha256": sha256_file(path),
+        "ledger_mutation": False,
+        "external_calls_performed": 0,
     }
 
 
@@ -4174,6 +6854,70 @@ def stage_status(
     requested = [stage] if stage is not None else list(stages)
     rows: list[dict[str, Any]] = []
     for name in requested:
+        if name == RESERVATION_STAGE:
+            completion = (
+                _reservation_directory(root, active["protocol_revision_id"])
+                / "group_completion.json"
+            )
+            if not completion.is_file():
+                rows.append(
+                    {
+                        "stage": name,
+                        "status": "not_started",
+                        "reason": "revision_reservation_group_missing",
+                    }
+                )
+                continue
+            try:
+                validate_revision_reservation(project_root=root)
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+                rows.append({"stage": name, "status": "stale", "reason": str(error)})
+            else:
+                rows.append(
+                    {
+                        "stage": name,
+                        "status": "native",
+                        "reason": None,
+                    }
+                )
+            continue
+        if name == DEVELOPMENT_PILOT_STAGE:
+            group_path = _development_gate_manifest_path(
+                root, active["protocol_revision_id"]
+            )
+            if not group_path.is_file():
+                started = [
+                    dataset
+                    for dataset in DATASET_ORDER
+                    if (_resolve(DEVELOPMENT_SELECTION_DIRECTORY / dataset, root)
+                        / "pilot_manifest.json").is_file()
+                ]
+                rows.append(
+                    {
+                        "stage": name,
+                        "status": "not_started",
+                        "reason": (
+                            "development_pilot_group_incomplete:"
+                            + ",".join(started)
+                            if started
+                            else "development_pilot_group_missing"
+                        ),
+                    }
+                )
+                continue
+            try:
+                validate_development_pilot_group(project_root=root)
+            except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+                rows.append({"stage": name, "status": "stale", "reason": str(error)})
+            else:
+                rows.append(
+                    {
+                        "stage": name,
+                        "status": "native",
+                        "reason": None,
+                    }
+                )
+            continue
         if name != "aggregate_df_precomputation":
             rows.append(
                 {
@@ -4289,6 +7033,27 @@ def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
     ]
     if not frozen:
         blocked.insert(0, "runtime_bundle_and_commit_freeze")
+    elif active is not None:
+        try:
+            scoped = stage_status(root)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            pass
+        else:
+            blocked = [
+                row["stage"]
+                for row in scoped["stages"]
+                if row["status"] not in {"native", "carried_forward"}
+            ]
+    pilot_started = _directory_has_entries(
+        _resolve(DEVELOPMENT_SELECTION_DIRECTORY, root)
+    ) or bool(
+        active
+        and _stage_authorization_paths(
+            root,
+            stage=DEVELOPMENT_PILOT_STAGE,
+            runtime_bundle_sha256=active["runtime_bundle_sha256"],
+        )
+    )
     return {
         "protocol_version": PROTOCOL_VERSION,
         "method_version": METHOD_VERSION,
@@ -4310,7 +7075,7 @@ def v23_status(project_root: str | Path = ".") -> dict[str, Any]:
         "runtime_bundle_sha256": runtime_identity.get("runtime_bundle_sha256"),
         "protocol_revision_id": runtime_identity.get("protocol_revision_id"),
         "bootstrap_validation_error": bootstrap_error,
-        "pilot_started": False,
+        "pilot_started": pilot_started,
         "external_calls_performed": 0,
         "blocked_stages": blocked,
     }

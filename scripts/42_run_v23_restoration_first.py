@@ -13,19 +13,26 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.prepare.restoration_first_v23 import (  # noqa: E402
     prepare_aggregate_df_authorization,
+    prepare_development_pilot_authorization,
+    prepare_revision_reservation_authorization,
     prepare_runtime_bootstrap_authorization,
     prepare_runtime_successor_freeze_authorization,
     prepare_stage_carry_forward_authorization,
     run_aggregate_df,
+    run_development_pilot,
+    run_revision_reservation,
     run_runtime_bootstrap,
     run_runtime_successor_freeze,
     run_stage_carry_forward,
     stage_status,
     validate_aggregate_df,
+    validate_development_pilot,
+    validate_development_pilot_group,
     validate_design_bindings,
     validate_implementation_authorization,
     validate_runtime_bootstrap,
     validate_runtime_successor_freeze,
+    validate_revision_reservation,
     validate_stage_carry_forward,
     v23_status,
 )
@@ -37,7 +44,7 @@ DEFAULT_IMPLEMENTATION_AUTHORIZATION = (
     / "v23"
     / "governance"
     / "implementation_authorizations"
-    / "5036ed6f6df487454cee07bd56ace243d3199b6462ba90585bff34d1ed82245c.json"
+    / "37dd6ce01efcda21bdfcfa48e9c8ab6f9444bd89a4f67930f6b8e5ff01f0e3d5.json"
 )
 
 
@@ -92,6 +99,30 @@ def parse_args() -> argparse.Namespace:
     validate_carry.add_argument(
         "--stage", required=True, choices=("aggregate_df_precomputation",)
     )
+    prepare_reservation = commands.add_parser(
+        "prepare-revision-reservation-authorization"
+    )
+    prepare_reservation.add_argument("--user-authorization-record", required=True)
+    run_reservation = commands.add_parser("run-revision-reservation")
+    run_reservation.add_argument("--authorization", required=True)
+    commands.add_parser("validate-revision-reservation")
+    prepare_pilot = commands.add_parser(
+        "prepare-development-pilot-authorization"
+    )
+    prepare_pilot.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
+    prepare_pilot.add_argument("--user-authorization-record", required=True)
+    run_pilot = commands.add_parser("run-development-pilot")
+    run_pilot.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
+    run_pilot.add_argument("--authorization", required=True)
+    validate_pilot = commands.add_parser("validate-development-pilot")
+    validate_pilot.add_argument(
+        "--dataset", required=True, choices=("edgar", "enron", "pubmed")
+    )
+    commands.add_parser("validate-development-pilot-group")
     authorization = commands.add_parser("validate-implementation-authorization")
     authorization.add_argument(
         "--authorization",
@@ -178,6 +209,37 @@ def main() -> int:
             project_root=PROJECT_ROOT,
             stage=args.stage,
         )
+    elif args.command == "prepare-revision-reservation-authorization":
+        result = prepare_revision_reservation_authorization(
+            project_root=PROJECT_ROOT,
+            user_authorization_record=args.user_authorization_record,
+        )
+    elif args.command == "run-revision-reservation":
+        result = run_revision_reservation(
+            project_root=PROJECT_ROOT,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "validate-revision-reservation":
+        result = validate_revision_reservation(project_root=PROJECT_ROOT)
+    elif args.command == "prepare-development-pilot-authorization":
+        result = prepare_development_pilot_authorization(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
+            user_authorization_record=args.user_authorization_record,
+        )
+    elif args.command == "run-development-pilot":
+        result = run_development_pilot(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
+            authorization_path=args.authorization,
+        )
+    elif args.command == "validate-development-pilot":
+        result = validate_development_pilot(
+            project_root=PROJECT_ROOT,
+            dataset=args.dataset,
+        )
+    elif args.command == "validate-development-pilot-group":
+        result = validate_development_pilot_group(project_root=PROJECT_ROOT)
     else:
         result = validate_implementation_authorization(
             args.authorization,

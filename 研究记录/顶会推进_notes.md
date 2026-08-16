@@ -2387,6 +2387,107 @@
 
 当前唯一下一步：按用户已给出的边界，先列出待提交 v23 文件清单和提交信息，等待用户明确确认后才提交；确认并提交完成后，使用用户本轮“开始吧”的现有授权只执行一次 bootstrap。bootstrap 之后 aggregate-DF 仍需独立 run authorization，其余 pilot、audit、formal、split、shadow、release、Luna、Gemma、Retriever 继续 blocked。
 
+### 2026-08-13：v23 runtime bootstrap 已冻结并验证
+
+- 用户确认后已将10个v23协议/runtime/测试及项目总表文件提交为`c05a088f887471bc825aab6acdbeaf2e34fbe917`（`feat(v23): implement restoration-first runtime`），未推送，其他既有脏工作树未纳入提交。
+- 使用一次性bootstrap authorization `d06e6cfda9062c0423bb80d490130ca53e0e49c253330d7a8744ecddeab964d3`执行唯一一次`runtime_bundle_and_commit_freeze`；attempt ID=`7823debf3821ffbe2bb8a1a88e8e6cfd17bd32e50add571ed755a3f050a6cdcd`，状态`passed`，授权已消费。
+- runtime bundle已冻结：bundle SHA-256=`272bd6faa36f2923dceeefde000b46caba9efe852d44bc62065401bc8053a7c7`，bundle manifest文件SHA-256=`aa1e6609c2291b021f1464f5695a0b444421b1371715da74279a770f7a4073ce`，protocol revision ID=`e5a870133c1548be34dcb2727f8324e0e413dfc48f7c66fe9aa8c6d6b9f2d655`。
+- ledger genesis row SHA-256=`41a77b70c2609b369e4b91eec89267cd541b7c72b508dac05f23155f8966f57e`，genesis anchor SHA-256=`c767aaa17d22dda0ce39494cde1784ed87a8ea9e056ce2b8040aa0514fe7a791`；bootstrap checkpoint=`artifacts/v23/checkpoints/bootstrap/7823debf3821ffbe2bb8a1a88e8e6cfd17bd32e50add571ed755a3f050a6cdcd.json`，checkpoint状态`passed`。
+- `validate-bootstrap`与`status`均通过，当前状态为`runtime_frozen_downstream_blocked`。本次`source_pool_contents_read=false`、`pilot_started=false`、`external_calls_performed=0`；未加载模型，未运行GPU、API、victim或Retriever。
+- bootstrap只解除了runtime bundle/genesis冻结本身的阻断。aggregate-DF尚未创建，三套dataset必须各自获得独立run authorization后，才允许各进行一次有预算的完整池读取；development pilot及audit、formal、split、shadow、release、Luna、Gemma、Retriever和evaluation继续blocked。
+
+当前唯一下一步：等待用户选择并单独授权首个dataset的`aggregate_df_precomputation`。建议按冻结顺序从EDGAR开始；该授权仅允许EDGAR在当前runtime bundle下进行一次aggregate-DF读取与产物写入，不包含Enron/PubMed、pilot、GPU、API、victim或Retriever。
+
+### 2026-08-13：EDGAR aggregate-DF 授权后的执行入口阻断
+
+- 用户已明确授权执行EDGAR的`aggregate_df_precomputation`，并要求由用户本人运行长时间命令；该授权不扩展到Enron/PubMed、pilot、GPU、API、victim、Retriever或其他下游阶段。
+- 启动前只读核验发现当前已提交并冻结的CLI仅包含bootstrap/status/design/implementation验证入口。runtime内已有aggregate DF计算、只读source-pool reader、逐source预算扣费、run-authorization验证、attempt registry、artifact writer与checkpoint原语，但没有把它们闭合为真实EDGAR stage事务的授权生成、输入identity、exactly-once检查、失败/完成checkpoint、resume规则及CLI执行/验证入口。
+- 因此EDGAR完整池尚未读取，run authorization/attempt尚未生成，aggregate-DF artifact尚不存在，预算扣费为0。禁止用临时`python -c`拼接这些原语：该编排不在冻结runtime bundle内，无法形成可审计的代码身份，并可能破坏exactly-once与崩溃恢复边界。
+- 补齐runner会修改当前runtime bundle已绑定的`scripts/42_run_v23_restoration_first.py`与`src/prepare/restoration_first_v23.py`，不能继续冒充bundle `272bd6fa...a7c7`或revision `e5a87013...d655`。必须先获得单独实现授权，完成定向回归，并按新代码commit冻结新的runtime bundle/protocol revision；原bootstrap与本次阻断证据保留。
+
+当前唯一下一步：等待用户授权最小补齐`aggregate_df_precomputation`真实runner与定向测试；实现完成后仍需用户确认提交/新bundle冻结，再使用本次EDGAR执行授权生成单次run authorization，并把最终长命令交给用户执行。
+
+### 2026-08-13：v23 aggregate-DF runner 与 successor freeze 离线闭环
+
+- 已按用户授权最小补齐 `aggregate_df_precomputation` 的正式授权准备、执行、验证与 CLI 入口，并实现 successor runtime freeze。该变更不创建 r7、不修改 design-r6、fact extraction、Restoration hard gates、selector 目标或 P0 统计定义。
+- successor freeze 保留 revision 0、首个 runtime bundle、ledger genesis 与 genesis anchor，使用新 commit 生成后继 runtime bundle/protocol revision；旧 bootstrap 历史不覆盖、不重建。aggregate-DF 继续固定 EDGAR -> Enron -> PubMed 顺序，并要求每个 dataset 独立 authorization/attempt。
+- aggregate-DF 在准备和执行前核验 active runtime、design identity，以及 source-pool manifest、SQLite database、source order 三个绑定文件的 SHA-256；执行前要求 ledger 仍为 genesis-only。逐 source 先扣预算再读取，只读 SQLite、流式计算 boolean token DF，输出不含 source mapping 或逐 source 行；失败 checkpoint 与已有输出均阻止同 attempt 重跑。
+- 新增定向回归覆盖成功、exactly-once、dataset/order、预算、ledger 不变、Ctrl+C、失败不可复用、artifact/budget 篡改以及 runtime/pool hash 漂移。v23 governance `24/24`、全量 `unittest discover -s tests` `456/456`、内存 AST 与 `git diff --check` 均通过；敏感值扫描无命中。
+- 本轮只使用合成临时仓库/SQLite fixture。真实 EDGAR source pool 未读取，未生成 EDGAR authorization/attempt/DF/checkpoint，外部调用、GPU、API、victim、Retriever 与费用均为 0；Enron/PubMed、pilot 及全部下游仍 blocked。
+
+当前唯一下一步：向用户展示本轮精确代码提交范围并等待确认。确认后才允许提交并冻结 successor runtime；随后才能使用既有 EDGAR 执行授权生成单次 run authorization，把长时间 `aggregate-df --dataset edgar` 命令交由用户本人执行。提交确认不扩展到真实完整池读取或其他阶段。
+
+### 2026-08-13：v23 successor runtime revision 2 冻结
+
+- 用户确认后提交本轮 3 个 runner/runtime/test 文件，commit=`7d82ea4f530ba4d0f80e0b69bf93a7f04e1c5587`，未推送且未带入其他脏改动。
+- 提交后发现 `status` 仍报告 bootstrap revision 0；这是状态读取 bug，不是协议或实验结果问题。仅补充 `v23_status` 的 active-lineage 读取和一个回归测试，commit=`f00205f1933863357458f5741ab8bf9115e56126`；v23 governance `25/25`、全量 `457/457` 通过。
+- 使用 successor freeze authorization `427e7a66...e756` 冻结 revision 2：runtime bundle=`c1e61ac5b9902b2b6a8e6922151e67ca03a9c13463ad195cb107f20d237285ea`，protocol revision=`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。revision 0=`e5a870...d655`、revision 1=`be18b6...5f2f`、bootstrap genesis 与 ledger tip=`41a77b...f57e` 均原样保留。
+- `status` 与 successor validator 均通过；当前仍为 `runtime_frozen_downstream_blocked`，`external_calls_performed=0`、`source_pool_contents_read=false`、`pilot_started=false`。本轮未读取 EDGAR、未创建 aggregate-DF artifact，未运行 GPU/API/victim/Retriever。
+
+当前唯一下一步：使用既有 EDGAR 执行授权，在 revision 2 下生成一次性 `aggregate_df_precomputation` run authorization，并把最终长命令交由用户本人执行；该动作不授权 Enron/PubMed、pilot 或任何下游阶段。
+
+### 2026-08-13：EDGAR aggregate-DF 一次性 run authorization 已生成
+
+- 已在 active revision 2 / runtime bundle `c1e61ac5...85ea` 下生成 EDGAR 独立 run authorization：authorization=`0e63f9b0...045e`，attempt=`7f4be98e...84ad`，protocol revision=`286e1f0a...4621`。
+- 授权范围仅为 `aggregate_df_precomputation`、`execution_unit=one_dataset`、`datasets=[edgar]`，预算上限=`5210` sources；expected prior ledger tip 仍为 genesis `41a77b70...f57e`。授权生成只验证 runtime/pool binding/hash，`source_pool_contents_read=false`、external calls=0。
+- 最终长命令必须由用户本人执行；助手不代跑、不改成临时编排。执行中每个 source 先扣预算再读，Ctrl+C/异常会写 failed checkpoint，同一 attempt 不可重跑；完成后只能运行正式 `validate-aggregate-df --dataset edgar` 验证。
+
+当前唯一下一步：用户执行一次性 EDGAR aggregate-DF 命令。Enron/PubMed、pilot、fresh audit、formal、split、shadow、release、Luna、Gemma、Retriever 与 evaluation 继续 blocked。
+
+### 2026-08-13：EDGAR aggregate-DF 完成并通过验证
+
+- 用户本人按 revision 2 授权完成一次 `aggregate_df_precomputation`，随后运行正式 `validate-aggregate-df --dataset edgar`；两步均返回 `status=passed`。
+- attempt=`7f4be98e2bdab16f4dccdbac6b55140f7e5867b351b92033a457f10cfa384ad6`，authorization=`0e63f9b0454555ec4acb72824199c124e930b14b34306e9a031e61b76244045e`，runtime bundle=`c1e61ac5b9902b2b6a8e6922151e67ca03a9c13463ad195cb107f20d237285ea`，protocol revision=`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+- 完整读取 `source_count=5210`，`token_count=116953`，预算扣费=`5210`；`external_calls_performed=0`、`ledger_mutation=false`。DF manifest SHA-256=`aeb7af6c0b776566cfd782168e7e125ad92b0faaa76bdf75088aa471ec52fdf6`，token DF rows SHA-256=`add48dd0dc818b94e98735f48b45cc27059d4e8a5f918c6d1524fe0e2b58e27f`。
+- 该 artifact 仅为 dataset-level aggregate token DF，不含 source 映射或逐 source 行；不得据此声称低频 token 不可反演。EDGAR aggregate-DF 已完成且不得同 attempt 重跑；Enron/PubMed 仍需各自独立授权。development pilot、fresh audit、formal scan、split、shadow、release、Luna、Gemma、Retriever 与 evaluation 继续 blocked。
+
+当前唯一下一步：等待用户单独授权 Enron `aggregate_df_precomputation`；未获授权前不生成 Enron authorization、不读取 Enron source pool，也不启动任何下游阶段。
+
+### 2026-08-13：Enron aggregate-DF 一次性 run authorization 已生成
+
+- 用户已单独授权 Enron `aggregate_df_precomputation`，授权不包含 PubMed、GPU、API、victim、Retriever 或任何下游阶段。
+- 已在 active revision 2 / runtime bundle `c1e61ac5b9902b2b6a8e6922151e67ca03a9c13463ad195cb107f20d237285ea` 下生成独立 authorization=`c01e5d8d558e9896e164d659fca7ea59601af228d812646b24fa951e27f07004` 与 attempt=`ddff63f66a249a9b281dffcbbee18091981d0e421ffc8710a0629a5b728168f5`；protocol revision=`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+- 授权范围为 `datasets=[enron]`、`execution_unit=one_dataset`、预算上限=`35000` sources；expected prior ledger tip 仍为 genesis `41a77b70...f57e`。授权生成未读取 source 内容，`source_pool_contents_read=false`、external calls=0。
+
+当前唯一下一步：用户本人执行一次性 Enron aggregate-DF 长命令并回报结果；完成并验证前不得生成 PubMed authorization，也不得启动 pilot 或任何下游阶段。
+
+### 2026-08-14：Enron aggregate-DF 完成并通过验证
+
+- 用户本人已完成一次 Enron `aggregate_df_precomputation`，随后运行正式 `validate-aggregate-df --dataset enron`；验证返回 `status=passed`。
+- attempt=`ddff63f66a249a9b281dffcbbee18091981d0e421ffc8710a0629a5b728168f5`，authorization=`c01e5d8d558e9896e164d659fca7ea59601af228d812646b24fa951e27f07004`，runtime bundle=`c1e61ac5b9902b2b6a8e6922151e67ca03a9c13463ad195cb107f20d237285ea`，protocol revision=`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+- 完整读取 `source_count=35000`，`token_count=181394`，预算扣费=`35000`；`external_calls_performed=0`、`ledger_mutation=false`。DF manifest SHA-256=`703b1756137aa0bdb9ca06e0e1416a12f884e4f6a5591fe6a120bb136d5526b5`，token DF rows SHA-256=`18c6df70e5a6236eb96292061d1d1ee33caef6f721acbc628200b08aece43fdc`。
+- Enron aggregate-DF 已完成且不得同 attempt 重跑。当前 EDGAR 与 Enron 均已 passed；PubMed 仍需独立授权。development pilot、fresh audit、formal scan、split、shadow、release、Luna、Gemma、Retriever 与 evaluation 继续 blocked。
+
+当前唯一下一步：等待用户单独授权 PubMed `aggregate_df_precomputation`；未获授权前不生成 PubMed authorization、不读取 PubMed source pool，也不启动任何下游阶段。
+
+### 2026-08-14：PubMed aggregate-DF 一次性 run authorization 已生成
+
+- 用户已单独授权 PubMed `aggregate_df_precomputation`，并指定长时间命令由用户本人执行；授权不包含 development pilot、GPU、API、victim、Retriever 或任何下游阶段。
+- 已在 active revision 2 / runtime bundle `c1e61ac5b9902b2b6a8e6922151e67ca03a9c13463ad195cb107f20d237285ea` 下生成独立 authorization=`52f4a84e672139793aa712f7a81b6b2901a737f667273ab2745637bef744fc7f` 与 attempt=`43ff2d69b284014d3702e9fdb5de9237ca5b5ad6ee78a242e605c98127a7bb53`；protocol revision=`286e1f0a1c0dff1db917ea00a387192b8cbded7b3577e57d3cc86b4847524621`。
+- 授权范围为 `datasets=[pubmed]`、`execution_unit=one_dataset`、预算上限=`47950` sources；expected prior ledger tip 仍为 genesis `41a77b70...f57e`。授权生成未读取 PubMed source 内容，`source_pool_contents_read=false`、`external_calls_performed=0`。
+- 依据预算日志，EDGAR 5210 sources 实测约 5 分钟，Enron 35000 sources 实测约 2 小时 6 分钟。PubMed 有 47950 sources，且数据库约 2.16 GB、明显大于另两套；当前逐 source 哈希链验证会随进度增长，因此不能按 source 数线性外推。执行时间暂估 5--8 小时，保守应预留 8--12 小时；该区间不是完成时间承诺。
+
+当前唯一下一步：用户本人执行一次性 PubMed aggregate-DF 长命令，完成后运行正式 validator。运行期间不要主动中断；失败 checkpoint 会使同一 attempt 不可重用。PubMed 验证通过前，development pilot、fresh audit、formal scan、split、shadow、release、Luna、Gemma、Retriever 与 evaluation 继续 blocked。
+
+### 2026-08-14：PubMed aggregate-DF 完成并在冻结 runtime 身份下通过验证
+
+- 用户本人完成 PubMed `aggregate_df_precomputation`。任务在写出 manifest 与 `passed` checkpoint 后进入末尾自校验，但运行期间仓库新增了 `109352e0...a00` 与 `5099fbf8...6b4` 两个 closure 外提交，当前 `HEAD` 不再等于冻结 commit `f00205f1...6126`，因此主工作区末尾报 `active_runtime_commit_drift`。这不是 source 处理、token-DF 或预算链失败。
+- PubMed artifact 与治理链完整：attempt=`43ff2d69...bb53`、authorization=`52f4a84e...4fc7f`、`source_count=47950`、`token_count=1284757`、预算日志恰为47950行且末行序号47949、checkpoint=`status=passed`、`external_calls_performed=0`、`ledger_mutation=false`。DF manifest SHA-256=`8418d7372590966dcdc4f7e9e23b1b3b7ac7fadce589ca5b492a58393658b043`，token DF rows SHA-256=`75955e537cfb9619bb302eea8668f16afc85f5d784b4b607eb7abe796f2e7f8e`。
+- 只读核验确认 active bundle 的19个 runtime closure 文件在主工作区均未修改且文件SHA-256仍与bundle manifest一致；新增提交仅涉及closure外的实体审计实现/测试与README。为避免修改冻结runtime、创建新bundle或重读三套完整池，建立独立detached worktree `D:\MIA\mia_model_v23_runtime_r2` 固定到`f00205f1...6126`，并通过Git identity overlay让原runtime在主项目路径验证原artifact。
+- 新增非runtime-closure操作入口`scripts/run_v23_frozen_runtime.ps1`；它先核验detached worktree commit，再临时绑定`GIT_DIR/GIT_WORK_TREE`并调用原冻结`scripts/42_run_v23_restoration_first.py`，调用结束后恢复环境变量。该入口不修改bundle、protocol revision、design-r6或immutable artifact。
+- 使用冻结入口重新执行PubMed正式validator，返回`status=passed`，runtime bundle仍为`c1e61ac5...85ea`，protocol revision仍为`286e1f0a...4621`。至此EDGAR、Enron、PubMed三套aggregate-DF均完成并通过验证；所有三个attempt均不得重跑。本次恢复验证未读取source pool、未调用GPU/API/victim/Retriever，也未产生费用。
+
+当前唯一下一步：等待用户单独授权`revision_audit_reserve_snapshot_and_write_ahead_registration`与`development_pilot_and_capacity_gate`的明确执行范围。首次真实fact extraction与Restoration质量门禁将在development pilot发生；获得该授权前，pilot、fresh audit、formal scan、split、shadow、release、Luna、四个Generator、Retriever、victim与evaluation继续blocked。
+
+### 2026-08-14：development pilot 启动前发现正式 runner 缺口
+
+- 用户回复“进行下一步吧”，授权推进当前唯一下一步的准备；该表述未扩大为GPU长任务、API、victim或Retriever调用授权。本轮仅执行冻结入口`status`与代码/配置只读核验，未写consumption ledger、attempt、authorization、budget、reserve snapshot或stage checkpoint，未读取新的source内容，GPU/API/victim/Retriever调用均为0。
+- 冻结runtime已实现`append_reservation_batch`、`FrozenSourcePoolReader.read_reserved_source`、fresh fact/entity extraction、Restoration hard gates、top-3 selection与capacity decision等原语，但`scripts/42_run_v23_restoration_first.py`没有`revision_audit_reserve_snapshot_and_write_ahead_registration`或`development_pilot_and_capacity_gate`的prepare/run/validate CLI，`src/prepare/restoration_first_v23.py`也没有对应完整事务runner。
+- 因而不能直接启动reserve write-ahead或pilot。用临时`python -c`、非runtime-closure脚本或手工拼接通用原语会重复EDGAR aggregate-DF启动前已经拒绝的未绑定编排问题：无法把执行顺序、group completion、失败checkpoint、exactly-once与恢复语义绑定到冻结runtime身份。
+- 直接补runner会修改active runtime closure，必须冻结successor bundle；当前design-r6又要求aggregate-DF按runtime bundle绑定，所以严格沿用现有设计将要求在新bundle下重新授权并重跑EDGAR、Enron、PubMed aggregate-DF。若要复用现有三套DF，则必须先制定机器可读的stage-scoped compatibility/carry-forward erratum并改变协议身份，不能静默放宽runtime binding。
+
+当前唯一下一步：由用户在两条路径中明确选择。路径A保持现有design-r6不变：实现reserve/pilot runner、提交并冻结successor runtime，再按新bundle重新执行三套aggregate-DF；路径B先制定并审计一个显式execution erratum，允许在计算相关closure完全相同的证明下carry forward现有DF，再实现runner。选择前不写ledger、不创建reserve/pilot authorization、不启动GPU或source读取。
+
 ### 2026-08-14：v23 Stage-Scoped Identity execution erratum e1 已实现，待提交与冻结
 
 - 用户明确选择路径B并授权实施 `v23 Stage-Scoped Identity 修复计划`。本轮身份为 `pcv-restoration-first-v23-design-r6-execution-e1`，不是方法 r7；没有修改 fact extraction、Restoration hard gates、rank、query 或统计定义。
@@ -2399,3 +2500,46 @@
 - 最终验证：v23定向测试`45/45`通过；全量`unittest discover -s tests`为`464/464`通过；内存AST、erratum固定hash、implementation authorization自哈希与scope、`git diff --check`均通过。测试仅使用mock或临时合成仓库/SQLite fixture，没有真实GPU/API/victim/Retriever调用。
 
 当前唯一下一步：等待用户确认提交本轮e1实现。确认前不执行`git add`/`git commit`；提交后successor runtime freeze仍需单独授权，freeze完成后的真实三数据集DF carry-forward还需再次单独授权。carry-forward验证通过前不实现或启动reserve/pilot，也不读取新的source。
+
+### 2026-08-14：v23 Stage-Scoped Identity execution erratum e1 已本地提交
+
+- 用户确认后仅提交本轮8个e1文件；commit=`3010c19aa81c59ee4b1ec081752702d9ff32dcd4`，提交信息=`feat(v23): add stage-scoped runtime identity`。README与两份项目总表采用局部暂存，更早的未提交记录及`AGENTS.md`、root notes/task plan、legacy变更和冻结入口均未纳入。
+- 提交未推送；暂存区为空。现有三套aggregate-DF、ledger、authorization、budget、checkpoint与历史artifact未改写，真实stage compatibility目录仍为空，source读取、ledger mutation、GPU/API/victim/Retriever调用和费用均为0。
+- 本次提交确认不构成successor runtime freeze或真实carry-forward授权。只有另行授权并冻结successor后，才允许再次授权生成三数据集group carry-forward证明；fingerprint不相等时必须fail closed。
+
+当前唯一下一步：等待用户单独授权successor runtime freeze。未获授权前不创建新bundle/revision、不生成真实carry-forward artifact，也不实现或启动reserve/pilot。
+
+### 2026-08-15：successor runtime freeze revision 3 已通过
+
+- 用户明确授权 successor runtime freeze。执行前发现 e1 的 `RUNTIME_BUNDLE_FILES` 顺序缺少规范字典序；仅修复该 closure 顺序并增加回归断言，commit=`32f9ba88c833f9ca7dbf7dd37967306d70061b29`，未纳入其他脏工作树文件。
+- 新 authorization=`bb53ae708823d477fab8b4a7a0f0384a7903d9e54eb7f6d012645427fe79dc87`，目标 revision ordinal=`3`；freeze checkpoint=`artifacts/v23/checkpoints/runtime_freeze/bb53ae708823d477fab8b4a7a0f0384a7903d9e54eb7f6d012645427fe79dc87.json`。
+- successor runtime bundle=`1c2c933d890f52e11ffa2e9d37ca2aede3a5037ff009656f9d8cf54763ea8cb8`，protocol revision=`7add7622b9bf76e1547a6ce98fa5178e0a6e9a26eb147fb3553a7b9b0ab54bff`；freeze 与独立 validate 均返回 `status=passed`。
+- ledger tip 保持=`41a77b70c2609b369e4b91eec89267cd541b7c72b508dac05f23155f8966f57e`；`source_pool_contents_read=false`、`ledger_mutation=false`、`external_calls_performed=0`，没有读取 source、没有重跑 aggregate-DF、没有生成 carry-forward 证明。
+- 三套 aggregate-DF 仍是旧 bundle/revision 下的既有 passed artifact；只有在用户另行授权且旧/新 fingerprint 完全相等时，才可生成显式三数据集 carry-forward attestation。reserve、pilot、fresh audit、formal、split、shadow、release、Luna、四个 Generator、Retriever、victim 与 evaluation 继续 blocked。
+
+当前唯一下一步：等待用户单独授权 aggregate-DF stage carry-forward；授权前不写 compatibility artifact、不读取 source、不启动 reserve/pilot 或任何 GPU/API/victim/Retriever 阶段。
+
+### 2026-08-15：三数据集 aggregate-DF carry-forward 已通过
+
+- 用户明确授权 aggregate-DF 三数据集 group carry-forward。authorization=`e7e64dde111300ea13928a2345018d8d17ceefa1657cfad1e6a31ca664660ff7`，execution unit=`all_datasets_group`，禁止 source pool 内容读取、ledger mutation 与外部调用。
+- 旧 revision 2 / bundle `286e1f0a...4621` / `c1e61ac5...85ea` 与新 revision 3 / bundle `7add7622...4bff` / `1c2c933d...8cb8` 的 aggregate-DF stage dependency fingerprint 完全一致：`9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`。
+- 已生成三数据集一体化 attestation=`c3f1b179571383751d6231c1175094d8b6fa6801abf4940a57dbcaf3b0a95db3`，文件 SHA-256=`24d7fa0df7baf4c180e76ae3d6bdf8f9f49c672d0d9de4c38d7ea0db5c127aba`；证明绑定三套既有 rows/manifest、run authorization、budget journal、checkpoint、ledger tip 及两端 stage execution identity。
+- `validate-carry-forward` 与 EDGAR、Enron、PubMed 三次独立 `validate-aggregate-df` 均返回 `status=passed`、`validation_mode=carried_forward`。原 DF artifact 未改写，88,160 个 source 未重读，预算未新增，ledger tip 未变化，GPU/API/victim/Retriever 调用为 0。
+- e1 的权威阶段状态 `stage-status --stage aggregate_df_precomputation` 返回 `status=passed`、stage=`carried_forward`、reason=`null`。旧 `status` 命令的 `blocked_stages` 仍是静态摘要并继续列出 aggregate-DF；该字段不参与 stage gate，不表示 carry-forward 失败，待下一次已授权的 runner runtime 修改时同步修正，避免仅为展示字段再次冻结 bundle。
+- aggregate-DF 已在 active revision 3 下合法可复用；这不是重新计算，也不改变旧 artifact 的 producer identity。reserve/pilot runner 仍未实现，revision audit、development pilot、fresh audit、formal、split、shadow、release、Luna、四个 Generator、Retriever、victim 与 evaluation 继续 blocked。
+
+当前唯一下一步：等待用户单独授权实现 revision-audit reserve snapshot/write-ahead 与 development-pilot runner 的 runtime/定向测试；实现授权不自动包含真实 reserve/pilot source 读取、GPU/API/victim/Retriever 或长任务执行。
+
+### 2026-08-15：v23 reserve/write-ahead 与 development-pilot runner 离线实现
+
+- 用户明确授权实现 `revision_audit_reserve_snapshot_and_write_ahead_registration` 与 `development_pilot_and_capacity_gate` runner；implementation authorization=`37dd6ce01efcda21bdfcfa48e9c8ab6f9444bd89a4f67930f6b8e5ff01f0e3d5`，仅覆盖 runtime、CLI、测试、README 与两份项目总表，`external_calls_allowed=false`。该授权不包含真实 reservation/pilot、source 读取、GPU、successor freeze、提交或推送。
+- reservation runner 先验证三套 carried-forward aggregate-DF，从同一 prior ledger tip 推导并冻结三套 250-source reserve snapshot；首次 revision 按 EDGAR、Enron、PubMed 顺序登记三套既有 1000-source development batch，再按相同顺序登记 reserve batch。plan、batch、anchor、budget、group completion 与 checkpoint 全绑定；中断只接受同一 identity 的 durable prefix，完整 ledger rows 缺 anchor、completion 后缺 checkpoint 等崩溃窗口可恢复。
+- reservation validator 不读取 source 内容，只核验 source order、snapshot、plan、ledger chain、batch anchor、budget operation、common prior、group completion 与 checkpoint；development 仍严格等于冻结 source order 的前 1000，reserve 必须与所有 prior/development raw hash、normalized hash 零重叠。
+- development pilot 按 dataset 独立授权，固定读取已登记 development batch。每个 source 在内容可见前扣一次 logical source-evaluation budget，读取后再次核对 ledger raw/normalized hash；每条 source result 独立 fsync，预算已扣但结果未落盘时只恢复同一 operation，完整结果才允许跳过。生产 CLI 只加载冻结 `gliner2-base-v1` CUDA runtime；离线测试通过注入 selector，不加载模型或 GPU。
+- 每个 source 使用同一 selector 输入重算两次并比较 canonical hash；正式链仍调用 `fresh_extract_candidates -> build_pair_candidates -> select_top_three`，fact extraction、Restoration hard gates、17项 rank 与 capacity 公式均未修改。token DF 完整验证一次后只跳过逐 candidate 的重复全表扫描；禁止 membership、split/group、victim/LLM-only response、Retriever 输出或 AUC 字段。
+- 数据集 manifest 绑定 reservation completion、development anchor、aggregate-DF rows/manifest、模型 runtime identity、source-result group、selected-pairs 文件、budget/checkpoint 与 capacity decision。三数据集全部 passed 后才生成 group gate，并要求跨数据集 source hash 与 normalized text hash overlap 均为 0；capacity shortfall 写入 `failed_development_gate` 与 failed checkpoint，不能进入 fresh audit。
+- 新增 CLI：`prepare/run/validate-revision-reservation`、`prepare/run/validate-development-pilot` 与 `validate-development-pilot-group`；`stage-status` 已能报告 reservation/pilot 的 `native/stale/not_started`。aggregate-DF stage fingerprint 仍精确为 `9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`，现有三数据集 DF carry-forward 不失效。
+- 离线合成测试覆盖 reservation partial-prefix 与缺 anchor 恢复、顺序/exactly-once、validator 零 source 读取、plan 篡改拒绝、pilot 预算已扣但无结果恢复、确定性复算、三数据集 group 零重叠、禁止字段篡改、capacity pass/fail 与 failed checkpoint。v23 定向回归 `49/49`、全量 `unittest discover -s tests` `468/468` 均通过；298 个 Python 文件内存 AST、CLI help、implementation authorization scope/self-hash、`git diff --check` 与敏感值扫描均通过。首次 AST 以 `utf-8` 读取未修改的 `src/utils/hash.py` 时遇到既有 BOM，按实际编码改用 `utf-8-sig` 后全量通过，未修改该文件。`ruff` 未安装且未联网安装。
+- 本轮未执行真实 reservation 或 pilot，未读取新的正式 source，未修改真实 ledger/budget/checkpoint/selection artifact，未加载 GPU 模型，API/victim/Retriever/费用均为 0。当前代码尚未提交，active revision 3 对工作树新代码应继续 fail closed；不得直接运行真实新入口。
+
+当前唯一下一步：等待用户确认提交本轮 runner。提交不等于 freeze；提交后仍需单独授权 successor runtime freeze，冻结完成后再单独授权真实 reservation/write-ahead 与逐数据集 development pilot。fresh audit、formal、split、shadow、release、Luna、四个 Generator、Retriever、victim 与 evaluation 继续 blocked。

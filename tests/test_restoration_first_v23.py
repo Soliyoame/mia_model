@@ -19,6 +19,7 @@ from src.attack.restoration_first_v23 import (
     canonical_sha256,
     fresh_extract_candidates,
     normalize_text,
+    normalized_text_sha256,
     relation_signature,
     select_top_three,
     text_sha256,
@@ -54,12 +55,16 @@ from src.prepare.restoration_first_v23 import (
     canonical_sha256 as governance_canonical_sha256,
     charge_authorization_budget,
     prepare_aggregate_df_authorization,
+    prepare_development_pilot_authorization,
+    prepare_revision_reservation_authorization,
     prepare_runtime_bootstrap_authorization,
     prepare_runtime_successor_freeze_authorization,
     prepare_stage_carry_forward_authorization,
     protocol_revision_id,
     require_passed_checkpoint,
     run_aggregate_df,
+    run_development_pilot,
+    run_revision_reservation,
     run_runtime_bootstrap,
     run_runtime_successor_freeze,
     run_stage_carry_forward,
@@ -67,6 +72,8 @@ from src.prepare.restoration_first_v23 import (
     stage_status,
     validate_active_runtime,
     validate_aggregate_df,
+    validate_development_pilot,
+    validate_development_pilot_group,
     validate_implementation_authorization,
     validate_ledger,
     validate_index_allowlist,
@@ -74,6 +81,7 @@ from src.prepare.restoration_first_v23 import (
     validate_runtime_bootstrap_authorization,
     validate_runtime_bootstrap,
     validate_runtime_successor_freeze,
+    validate_revision_reservation,
     validate_stage_carry_forward,
     v23_status,
     evaluate_blind_audit,
@@ -422,6 +430,119 @@ def _run_authorization(
     return payload
 
 
+def _synthetic_capacity_decision(
+    *,
+    population: int,
+    sample: int,
+    observed_eligible: int,
+    consumed_non_development: int,
+    required_formal: int = 2_250,
+    passed: bool = True,
+) -> dict:
+    return {
+        "population_N": population,
+        "sample_n": sample,
+        "observed_x": observed_eligible,
+        "total_eligible_lower_K_L": observed_eligible + consumed_non_development,
+        "consumed_non_development_c": consumed_non_development,
+        "formal_eligible_lower": required_formal if passed else 0,
+        "required_formal": required_formal,
+        "status": "passed" if passed else "failed_capacity_shortfall",
+    }
+
+
+def _synthetic_pilot_selector(
+    source: dict, _token_df: dict[str, int], _source_count: int
+) -> dict:
+    source_hash = text_sha256(source["full_text"])
+    normalized_hash = normalized_text_sha256(source["full_text"])
+    pairs = []
+    for index, replacement in enumerate(
+        ("Jordan Ellis", "Taylor Morgan", "Morgan Lee")
+    ):
+        pair_seed = {
+            "dataset": source["dataset"],
+            "source_key": source["source_key"],
+            "index": index,
+        }
+        pairs.append(
+            {
+                "kind": "v23_selected_pair",
+                "specification_version": SPECIFICATION_VERSION,
+                "dataset": source["dataset"],
+                "source_key": source["source_key"],
+                "source_hash": source_hash,
+                "normalized_text_hash": normalized_hash,
+                "source_order_rank": int(source["source_order_rank"]),
+                "pair_order": index,
+                "pair_id": canonical_sha256({**pair_seed, "kind": "pair"}),
+                "fact_signature": canonical_sha256(
+                    {**pair_seed, "kind": "fact"}
+                ),
+                "relation_signature": canonical_sha256(
+                    {**pair_seed, "kind": "relation"}
+                ),
+                "supporting_sentence": source["full_text"],
+                "original_span": [0, 5],
+                "original_entity": "Alice",
+                "counterfactual_entity": replacement,
+                "effective_type": "PERSON",
+                "semantic_subtype": "single_person_name",
+                "true_claim": source["full_text"],
+                "counterfactual_claim": replacement + source["full_text"][5:],
+                "rank_tuple": [index] * 17,
+            }
+        )
+    return {
+        "selected_pairs": pairs,
+        "rejection_reasons": [],
+        "candidate_count": 3,
+        "pair_candidate_count": 3,
+        "hard_gate_violation_count": 0,
+    }
+
+
+def _synthetic_stage_contracts(root: Path) -> dict[str, dict[str, object]]:
+    return {
+        dataset: _synthetic_aggregate_contracts(
+            root,
+            dataset=dataset,
+            source_texts=tuple(
+                (
+                    "Alice signed the Northstar Services Agreement with "
+                    f"{dataset.title()} Harborview Partners for record {index}."
+                )
+                for index in range(4)
+            ),
+        )
+        for dataset in ("edgar", "enron", "pubmed")
+    }
+
+
+def _run_synthetic_aggregate_group(
+    root: Path,
+    *,
+    fixture: dict[str, object],
+) -> None:
+    for dataset in ("edgar", "enron", "pubmed"):
+        authorization = prepare_aggregate_df_authorization(
+            project_root=root,
+            dataset=dataset,
+            user_authorization_record=f"test {dataset} aggregate df",
+            runtime_files=fixture["runtime_files"],
+            dependency_lock_path=fixture["dependency_lock_path"],
+            model_lock_path=fixture["model_lock_path"],
+        )
+        run_aggregate_df(
+            project_root=root,
+            dataset=dataset,
+            authorization_path=authorization["authorization_path"],
+            runtime_files=fixture["runtime_files"],
+            dependency_lock_path=fixture["dependency_lock_path"],
+            model_lock_path=fixture["model_lock_path"],
+        )
+
+
 class V23PrimitiveTests(unittest.TestCase):
     def test_normalization_and_canonical_json_golden_vectors(self):
         self.assertEqual(normalize_text("  Cafe\u0301\tACME  "), "café acme")
@@ -677,6 +798,10 @@ class V23StageIdentityTests(unittest.TestCase):
             return result["stage_dependency_fingerprint"]
 
         baseline = fingerprint()
+        self.assertEqual(
+            baseline,
+            "9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011",
+        )
         selector_only = sources[attack_path].replace(
             "def fresh_extract_candidates(", "def fresh_extract_candidates_v2(", 1
         )
@@ -2254,6 +2379,348 @@ class V23GovernanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, "no_mutation_tip_drift"):
                 write_stage_checkpoint(Path(directory) / "checkpoint.json", checkpoint)
+
+    def test_revision_reservation_recovers_prefix_and_validates_without_source_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_stage_contracts(root)
+
+            def contract_for(_config: dict, dataset: str) -> dict:
+                return contracts[dataset]
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                side_effect=contract_for,
+            ), patch(
+                "src.prepare.restoration_first_v23._reservation_counts",
+                return_value=(2, 1),
+            ):
+                _run_synthetic_aggregate_group(root, fixture=fixture)
+                authorization = prepare_revision_reservation_authorization(
+                    project_root=root,
+                    user_authorization_record="test reservation",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                original_charge = charge_authorization_budget
+                charge_calls = 0
+
+                def interrupt_after_first_batch(*args, **kwargs):
+                    nonlocal charge_calls
+                    if charge_calls == 2:
+                        raise KeyboardInterrupt("synthetic reservation interruption")
+                    charge_calls += 1
+                    return original_charge(*args, **kwargs)
+
+                with patch(
+                    "src.prepare.restoration_first_v23.charge_authorization_budget",
+                    side_effect=interrupt_after_first_batch,
+                ), self.assertRaises(KeyboardInterrupt):
+                    run_revision_reservation(
+                        project_root=root,
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                ledger_path = (
+                    root / "artifacts/v23/governance/consumed_source_ledger.jsonl"
+                )
+                self.assertEqual(validate_ledger(ledger_path)["row_count"], 3)
+                recovered = run_revision_reservation(
+                    project_root=root,
+                    authorization_path=authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                self.assertEqual(recovered["status"], "passed")
+                self.assertEqual(recovered["budget_charge_count"], 9)
+                self.assertEqual(validate_ledger(ledger_path)["row_count"], 10)
+                with patch.object(
+                    FrozenSourcePoolReader,
+                    "_read_source_unchecked",
+                    side_effect=AssertionError("validator read source content"),
+                ):
+                    validated = validate_revision_reservation(
+                        project_root=root,
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                self.assertEqual(validated["status"], "passed")
+
+                plan_path = (
+                    root
+                    / "artifacts/v23/governance/revision_reservations"
+                    / recovered["protocol_revision_id"]
+                    / "plans/fresh_audit_reserve/edgar.json"
+                )
+                original_plan = plan_path.read_bytes()
+                tampered = json.loads(original_plan)
+                tampered["ordered_source_identity_objects"][0]["source_hash"] = (
+                    "f" * 64
+                )
+                plan_path.write_text(
+                    canonical_json(tampered) + "\n", encoding="utf-8"
+                )
+                try:
+                    with self.assertRaisesRegex(
+                        RuntimeError, "batch_incomplete"
+                    ):
+                        validate_revision_reservation(
+                            project_root=root,
+                            runtime_files=fixture["runtime_files"],
+                            dependency_lock_path=fixture["dependency_lock_path"],
+                            model_lock_path=fixture["model_lock_path"],
+                        )
+                finally:
+                    plan_path.write_bytes(original_plan)
+
+    def test_development_pilot_group_is_deterministic_resumable_and_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_stage_contracts(root)
+
+            def contract_for(_config: dict, dataset: str) -> dict:
+                return contracts[dataset]
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                side_effect=contract_for,
+            ), patch(
+                "src.prepare.restoration_first_v23._reservation_counts",
+                return_value=(2, 1),
+            ), patch(
+                "src.prepare.restoration_first_v23.capacity_decision",
+                side_effect=lambda **kwargs: _synthetic_capacity_decision(
+                    **kwargs
+                ),
+            ):
+                _run_synthetic_aggregate_group(root, fixture=fixture)
+                reservation_authorization = (
+                    prepare_revision_reservation_authorization(
+                        project_root=root,
+                        user_authorization_record="test reservation",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                )
+                reservation = run_revision_reservation(
+                    project_root=root,
+                    authorization_path=reservation_authorization[
+                        "authorization_path"
+                    ],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                ledger_path = (
+                    root / "artifacts/v23/governance/consumed_source_ledger.jsonl"
+                )
+                ledger_before_pilot = ledger_path.read_bytes()
+                for dataset in ("edgar", "enron", "pubmed"):
+                    authorization = prepare_development_pilot_authorization(
+                        project_root=root,
+                        dataset=dataset,
+                        user_authorization_record=f"test {dataset} pilot",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    if dataset == "edgar":
+                        interrupted = False
+
+                        def interrupt_once(source, token_df, source_count):
+                            nonlocal interrupted
+                            if not interrupted:
+                                interrupted = True
+                                raise KeyboardInterrupt(
+                                    "synthetic selector interruption"
+                                )
+                            return _synthetic_pilot_selector(
+                                source, token_df, source_count
+                            )
+
+                        with self.assertRaises(KeyboardInterrupt):
+                            run_development_pilot(
+                                project_root=root,
+                                dataset=dataset,
+                                authorization_path=authorization[
+                                    "authorization_path"
+                                ],
+                                runtime_files=fixture["runtime_files"],
+                                dependency_lock_path=fixture[
+                                    "dependency_lock_path"
+                                ],
+                                model_lock_path=fixture["model_lock_path"],
+                                selector=interrupt_once,
+                                model_runtime_identity={
+                                    "kind": "synthetic_test_selector",
+                                    "identity_sha256": "a" * 64,
+                                },
+                            )
+                        budget_path = (
+                            root
+                            / "artifacts/v23/governance/authorization_budgets"
+                            / f"{authorization['authorization_id']}.jsonl"
+                        )
+                        self.assertEqual(
+                            len(
+                                budget_path.read_text(
+                                    encoding="utf-8"
+                                ).splitlines()
+                            ),
+                            1,
+                        )
+                    result = run_development_pilot(
+                        project_root=root,
+                        dataset=dataset,
+                        authorization_path=authorization["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                        selector=_synthetic_pilot_selector,
+                        model_runtime_identity={
+                            "kind": "synthetic_test_selector",
+                            "identity_sha256": "a" * 64,
+                        },
+                    )
+                    self.assertEqual(result["status"], "passed")
+                    self.assertEqual(result["source_count"], 2)
+                    self.assertEqual(result["selected_pair_count"], 6)
+                group = validate_development_pilot_group(
+                    project_root=root,
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                self.assertEqual(group["status"], "passed")
+                self.assertEqual(group["cross_dataset_source_hash_overlap"], 0)
+                self.assertEqual(ledger_path.read_bytes(), ledger_before_pilot)
+                self.assertEqual(
+                    reservation["final_ledger_tip_sha256"],
+                    validate_ledger(ledger_path)["tip_sha256"],
+                )
+
+                result_path = (
+                    root
+                    / "artifacts/v23/selection/development/edgar/source_results/000000.json"
+                )
+                original_result = result_path.read_bytes()
+                tampered = json.loads(original_result)
+                tampered["selected_pairs"][0]["membership"] = "member"
+                tampered["source_result_sha256"] = canonical_sha256(
+                    {
+                        key: value
+                        for key, value in tampered.items()
+                        if key != "source_result_sha256"
+                    }
+                )
+                result_path.write_text(
+                    canonical_json(tampered) + "\n", encoding="utf-8"
+                )
+                try:
+                    with self.assertRaisesRegex(
+                        ValueError, "forbidden_selection_field"
+                    ):
+                        validate_development_pilot(
+                            project_root=root,
+                            dataset="edgar",
+                            runtime_files=fixture["runtime_files"],
+                            dependency_lock_path=fixture[
+                                "dependency_lock_path"
+                            ],
+                            model_lock_path=fixture["model_lock_path"],
+                        )
+                finally:
+                    result_path.write_bytes(original_result)
+
+    def test_development_pilot_capacity_failure_is_terminal_for_dataset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_stage_contracts(root)
+
+            def contract_for(_config: dict, dataset: str) -> dict:
+                return contracts[dataset]
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                side_effect=contract_for,
+            ), patch(
+                "src.prepare.restoration_first_v23._reservation_counts",
+                return_value=(2, 1),
+            ), patch(
+                "src.prepare.restoration_first_v23.capacity_decision",
+                side_effect=lambda **kwargs: _synthetic_capacity_decision(
+                    **kwargs, passed=False
+                ),
+            ):
+                _run_synthetic_aggregate_group(root, fixture=fixture)
+                reservation_authorization = (
+                    prepare_revision_reservation_authorization(
+                        project_root=root,
+                        user_authorization_record="test reservation",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                )
+                run_revision_reservation(
+                    project_root=root,
+                    authorization_path=reservation_authorization[
+                        "authorization_path"
+                    ],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                authorization = prepare_development_pilot_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test failed capacity pilot",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                result = run_development_pilot(
+                    project_root=root,
+                    dataset="edgar",
+                    authorization_path=authorization["authorization_path"],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                    selector=_synthetic_pilot_selector,
+                    model_runtime_identity={
+                        "kind": "synthetic_test_selector",
+                        "identity_sha256": "a" * 64,
+                    },
+                )
+                self.assertEqual(result["status"], "failed_development_gate")
+                checkpoint = next(
+                    (
+                        root
+                        / "artifacts/v23/checkpoints"
+                        / "development_pilot_and_capacity_gate/edgar"
+                    ).glob("*.json")
+                )
+                self.assertEqual(
+                    json.loads(checkpoint.read_text(encoding="utf-8"))["status"],
+                    "failed",
+                )
+                self.assertFalse(
+                    (
+                        root
+                        / "artifacts/v23/selection/development_gate"
+                        / result["protocol_revision_id"]
+                        / "group_manifest.json"
+                    ).exists()
+                )
 
 
 class V23EvaluationTests(unittest.TestCase):
