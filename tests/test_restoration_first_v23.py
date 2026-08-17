@@ -656,6 +656,23 @@ class V23SelectorTests(unittest.TestCase):
         self.assertTrue(all(len(row["rank_tuple"]) == 17 for row in first))
         self.assertTrue(all(row["true_claim"] == source["full_text"] for row in first))
 
+    def test_pair_generation_converts_sha256_source_order_rank_to_int(self):
+        source_order_rank = (
+            "000b7b915560d2dcf24d01721bb9e9f1419e4882bf3f73b4f7bfec8608167448"
+        )
+        source = {**_source(), "source_order_rank": source_order_rank}
+        candidate = {**_candidate(), "source_order_rank": source_order_rank}
+
+        pairs, reasons = build_pair_candidates(
+            source, candidate, token_df=_token_df(source), source_count=100
+        )
+
+        self.assertEqual(reasons, ())
+        self.assertTrue(pairs)
+        self.assertTrue(
+            all(row["source_order_rank"] == int(source_order_rank, 16) for row in pairs)
+        )
+
     def test_source_present_counterfactual_and_competing_filler_fail_closed(self):
         source = _source()
         candidate = _candidate(

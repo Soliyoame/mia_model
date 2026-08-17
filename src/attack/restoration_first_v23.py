@@ -631,7 +631,7 @@ def build_pair_candidates(
                 "source_key": candidate["source_key"],
                 "source_hash": text_sha256(source_text),
                 "normalized_text_hash": normalized_text_sha256(source_text),
-                "source_order_rank": int(candidate["source_order_rank"]),
+                "source_order_rank": int(candidate["source_order_rank"], 16),
                 "pair_id": pair_id,
                 "counterfactual_id": counterfactual_id,
                 "fact_signature": fact_id,
