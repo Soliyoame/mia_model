@@ -48,6 +48,7 @@ from src.prepare.restoration_first_v23 import (
     append_reservation_batch,
     allocate_bootstrap_attempt,
     allocate_attempt,
+    _legacy_development_partial_evidence,
     attempt_id,
     bootstrap_attempt_id,
     build_runtime_bundle_manifest,
@@ -124,6 +125,11 @@ def _bootstrap_fixture(root: Path) -> dict[str, object]:
         repository_root
         / "configs/restoration_first_v23.execution_erratum_e1.yaml",
         root / "configs/restoration_first_v23.execution_erratum_e1.yaml",
+    )
+    shutil.copy2(
+        repository_root
+        / "configs/restoration_first_v23.development_recovery_r1.yaml",
+        root / "configs/restoration_first_v23.development_recovery_r1.yaml",
     )
     runtime_path = root / "runtime.py"
     runtime_path.write_text("VALUE = 1\n", encoding="utf-8")
@@ -2540,6 +2546,7 @@ class V23GovernanceTests(unittest.TestCase):
                     root / "artifacts/v23/governance/consumed_source_ledger.jsonl"
                 )
                 ledger_before_pilot = ledger_path.read_bytes()
+                authorization_by_dataset = {}
                 for dataset in ("edgar", "enron", "pubmed"):
                     authorization = prepare_development_pilot_authorization(
                         project_root=root,
@@ -2549,6 +2556,7 @@ class V23GovernanceTests(unittest.TestCase):
                         dependency_lock_path=fixture["dependency_lock_path"],
                         model_lock_path=fixture["model_lock_path"],
                     )
+                    authorization_by_dataset[dataset] = authorization
                     if dataset == "edgar":
                         interrupted = False
 
@@ -2626,7 +2634,9 @@ class V23GovernanceTests(unittest.TestCase):
 
                 result_path = (
                     root
-                    / "artifacts/v23/selection/development/edgar/source_results/000000.json"
+                    / "artifacts/v23/selection/development/edgar/attempts"
+                    / authorization_by_dataset["edgar"]["attempt_id"]
+                    / "source_results/000000.json"
                 )
                 original_result = result_path.read_bytes()
                 tampered = json.loads(original_result)
@@ -2656,6 +2666,268 @@ class V23GovernanceTests(unittest.TestCase):
                         )
                 finally:
                     result_path.write_bytes(original_result)
+
+    def test_development_pilot_zero_result_partial_recovers_in_successor_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture, _ = _bootstrap_synthetic_runtime(root)
+            contracts = _synthetic_stage_contracts(root)
+
+            def contract_for(_config: dict, dataset: str) -> dict:
+                return contracts[dataset]
+
+            with patch(
+                "src.prepare.restoration_first_v23._aggregate_df_contracts",
+                side_effect=contract_for,
+            ), patch(
+                "src.prepare.restoration_first_v23._reservation_counts",
+                return_value=(2, 1),
+            ), patch(
+                "src.prepare.restoration_first_v23.capacity_decision",
+                side_effect=lambda **kwargs: _synthetic_capacity_decision(
+                    **kwargs
+                ),
+            ):
+                _run_synthetic_aggregate_group(root, fixture=fixture)
+                reservation_authorization = (
+                    prepare_revision_reservation_authorization(
+                        project_root=root,
+                        user_authorization_record="test initial reservation",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                )
+                initial_reservation = run_revision_reservation(
+                    project_root=root,
+                    authorization_path=reservation_authorization[
+                        "authorization_path"
+                    ],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                initial_authorization = prepare_development_pilot_authorization(
+                    project_root=root,
+                    dataset="edgar",
+                    user_authorization_record="test interrupted pilot",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+
+                def fail_before_result(_source, _token_df, _source_count):
+                    raise RuntimeError("synthetic pre-result failure")
+
+                def legacy_pilot_paths(
+                    project_root: Path, *, dataset: str, attempt: str
+                ) -> dict[str, Path]:
+                    pilot_root = (
+                        project_root
+                        / "artifacts/v23/selection/development"
+                        / dataset
+                    )
+                    return {
+                        "directory": pilot_root,
+                        "source_results": pilot_root / "source_results",
+                        "selected_pairs": pilot_root / "selected_pairs.jsonl",
+                        "manifest": pilot_root / "pilot_manifest.json",
+                        "checkpoint": (
+                            project_root
+                            / "artifacts/v23/checkpoints"
+                            / "development_pilot_and_capacity_gate"
+                            / dataset
+                            / f"{attempt}.json"
+                        ),
+                    }
+
+                with patch(
+                    "src.prepare.restoration_first_v23._development_pilot_paths",
+                    side_effect=legacy_pilot_paths,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "synthetic pre-result failure"
+                    ):
+                        run_development_pilot(
+                            project_root=root,
+                            dataset="edgar",
+                            authorization_path=initial_authorization[
+                                "authorization_path"
+                            ],
+                            runtime_files=fixture["runtime_files"],
+                            dependency_lock_path=fixture["dependency_lock_path"],
+                            model_lock_path=fixture["model_lock_path"],
+                            selector=fail_before_result,
+                            model_runtime_identity={
+                                "kind": "synthetic_test_selector",
+                                "identity_sha256": "a" * 64,
+                            },
+                        )
+                initial_authorization_path = (
+                    root / initial_authorization["authorization_path"]
+                )
+                initial_budget_path = (
+                    root
+                    / "artifacts/v23/governance/authorization_budgets"
+                    / f"{initial_authorization['authorization_id']}.jsonl"
+                )
+                initial_authorization_bytes = initial_authorization_path.read_bytes()
+                initial_budget_bytes = initial_budget_path.read_bytes()
+                legacy_results = (
+                    root
+                    / "artifacts/v23/selection/development/edgar/source_results"
+                )
+                self.assertTrue(legacy_results.is_dir())
+                self.assertEqual(list(legacy_results.iterdir()), [])
+
+                initial_active = validate_active_runtime(
+                    root,
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                fixture["runtime_path"].write_text("VALUE = 2\n", encoding="utf-8")
+                _run_git(root, "add", "runtime.py")
+                _run_git(root, "commit", "--quiet", "-m", "test: recovery runtime")
+                successor_authorization = prepare_runtime_successor_freeze_authorization(
+                    project_root=root,
+                    user_authorization_record="test recovery successor freeze",
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                successor = run_runtime_successor_freeze(
+                    project_root=root,
+                    authorization_path=successor_authorization[
+                        "authorization_path"
+                    ],
+                    runtime_files=fixture["runtime_files"],
+                    dependency_lock_path=fixture["dependency_lock_path"],
+                    model_lock_path=fixture["model_lock_path"],
+                )
+                revisions = {
+                    initial_active["runtime_bundle_sha256"]: initial_active[
+                        "protocol_revision_id"
+                    ],
+                    successor["runtime_bundle_sha256"]: successor[
+                        "protocol_revision_id"
+                    ],
+                }
+
+                def identity_for_bundle(
+                    _root: Path, *, stage: str, runtime_bundle_sha256: str
+                ) -> dict:
+                    revision = revisions[runtime_bundle_sha256]
+                    fingerprint = "f" * 64
+                    return {
+                        "stage": stage,
+                        "stage_dependency_fingerprint": fingerprint,
+                        "stage_execution_identity": canonical_sha256(
+                            {
+                                "stage": stage,
+                                "runtime_bundle_sha256": runtime_bundle_sha256,
+                                "protocol_revision_id": revision,
+                                "stage_dependency_fingerprint": fingerprint,
+                            }
+                        ),
+                    }
+
+                with patch(
+                    "src.prepare.restoration_first_v23._stage_identity_for_bundle",
+                    side_effect=identity_for_bundle,
+                ):
+                    carry_authorization = prepare_stage_carry_forward_authorization(
+                        project_root=root,
+                        stage="aggregate_df_precomputation",
+                        user_authorization_record="test recovery carry forward",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    run_stage_carry_forward(
+                        project_root=root,
+                        stage="aggregate_df_precomputation",
+                        authorization_path=carry_authorization[
+                            "authorization_path"
+                        ],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    recovered = prepare_development_pilot_authorization(
+                        project_root=root,
+                        dataset="edgar",
+                        user_authorization_record="test recovered pilot",
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                    )
+                    self.assertEqual(
+                        recovered["reservation_validation_mode"],
+                        "prior_revision_development_recovery",
+                    )
+                    self.assertTrue(recovered["recovery_attestation_path"])
+                    result = run_development_pilot(
+                        project_root=root,
+                        dataset="edgar",
+                        authorization_path=recovered["authorization_path"],
+                        runtime_files=fixture["runtime_files"],
+                        dependency_lock_path=fixture["dependency_lock_path"],
+                        model_lock_path=fixture["model_lock_path"],
+                        selector=_synthetic_pilot_selector,
+                        model_runtime_identity={
+                            "kind": "synthetic_test_selector",
+                            "identity_sha256": "a" * 64,
+                        },
+                    )
+                self.assertEqual(result["status"], "passed")
+                self.assertEqual(
+                    result["reservation_validation_mode"],
+                    "prior_revision_development_recovery",
+                )
+                self.assertEqual(
+                    initial_reservation["final_ledger_tip_sha256"],
+                    validate_ledger(
+                        root
+                        / "artifacts/v23/governance/consumed_source_ledger.jsonl"
+                    )["tip_sha256"],
+                )
+                self.assertEqual(
+                    initial_authorization_path.read_bytes(),
+                    initial_authorization_bytes,
+                )
+                self.assertEqual(initial_budget_path.read_bytes(), initial_budget_bytes)
+                self.assertEqual(list(legacy_results.iterdir()), [])
+                attempt_result = (
+                    root
+                    / "artifacts/v23/selection/development/edgar/attempts"
+                    / recovered["attempt_id"]
+                    / "source_results/000000.json"
+                )
+                self.assertTrue(attempt_result.is_file())
+
+    def test_development_recovery_rejects_any_prior_source_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_results = (
+                root
+                / "artifacts/v23/selection/development/edgar/source_results"
+            )
+            source_results.mkdir(parents=True)
+            (source_results / "000000.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                RuntimeError, "development_recovery_source_results_present"
+            ):
+                _legacy_development_partial_evidence(
+                    root,
+                    dataset="edgar",
+                    active={
+                        "protocol_revision_id": "a" * 64,
+                        "runtime_bundle_sha256": "b" * 64,
+                    },
+                )
 
     def test_development_pilot_capacity_failure_is_terminal_for_dataset(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -58,6 +58,15 @@ DESIGN_MANIFEST_SHA256 = "6a7163830f36b65247b7d6222f5adecfb18c85695a885cc0384128
 EXECUTION_ERRATUM = Path("configs/restoration_first_v23.execution_erratum_e1.yaml")
 EXECUTION_ERRATUM_SHA256 = "4245105e0058a3f8e326f7f1e57175665a2199a1e9ca82bc82402c477b08c279"
 EXECUTION_REVISION = "pcv-restoration-first-v23-design-r6-execution-e1"
+DEVELOPMENT_RECOVERY_CONTRACT = Path(
+    "configs/restoration_first_v23.development_recovery_r1.yaml"
+)
+DEVELOPMENT_RECOVERY_CONTRACT_SHA256 = (
+    "8b57250c66413352afc9707dfa0b582dbc6be2fa3e3816927994f4e2d22056ef"
+)
+DEVELOPMENT_RECOVERY_REVISION = (
+    "pcv-restoration-first-v23-design-r6-execution-e1-development-recovery-r1"
+)
 IMPLEMENTATION_STAGE = "runtime_implementation_and_tests"
 ZERO_SHA256 = "0" * 64
 GENESIS_SENTINEL = "genesis_sentinel"
@@ -65,6 +74,7 @@ DATASET_ORDER = ("edgar", "enron", "pubmed")
 RUNTIME_BUNDLE_FILES = (
     "configs/entity_type_policy_v21_r1.yaml",
     "configs/restoration_first_v23.design_manifest.json",
+    "configs/restoration_first_v23.development_recovery_r1.yaml",
     "configs/restoration_first_v23.execution_erratum_e1.yaml",
     "configs/restoration_first_v23.yaml",
     "configs/semantic_entity_models_v6_3.lock.yaml",
@@ -104,6 +114,9 @@ STAGE_COMPATIBILITY_AUTH_DIRECTORY = (
 REVISION_RESERVATION_DIRECTORY = ARTIFACT_ROOT / "governance/revision_reservations"
 DEVELOPMENT_SELECTION_DIRECTORY = ARTIFACT_ROOT / "selection/development"
 DEVELOPMENT_GATE_DIRECTORY = ARTIFACT_ROOT / "selection/development_gate"
+DEVELOPMENT_RECOVERY_DIRECTORY = (
+    ARTIFACT_ROOT / "governance/development_pilot_recoveries"
+)
 STAGE_CARRY_FORWARD = "stage_artifact_carry_forward"
 STAGE_COMPATIBILITY_AUTH_FIELDS = {
     "kind",
@@ -386,6 +399,43 @@ DEVELOPMENT_PILOT_MANIFEST_FIELDS = {
     "external_calls_performed",
     "completed_at",
 }
+DEVELOPMENT_RECOVERY_ATTESTATION_FIELDS = {
+    "kind",
+    "recovery_id",
+    "recovery_revision",
+    "recovery_contract_sha256",
+    "dataset",
+    "new_authorization_id",
+    "new_protocol_revision_id",
+    "new_runtime_bundle_sha256",
+    "new_attempt_id",
+    "reservation_validation_mode",
+    "prior_reservation_protocol_revision_id",
+    "prior_reservation_runtime_bundle_sha256",
+    "prior_reservation_authorization_id",
+    "prior_reservation_attempt_id",
+    "prior_reservation_group_completion_path",
+    "prior_reservation_group_completion_file_sha256",
+    "prior_reservation_checkpoint_file_sha256",
+    "prior_reservation_final_ledger_tip_sha256",
+    "prior_partial_attempt_or_null",
+    "created_at",
+    "external_calls_performed",
+}
+DEVELOPMENT_RECOVERY_PARTIAL_FIELDS = {
+    "authorization_id",
+    "protocol_revision_id",
+    "runtime_bundle_sha256",
+    "attempt_id",
+    "authorization_file_sha256",
+    "budget_journal_file_sha256",
+    "budget_charge_count",
+    "source_result_directory",
+    "source_result_count",
+    "checkpoint_present",
+    "canonical_selected_pairs_present",
+    "canonical_pilot_manifest_present",
+}
 DEVELOPMENT_GATE_MANIFEST_FIELDS = {
     "kind",
     "protocol_revision_id",
@@ -563,6 +613,73 @@ def load_execution_erratum(project_root: str | Path = ".") -> dict[str, Any]:
     contract = load_stage_dependency_contract(path)
     if contract["execution_revision"] != EXECUTION_REVISION:
         raise RuntimeError("v23_execution_erratum_identity_drift")
+    return contract
+
+
+def load_development_recovery_contract(
+    project_root: str | Path = ".",
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    path = _resolve(DEVELOPMENT_RECOVERY_CONTRACT, root)
+    if (
+        not path.is_file()
+        or sha256_file(path) != DEVELOPMENT_RECOVERY_CONTRACT_SHA256
+    ):
+        raise RuntimeError("development_recovery_contract_hash_drift")
+    contract = load_yaml(path)
+    expected = {
+        "kind": "pcv_v23_development_pilot_recovery_contract",
+        "recovery_revision": DEVELOPMENT_RECOVERY_REVISION,
+        "base_execution_revision": EXECUTION_REVISION,
+        "scope": (
+            "zero_source_result_operational_failure_before_canonical_"
+            "development_output"
+        ),
+        "allowed_datasets": list(DATASET_ORDER),
+        "reservation_prerequisite": {
+            "validation_mode": "latest_prior_passed_revision_development_only",
+            "active_revision_reservation_must_be_absent": True,
+            "current_ledger_tip_must_equal_prior_reservation_final_tip": True,
+            "development_batch_identity_must_remain_exact": True,
+            "fresh_audit_reserve_reuse_authorized": False,
+        },
+        "partial_attempt_recovery": {
+            "prior_protocol_revision_must_differ": True,
+            "prior_authorization_must_validate": True,
+            "prior_budget_journal_must_validate": True,
+            "minimum_prior_budget_charge_count": 1,
+            "prior_source_result_count": 0,
+            "prior_checkpoint_must_be_absent": True,
+            "canonical_selected_pairs_must_be_absent": True,
+            "canonical_pilot_manifest_must_be_absent": True,
+            "unexpected_legacy_entries_rejected": True,
+        },
+        "artifact_layout": {
+            "source_results_path_pattern": (
+                "artifacts/v23/selection/development/<dataset>/attempts/"
+                "<attempt_id>/source_results"
+            ),
+            "canonical_selected_pairs_path_pattern": (
+                "artifacts/v23/selection/development/<dataset>/selected_pairs.jsonl"
+            ),
+            "canonical_pilot_manifest_path_pattern": (
+                "artifacts/v23/selection/development/<dataset>/pilot_manifest.json"
+            ),
+            "recovery_attestation_path_pattern": (
+                "artifacts/v23/governance/development_pilot_recoveries/"
+                "<authorization_id>.json"
+            ),
+        },
+        "invariants": {
+            "old_authorization_budget_and_partial_artifacts_immutable": True,
+            "recovery_attestation_required_before_new_source_visibility": True,
+            "membership_victim_llm_only_retriever_auc_visible": False,
+            "external_calls_allowed": False,
+            "failed_or_nonempty_prior_attempt_auto_recovery": False,
+        },
+    }
+    if contract != expected:
+        raise RuntimeError("development_recovery_contract_identity_drift")
     return contract
 
 
@@ -4896,11 +5013,13 @@ def validate_revision_reservation(
     runtime_files: Sequence[str] | None = None,
     dependency_lock_path: str | Path = DEPENDENCY_LOCK_PATH,
     model_lock_path: str | Path = MODEL_LOCK_PATH,
+    _target_protocol_revision_id: str | None = None,
+    _target_runtime_bundle_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Validate the reservation transaction without reading source contents."""
 
     root = Path(project_root).resolve()
-    active = validate_active_runtime(
+    current_active = validate_active_runtime(
         root,
         runtime_files=runtime_files,
         dependency_lock_path=dependency_lock_path,
@@ -4912,6 +5031,27 @@ def validate_revision_reservation(
         dependency_lock_path=dependency_lock_path,
         model_lock_path=model_lock_path,
     )
+    if (_target_protocol_revision_id is None) != (
+        _target_runtime_bundle_sha256 is None
+    ):
+        raise ValueError("revision_reservation_target_identity_incomplete")
+    active = current_active
+    if _target_protocol_revision_id is not None:
+        lineage = _load_runtime_lineage(root)
+        matches = [
+            revision
+            for revision in lineage["revisions"]
+            if revision["protocol_revision_id"]
+            == _target_protocol_revision_id
+            and revision["runtime_bundle_sha256"]
+            == _target_runtime_bundle_sha256
+        ]
+        if len(matches) != 1:
+            raise RuntimeError("revision_reservation_target_identity_unknown")
+        active = {
+            "protocol_revision_id": _target_protocol_revision_id,
+            "runtime_bundle_sha256": _target_runtime_bundle_sha256,
+        }
     authorization_paths = _stage_authorization_paths(
         root,
         stage=RESERVATION_STAGE,
@@ -5297,7 +5437,7 @@ def _development_pilot_paths(
     directory = _resolve(DEVELOPMENT_SELECTION_DIRECTORY / dataset, root)
     return {
         "directory": directory,
-        "source_results": directory / "source_results",
+        "source_results": directory / "attempts" / attempt / "source_results",
         "selected_pairs": directory / "selected_pairs.jsonl",
         "manifest": directory / "pilot_manifest.json",
         "checkpoint": _resolve(
@@ -5355,6 +5495,383 @@ def _development_batch_evidence(
     }
 
 
+def _latest_prior_reservation_for_development(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    runtime_files: Sequence[str] | None,
+    dependency_lock_path: str | Path,
+    model_lock_path: str | Path,
+) -> dict[str, Any]:
+    load_development_recovery_contract(root)
+    if _stage_authorization_paths(
+        root,
+        stage=RESERVATION_STAGE,
+        runtime_bundle_sha256=str(active["runtime_bundle_sha256"]),
+        datasets=DATASET_ORDER,
+    ) or _reservation_directory(
+        root, str(active["protocol_revision_id"])
+    ).exists():
+        raise RuntimeError("development_recovery_active_reservation_started")
+    lineage = _load_runtime_lineage(root)
+    candidates: list[dict[str, Any]] = []
+    for revision in lineage["revisions"]:
+        if revision["protocol_revision_id"] == active["protocol_revision_id"]:
+            continue
+        authorization_paths = _stage_authorization_paths(
+            root,
+            stage=RESERVATION_STAGE,
+            runtime_bundle_sha256=revision["runtime_bundle_sha256"],
+            datasets=DATASET_ORDER,
+        )
+        completion_path = (
+            _reservation_directory(root, revision["protocol_revision_id"])
+            / "group_completion.json"
+        )
+        if len(authorization_paths) == 1 and completion_path.is_file():
+            candidates.append(revision)
+    if not candidates:
+        raise RuntimeError("development_recovery_prior_reservation_missing")
+    prior_revision = max(
+        candidates, key=lambda item: int(item["revision_ordinal"])
+    )
+    validated = validate_revision_reservation(
+        project_root=root,
+        runtime_files=runtime_files,
+        dependency_lock_path=dependency_lock_path,
+        model_lock_path=model_lock_path,
+        _target_protocol_revision_id=prior_revision["protocol_revision_id"],
+        _target_runtime_bundle_sha256=prior_revision[
+            "runtime_bundle_sha256"
+        ],
+    )
+    ledger = validate_ledger(_resolve(CONSUMPTION_LEDGER, root))
+    if ledger["tip_sha256"] != validated["final_ledger_tip_sha256"]:
+        raise RuntimeError("development_recovery_ledger_advanced")
+    completion_path = (
+        _reservation_directory(root, prior_revision["protocol_revision_id"])
+        / "group_completion.json"
+    )
+    checkpoint_path = _reservation_checkpoint_path(
+        root,
+        protocol_revision=prior_revision["protocol_revision_id"],
+        attempt=validated["attempt_id"],
+    )
+    return {
+        **validated,
+        "validation_mode": "prior_revision_development_recovery",
+        "group_completion_path": completion_path,
+        "checkpoint_path": checkpoint_path,
+    }
+
+
+def _development_reservation_prerequisite(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    runtime_files: Sequence[str] | None,
+    dependency_lock_path: str | Path,
+    model_lock_path: str | Path,
+) -> dict[str, Any]:
+    try:
+        validated = validate_revision_reservation(
+            project_root=root,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+    except RuntimeError as exc:
+        if str(exc) != "revision_reservation_authorization_count_invalid":
+            raise
+        return _latest_prior_reservation_for_development(
+            root,
+            active=active,
+            runtime_files=runtime_files,
+            dependency_lock_path=dependency_lock_path,
+            model_lock_path=model_lock_path,
+        )
+    return {
+        **validated,
+        "validation_mode": "native",
+        "group_completion_path": (
+            _reservation_directory(root, active["protocol_revision_id"])
+            / "group_completion.json"
+        ),
+        "checkpoint_path": _reservation_checkpoint_path(
+            root,
+            protocol_revision=active["protocol_revision_id"],
+            attempt=validated["attempt_id"],
+        ),
+    }
+
+
+def _legacy_development_partial_evidence(
+    root: Path, *, dataset: str, active: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    directory = _resolve(DEVELOPMENT_SELECTION_DIRECTORY / dataset, root)
+    if not directory.exists():
+        return None
+    selected_pairs = directory / "selected_pairs.jsonl"
+    manifest = directory / "pilot_manifest.json"
+    if selected_pairs.exists() or manifest.exists():
+        raise RuntimeError("development_recovery_canonical_output_present")
+    entries = sorted(path.name for path in directory.iterdir())
+    if entries != ["source_results"]:
+        raise RuntimeError("development_recovery_legacy_entries_invalid")
+    source_results = directory / "source_results"
+    if not source_results.is_dir() or any(source_results.iterdir()):
+        raise RuntimeError("development_recovery_source_results_present")
+    checkpoint_directory = _resolve(
+        ARTIFACT_ROOT / "checkpoints" / DEVELOPMENT_PILOT_STAGE / dataset,
+        root,
+    )
+    if _directory_has_entries(checkpoint_directory):
+        raise RuntimeError("development_recovery_prior_checkpoint_present")
+    prior_paths: list[Path] = []
+    authorization_directory = _resolve(RUN_AUTH_DIRECTORY, root)
+    for path in (
+        authorization_directory.glob("*.json")
+        if authorization_directory.exists()
+        else ()
+    ):
+        value = _read_json_exact(path)
+        if (
+            value.get("authorized_stage") == DEVELOPMENT_PILOT_STAGE
+            and value.get("datasets") == [dataset]
+            and value.get("runtime_bundle_sha256")
+            != active["runtime_bundle_sha256"]
+        ):
+            prior_paths.append(path)
+    if len(prior_paths) != 1:
+        raise RuntimeError("development_recovery_prior_authorization_ambiguous")
+    prior, _ = _load_stage_run_authorization_file(
+        root=root,
+        authorization_path=prior_paths[0],
+        stage=DEVELOPMENT_PILOT_STAGE,
+        execution_unit="one_dataset",
+        datasets=[dataset],
+    )
+    if prior["protocol_revision_id"] == active["protocol_revision_id"]:
+        raise RuntimeError("development_recovery_prior_revision_not_distinct")
+    budget_path = _resolve(
+        BUDGET_DIRECTORY / f"{prior['authorization_id']}.jsonl", root
+    )
+    charged_count, _, _ = _read_budget_state(budget_path, prior)
+    if (
+        not budget_path.is_file()
+        or charged_count < 1
+        or charged_count >= prior["budget_limit"]
+    ):
+        raise RuntimeError("development_recovery_prior_budget_invalid")
+    checkpoint = _development_pilot_paths(
+        root, dataset=dataset, attempt=prior["attempt_id"]
+    )["checkpoint"]
+    if checkpoint.exists():
+        raise RuntimeError("development_recovery_prior_checkpoint_present")
+    return {
+        "authorization_id": prior["authorization_id"],
+        "protocol_revision_id": prior["protocol_revision_id"],
+        "runtime_bundle_sha256": prior["runtime_bundle_sha256"],
+        "attempt_id": prior["attempt_id"],
+        "authorization_file_sha256": sha256_file(prior_paths[0]),
+        "budget_journal_file_sha256": sha256_file(budget_path),
+        "budget_charge_count": charged_count,
+        "source_result_directory": _relative(source_results, root),
+        "source_result_count": 0,
+        "checkpoint_present": False,
+        "canonical_selected_pairs_present": False,
+        "canonical_pilot_manifest_present": False,
+    }
+
+
+def _write_development_recovery_attestation(
+    root: Path,
+    *,
+    active: Mapping[str, Any],
+    dataset: str,
+    authorization: Mapping[str, Any],
+    reservation: Mapping[str, Any],
+    prior_partial: Mapping[str, Any] | None,
+) -> Path | None:
+    if reservation["validation_mode"] == "native" and prior_partial is None:
+        return None
+    attestation = {
+        "kind": "v23_development_pilot_recovery_attestation",
+        "recovery_revision": DEVELOPMENT_RECOVERY_REVISION,
+        "recovery_contract_sha256": DEVELOPMENT_RECOVERY_CONTRACT_SHA256,
+        "dataset": dataset,
+        "new_authorization_id": authorization["authorization_id"],
+        "new_protocol_revision_id": active["protocol_revision_id"],
+        "new_runtime_bundle_sha256": active["runtime_bundle_sha256"],
+        "new_attempt_id": authorization["attempt_id"],
+        "reservation_validation_mode": reservation["validation_mode"],
+        "prior_reservation_protocol_revision_id": reservation[
+            "protocol_revision_id"
+        ],
+        "prior_reservation_runtime_bundle_sha256": reservation[
+            "runtime_bundle_sha256"
+        ],
+        "prior_reservation_authorization_id": reservation["authorization_id"],
+        "prior_reservation_attempt_id": reservation["attempt_id"],
+        "prior_reservation_group_completion_path": _relative(
+            Path(reservation["group_completion_path"]), root
+        ),
+        "prior_reservation_group_completion_file_sha256": reservation[
+            "group_completion_file_sha256"
+        ],
+        "prior_reservation_checkpoint_file_sha256": reservation[
+            "checkpoint_file_sha256"
+        ],
+        "prior_reservation_final_ledger_tip_sha256": reservation[
+            "final_ledger_tip_sha256"
+        ],
+        "prior_partial_attempt_or_null": (
+            dict(prior_partial) if prior_partial is not None else None
+        ),
+        "created_at": utc_now(),
+        "external_calls_performed": 0,
+    }
+    attestation["recovery_id"] = canonical_sha256(attestation)
+    path = _resolve(
+        DEVELOPMENT_RECOVERY_DIRECTORY
+        / f"{authorization['authorization_id']}.json",
+        root,
+    )
+    _write_new_canonical_json(path, attestation)
+    return path
+
+
+def _validate_development_recovery_attestation(
+    root: Path,
+    *,
+    dataset: str,
+    authorization: Mapping[str, Any],
+    reservation: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    load_development_recovery_contract(root)
+    path = _resolve(
+        DEVELOPMENT_RECOVERY_DIRECTORY
+        / f"{authorization['authorization_id']}.json",
+        root,
+    )
+    legacy_results = _resolve(
+        DEVELOPMENT_SELECTION_DIRECTORY / dataset / "source_results", root
+    )
+    required = (
+        reservation["validation_mode"] != "native" or legacy_results.exists()
+    )
+    if not path.is_file():
+        if required:
+            raise RuntimeError("development_recovery_attestation_missing")
+        return None
+    attestation = _read_json_exact(path)
+    _assert_exact_fields(
+        attestation,
+        DEVELOPMENT_RECOVERY_ATTESTATION_FIELDS,
+        kind="development_recovery_attestation",
+    )
+    claimed = attestation["recovery_id"]
+    if (
+        canonical_sha256(
+            {
+                key: value
+                for key, value in attestation.items()
+                if key != "recovery_id"
+            }
+        )
+        != claimed
+        or attestation["kind"]
+        != "v23_development_pilot_recovery_attestation"
+        or attestation["recovery_revision"] != DEVELOPMENT_RECOVERY_REVISION
+        or attestation["recovery_contract_sha256"]
+        != DEVELOPMENT_RECOVERY_CONTRACT_SHA256
+        or attestation["dataset"] != dataset
+        or attestation["new_authorization_id"]
+        != authorization["authorization_id"]
+        or attestation["new_protocol_revision_id"]
+        != authorization["protocol_revision_id"]
+        or attestation["new_runtime_bundle_sha256"]
+        != authorization["runtime_bundle_sha256"]
+        or attestation["new_attempt_id"] != authorization["attempt_id"]
+        or attestation["reservation_validation_mode"]
+        != reservation["validation_mode"]
+        or attestation["prior_reservation_protocol_revision_id"]
+        != reservation["protocol_revision_id"]
+        or attestation["prior_reservation_runtime_bundle_sha256"]
+        != reservation["runtime_bundle_sha256"]
+        or attestation["prior_reservation_authorization_id"]
+        != reservation["authorization_id"]
+        or attestation["prior_reservation_attempt_id"]
+        != reservation["attempt_id"]
+        or attestation["prior_reservation_group_completion_file_sha256"]
+        != reservation["group_completion_file_sha256"]
+        or attestation["prior_reservation_checkpoint_file_sha256"]
+        != reservation["checkpoint_file_sha256"]
+        or attestation["prior_reservation_final_ledger_tip_sha256"]
+        != reservation["final_ledger_tip_sha256"]
+        or attestation["external_calls_performed"] != 0
+    ):
+        raise RuntimeError("development_recovery_attestation_drift")
+    completion_path = _resolve(
+        attestation["prior_reservation_group_completion_path"], root
+    )
+    if (
+        completion_path != Path(reservation["group_completion_path"])
+        or sha256_file(completion_path)
+        != attestation["prior_reservation_group_completion_file_sha256"]
+        or validate_ledger(_resolve(CONSUMPTION_LEDGER, root))["tip_sha256"]
+        != attestation["prior_reservation_final_ledger_tip_sha256"]
+    ):
+        raise RuntimeError("development_recovery_reservation_evidence_drift")
+    partial = attestation["prior_partial_attempt_or_null"]
+    if partial is not None:
+        if not isinstance(partial, Mapping):
+            raise RuntimeError("development_recovery_partial_schema_drift")
+        _assert_exact_fields(
+            partial,
+            DEVELOPMENT_RECOVERY_PARTIAL_FIELDS,
+            kind="development_recovery_partial",
+        )
+        prior_path = _resolve(
+            RUN_AUTH_DIRECTORY / f"{partial['authorization_id']}.json", root
+        )
+        prior, _ = _load_stage_run_authorization_file(
+            root=root,
+            authorization_path=prior_path,
+            stage=DEVELOPMENT_PILOT_STAGE,
+            execution_unit="one_dataset",
+            datasets=[dataset],
+        )
+        budget_path = _resolve(
+            BUDGET_DIRECTORY / f"{partial['authorization_id']}.jsonl", root
+        )
+        charged_count, _, _ = _read_budget_state(budget_path, prior)
+        source_results = _resolve(partial["source_result_directory"], root)
+        checkpoint = _development_pilot_paths(
+            root, dataset=dataset, attempt=partial["attempt_id"]
+        )["checkpoint"]
+        if (
+            set(partial) != DEVELOPMENT_RECOVERY_PARTIAL_FIELDS
+            or prior["protocol_revision_id"] != partial["protocol_revision_id"]
+            or prior["runtime_bundle_sha256"]
+            != partial["runtime_bundle_sha256"]
+            or prior["attempt_id"] != partial["attempt_id"]
+            or sha256_file(prior_path) != partial["authorization_file_sha256"]
+            or sha256_file(budget_path)
+            != partial["budget_journal_file_sha256"]
+            or charged_count != partial["budget_charge_count"]
+            or not source_results.is_dir()
+            or any(source_results.iterdir())
+            or partial["source_result_count"] != 0
+            or checkpoint.exists()
+            or partial["checkpoint_present"] is not False
+            or partial["canonical_selected_pairs_present"] is not False
+            or partial["canonical_pilot_manifest_present"] is not False
+        ):
+            raise RuntimeError("development_recovery_partial_evidence_drift")
+    return attestation
+
+
 def prepare_development_pilot_authorization(
     *,
     project_root: str | Path,
@@ -5377,8 +5894,9 @@ def prepare_development_pilot_authorization(
             dependency_lock_path=dependency_lock_path,
             model_lock_path=model_lock_path,
         )
-        validate_revision_reservation(
-            project_root=root,
+        reservation = _development_reservation_prerequisite(
+            root,
+            active=active,
             runtime_files=runtime_files,
             dependency_lock_path=dependency_lock_path,
             model_lock_path=model_lock_path,
@@ -5416,9 +5934,12 @@ def prepare_development_pilot_authorization(
             ARTIFACT_ROOT / "checkpoints" / DEVELOPMENT_PILOT_STAGE / dataset,
             root,
         )
+        prior_partial = _legacy_development_partial_evidence(
+            root, dataset=dataset, active=active
+        )
         if (
             existing
-            or directory.exists()
+            or (directory.exists() and prior_partial is None)
             or _directory_has_entries(checkpoint_directory)
         ):
             raise RuntimeError("development_pilot_attempt_or_artifact_already_exists")
@@ -5453,9 +5974,23 @@ def prepare_development_pilot_authorization(
             RUN_AUTH_DIRECTORY / f"{authorization['authorization_id']}.json", root
         )
         _write_new_canonical_json(path, authorization)
+        recovery_attestation_path = _write_development_recovery_attestation(
+            root,
+            active=active,
+            dataset=dataset,
+            authorization=authorization,
+            reservation=reservation,
+            prior_partial=prior_partial,
+        )
     return {
         **authorization,
         "authorization_path": _relative(path, root),
+        "reservation_validation_mode": reservation["validation_mode"],
+        "recovery_attestation_path": (
+            _relative(recovery_attestation_path, root)
+            if recovery_attestation_path is not None
+            else None
+        ),
         "source_pool_contents_read": False,
         "ledger_mutation": False,
         "external_calls_performed": 0,
@@ -5865,8 +6400,9 @@ def run_development_pilot(
             or authorization["run_roles"] != ["development"]
         ):
             raise RuntimeError("development_pilot_active_runtime_drift")
-        validate_revision_reservation(
-            project_root=root,
+        reservation = _development_reservation_prerequisite(
+            root,
+            active=active,
             runtime_files=runtime_files,
             dependency_lock_path=dependency_lock_path,
             model_lock_path=model_lock_path,
@@ -5884,6 +6420,12 @@ def run_development_pilot(
             raise RuntimeError("development_pilot_budget_limit_drift")
         paths = _development_pilot_paths(
             root, dataset=dataset, attempt=authorization["attempt_id"]
+        )
+        _validate_development_recovery_attestation(
+            root,
+            dataset=dataset,
+            authorization=authorization,
+            reservation=reservation,
         )
         if paths["checkpoint"].exists():
             completed = validate_development_pilot(
@@ -5920,10 +6462,7 @@ def run_development_pilot(
         development = _development_batch_evidence(
             root, dataset=dataset, expected_count=development_count
         )
-        reservation_completion = (
-            _reservation_directory(root, active["protocol_revision_id"])
-            / "group_completion.json"
-        )
+        reservation_completion = Path(reservation["group_completion_path"])
         reservation_completion_sha256 = sha256_file(reservation_completion)
         pool = _aggregate_df_contracts(config, dataset)["pool"]
         token_df = _load_validated_token_df(
@@ -6245,8 +6784,9 @@ def validate_development_pilot(
         dependency_lock_path=dependency_lock_path,
         model_lock_path=model_lock_path,
     )
-    reservation = validate_revision_reservation(
-        project_root=root,
+    reservation = _development_reservation_prerequisite(
+        root,
+        active=active,
         runtime_files=runtime_files,
         dependency_lock_path=dependency_lock_path,
         model_lock_path=model_lock_path,
@@ -6270,6 +6810,12 @@ def validate_development_pilot(
     )
     paths = _development_pilot_paths(
         root, dataset=dataset, attempt=authorization["attempt_id"]
+    )
+    _validate_development_recovery_attestation(
+        root,
+        dataset=dataset,
+        authorization=authorization,
+        reservation=reservation,
     )
     manifest = _read_json_exact(paths["manifest"])
     _assert_exact_fields(
@@ -6343,10 +6889,7 @@ def validate_development_pilot(
         and capacity["status"] == "passed"
         else "failed_development_gate"
     )
-    reservation_completion_path = (
-        _reservation_directory(root, active["protocol_revision_id"])
-        / "group_completion.json"
-    )
+    reservation_completion_path = Path(reservation["group_completion_path"])
     if (
         manifest["kind"] != "v23_development_pilot_manifest"
         or manifest["protocol_revision_id"] != active["protocol_revision_id"]
@@ -6447,6 +6990,7 @@ def validate_development_pilot(
         "authorization_id": authorization["authorization_id"],
         "authorization_file_sha256": sha256_file(authorization_path),
         "attempt_id": authorization["attempt_id"],
+        "reservation_validation_mode": reservation["validation_mode"],
         "source_count": development_count,
         "eligible_source_count": eligible_count,
         "selected_pair_count": len(selected_pairs),
