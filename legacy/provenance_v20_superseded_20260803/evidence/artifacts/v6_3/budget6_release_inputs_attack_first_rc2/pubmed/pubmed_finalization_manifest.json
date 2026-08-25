@@ -1,0 +1,25 @@
+{
+  "dataset": "pubmed",
+  "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+  "scan_plan_sha256": "486ab96ddf7c8eb7db168accc8812e7eb35df949386f69e66858f920f3e68044",
+  "scan_checkpoint_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\pubmed\\pubmed_budget6_release_checkpoint.json",
+  "scan_checkpoint_sha256": "ba05409813215f472db6277f690fbb2fcf68841b58ea7399ae9a9b1d12c7460d",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "semantic_resolver_protocol": "local_claim_pair_v6_3_precision_cascade",
+  "semantic_schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "gliner_inference_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "status": "complete",
+  "outputs": {
+    "query_eligibility": {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\pubmed\\pubmed_query_eligible_sources.json",
+      "sha256": "3231e2786c912df99f0ce80704dda03fddcf8c0aa5e3a44066285649e66b92df"
+    }
+  }
+}

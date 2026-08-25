@@ -1,0 +1,42 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "edgar",
+  "seed": 42,
+  "decisions": [
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000416",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000761"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "Reserve": 1
+      },
+      "assigned_group": "Reserve",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000237",
+          "from": "Reserve",
+          "to": "KB_Member"
+        }
+      ]
+    }
+  ],
+  "changed_sources": {
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000761": {
+      "from": "KB_Member",
+      "to": "Reserve"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000237": {
+      "from": "Reserve",
+      "to": "KB_Member"
+    }
+  },
+  "final_source_counts": {
+    "KB_Member": 500,
+    "Reserve": 250,
+    "True_Non_Member": 500
+  },
+  "backup_root": "D:\\MIA\\mia_model\\legacy\\pre_response_regroup_20260731\\edgar",
+  "api_calls_made": 0
+}

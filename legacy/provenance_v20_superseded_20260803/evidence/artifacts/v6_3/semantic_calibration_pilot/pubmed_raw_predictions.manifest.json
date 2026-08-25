@@ -1,0 +1,23 @@
+{
+  "dataset": "pubmed",
+  "source_path": "D:\\MIA\\mia_model\\artifacts\\v19\\audits\\claim_pair_ai_adjudication\\pubmed_claim_pair_ai_adjudication.jsonl",
+  "source_sha256": "91f3bba45f39ef85e1f4c069e89ba401e710ec63bfcad6820b00db6a7ab59f4c",
+  "model_lock_path": "D:\\MIA\\mia_model\\configs\\semantic_entity_models_v6_3.lock.yaml",
+  "model_lock_sha256": "597e0e39afd55a1fe0df43f7cd0027895afc7c980cba2f6eb517171a833de3bf",
+  "schema_sha256": "fc85eeb88175a29f451946d09f4d86dceb6cdd8805d43fbfce19cd57e9e1f3d3",
+  "max_rows_per_dataset": 2,
+  "created_at": "2026-07-24T02:14:01.711804+00:00",
+  "rows": 2,
+  "labels": {
+    "pass": 1,
+    "fail": 1
+  },
+  "entity_types": {
+    "LOCATION": 1,
+    "PRODUCT": 1
+  },
+  "api_calls_performed": 0,
+  "label_scope": "AI-assisted historical development labels; not a release audit and not a two-human blind annotation.",
+  "output_path": "artifacts\\v6_3\\semantic_calibration_pilot\\pubmed_raw_predictions.jsonl",
+  "output_sha256": "6b4611e57a5922fdc076f217572517c73c8810fcf36c064a76143ba94dd2693e"
+}

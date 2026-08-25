@@ -1,0 +1,26 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "method_version": "pcv-rag-only-source-v20",
+  "execution": "source_block_interleaved",
+  "seed": 42,
+  "datasets": [
+    "edgar",
+    "enron",
+    "pubmed"
+  ],
+  "cells": [
+    "dense",
+    "bm25",
+    "hybrid",
+    "none"
+  ],
+  "request_count": 90000,
+  "source_block_request_count": 24,
+  "query_hashes": {
+    "edgar": "250a392f18db2e91a56a8ace8d75c79e9e96be8d2b8289f67dfe0dafba28ff0d",
+    "enron": "627405f676fed6420a1031165829a8f6f2bfe0c929c29109e8095b9c4bdd798f",
+    "pubmed": "cb47ed253ab48688b8055c7ad9985779ebe467c2cd36dad9bf795a642a2dd993"
+  },
+  "schedule_hash": "38dd6a542df0ee2123eca84bbbfc5ba3b70f3726c7703e6695fefc9369c49312",
+  "identity_hash": "a2d8fe465a3cb3c27c594b10e46502d27e778b43d090413dad0448e144df79b1"
+}

@@ -1,0 +1,159 @@
+{
+  "dataset": "pubmed",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\pubmed.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\pubmed.errors.jsonl",
+  "membership_unit": "pmcid_article",
+  "cleaner_version": null,
+  "chunk_limit": 50000,
+  "source_limit": null,
+  "raw_unique_source_count": 3767,
+  "unique_source_count": 3666,
+  "raw_sample_count": 3767,
+  "cleaned_sample_count": 50011,
+  "avg_length": 1843.751754613985,
+  "entity_density_distribution": {
+    "min": 0.002387,
+    "max": 1.125,
+    "avg": 0.04021994281258123
+  },
+  "examples": [
+    {
+      "doc_id": "pubmed_000000",
+      "source_id": "PMC7431518",
+      "text_preview": "Introduction: For patients with localized node-negative (Stage I and II) clear cell renal cell carcinomas (ccRCC), current clinicopathological staging has limited predictive capability because of their low risk. Analyzing molecular signatures at the time of nephrectomy can aid in understanding futur",
+      "metadata": {
+        "length": 1909,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": true,
+        "has_medical_value": true,
+        "has_contract_term": false,
+        "entity_count": 6,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 2,
+          "org": 0,
+          "email": 0,
+          "medical_value": 4,
+          "contract_term": 0,
+          "numeric": 13
+        },
+        "entity_density": 0.020619
+      }
+    },
+    {
+      "doc_id": "pubmed_000001",
+      "source_id": "PMC7431518",
+      "text_preview": "Therefore, patients with clinicopathologically defined low risk ccRCC (stage I and II) who develop a distant recurrence within 5 years represent a unique cohort of patients, where understanding the biology of the key molecular factors driving progression to metastatic disease can help supplement cli",
+      "metadata": {
+        "length": 1996,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": false,
+        "has_medical_value": true,
+        "has_contract_term": false,
+        "entity_count": 4,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 0,
+          "email": 0,
+          "medical_value": 4,
+          "contract_term": 0,
+          "numeric": 11
+        },
+        "entity_density": 0.012739
+      }
+    },
+    {
+      "doc_id": "pubmed_000002",
+      "source_id": "PMC7431518",
+      "text_preview": "RNA Extraction A genitourinary pathologist (O. Yaskiv) reviewed FFPE tissue blocks and their corresponding H&E slides. Slides were matched up with tissue blocks and ~35 mg of the pre-identified tumor were excised. RNA was extracted using the RecoverAll TM Total Nucleic Acid Isolation Kit according t",
+      "metadata": {
+        "length": 1913,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": true,
+        "has_medical_value": true,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 1,
+          "org": 0,
+          "email": 0,
+          "medical_value": 1,
+          "contract_term": 0,
+          "numeric": 22
+        },
+        "entity_density": 0.00641
+      }
+    },
+    {
+      "doc_id": "pubmed_000003",
+      "source_id": "PMC7431518",
+      "text_preview": "Notably, many of the genes found are gender specific like Y chromosome specific genes (i.e., UTY, DDX3Y, USP9Y, and RPS4Y1) being higher in males or XIST, the X-inactive specific transcript, being higher in females. Sub-group analysis focused on male-specific or female-specific signals found a high ",
+      "metadata": {
+        "length": 1217,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 14,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 0,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 14
+        },
+        "entity_density": 0.072165
+      }
+    },
+    {
+      "doc_id": "pubmed_000004",
+      "source_id": "PMC7431518",
+      "text_preview": "These thresholds were applied to TCGA-KIRC to separate them; thresholds for high risk were CC9 0.52, CC32>0.23 and CC7 2.5 (OR CC32 = 5.7, CC20 = 4.4, CC9 = 3.6, and CC7 = 2.7). Figure 3 Kaplan-Meier Curves of the high and low risk groups determined by top four CCs. The 95% confidence interval plott",
+      "metadata": {
+        "length": 1939,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": true,
+        "has_medical_value": true,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 1,
+          "org": 0,
+          "email": 0,
+          "medical_value": 1,
+          "contract_term": 0,
+          "numeric": 17
+        },
+        "entity_density": 0.006369
+      }
+    }
+  ],
+  "raw_records": 3767,
+  "fragments": 62602,
+  "kept": 50011,
+  "too_few_entities": 10196,
+  "no_entity": 2390,
+  "template_like": 84,
+  "no_valid_chunk": 5,
+  "duplicate": 5
+}

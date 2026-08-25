@@ -1,0 +1,42 @@
+{
+  "source_count": 1250,
+  "normalized_exact_hash_groups": 0,
+  "candidate_pair_count": 6,
+  "near_duplicate_pair_count": 3,
+  "cross_group_pair_count": 0,
+  "cross_group_overlap": [],
+  "pairs": [
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000416",
+      "left_group": "Reserve",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000761",
+      "right_group": "Reserve",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.87452471
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000500",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000954",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.94423792
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00000790",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\edgar\\raw.jsonl::raw_00001189",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.95437262
+    }
+  ],
+  "jaccard_threshold": 0.85,
+  "minhash_permutations": 64,
+  "minhash_bands": 8,
+  "passed": true,
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "edgar",
+  "source_store_hash": "64d2944df802675723d7b6ccf4952abfc6d84037840de94f4cca75a46586b883",
+  "policy": "cross-group clusters require deterministic cluster-level regrouping before any API call"
+}

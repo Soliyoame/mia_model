@@ -1,0 +1,23 @@
+{
+  "dataset": "enron",
+  "source_path": "D:\\MIA\\mia_model\\artifacts\\v19\\audits\\claim_pair_ai_adjudication\\enron_claim_pair_ai_adjudication.jsonl",
+  "source_sha256": "6234ad966529b678d81a223dc9657ec6e38e26fc45a292ca53d2995aaba41507",
+  "model_lock_path": "D:\\MIA\\mia_model\\configs\\semantic_entity_models_v6_3.lock.yaml",
+  "model_lock_sha256": "597e0e39afd55a1fe0df43f7cd0027895afc7c980cba2f6eb517171a833de3bf",
+  "schema_sha256": "fc85eeb88175a29f451946d09f4d86dceb6cdd8805d43fbfce19cd57e9e1f3d3",
+  "max_rows_per_dataset": 2,
+  "created_at": "2026-07-24T02:13:34.250147+00:00",
+  "rows": 2,
+  "labels": {
+    "fail": 1,
+    "pass": 1
+  },
+  "entity_types": {
+    "PERSON": 1,
+    "PRODUCT": 1
+  },
+  "api_calls_performed": 0,
+  "label_scope": "AI-assisted historical development labels; not a release audit and not a two-human blind annotation.",
+  "output_path": "artifacts\\v6_3\\semantic_calibration_pilot\\enron_raw_predictions.jsonl",
+  "output_sha256": "ab401b8d919e2322d671af1615714493a1f4197bc5f6efc4e74eddc550c5d4ba"
+}

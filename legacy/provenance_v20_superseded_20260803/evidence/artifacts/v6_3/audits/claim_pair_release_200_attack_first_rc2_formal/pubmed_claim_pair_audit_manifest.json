@@ -1,0 +1,72 @@
+{
+  "dataset": "pubmed",
+  "seed": 314159,
+  "sample_size": 200,
+  "source_count": 200,
+  "strata": {
+    "KB_Member::DATE": 6,
+    "KB_Member::DURATION": 8,
+    "KB_Member::IDENTIFIER": 6,
+    "KB_Member::LOCATION": 8,
+    "KB_Member::MEDICAL_VALUE": 8,
+    "KB_Member::MONEY": 2,
+    "KB_Member::NUMERIC_VALUE": 8,
+    "KB_Member::ORG": 8,
+    "KB_Member::PERCENT": 8,
+    "KB_Member::PERSON": 8,
+    "KB_Member::PRODUCT": 8,
+    "KB_Member::SECTION_ID": 5,
+    "KB_Member::TIME": 1,
+    "Reserve::LOCATION": 8,
+    "Reserve::MEDICAL_VALUE": 8,
+    "Reserve::NUMERIC_VALUE": 8,
+    "Reserve::ORG": 7,
+    "Reserve::PERCENT": 7,
+    "Reserve::PERSON": 2,
+    "Reserve::PRODUCT": 7,
+    "True_Non_Member::DATE": 7,
+    "True_Non_Member::DURATION": 7,
+    "True_Non_Member::IDENTIFIER": 5,
+    "True_Non_Member::LOCATION": 7,
+    "True_Non_Member::MEDICAL_VALUE": 7,
+    "True_Non_Member::NUMERIC_VALUE": 7,
+    "True_Non_Member::ORG": 7,
+    "True_Non_Member::PERCENT": 7,
+    "True_Non_Member::PERSON": 7,
+    "True_Non_Member::PRODUCT": 7,
+    "True_Non_Member::SECTION_ID": 1
+  },
+  "sample_whitelist_hash": "b2d0bf2f796455739e62c3f4f4d20e3e75a6e2a7a0aab7513bcd307544f11a10",
+  "annotator_a_shuffle_seed": 315160,
+  "annotator_b_shuffle_seed": 316161,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\paired_claims\\pubmed_paired_claims.jsonl",
+  "claims_hash": "8f4dd6893f5ecca947bc7af078a5752550ab32d4e28de16418e500a2f925f21b",
+  "prior_audit_exclusions": [
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2_formal",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2_formal\\pubmed_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2_formal\\pubmed_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "d3f0b6e9653ade59f018621e4b8c5524289c2bda748a41dad29b449337acc638",
+      "annotator_b_hash": "e3584b4ebc3a762057efd510e49ef623c96be25d65533c3bb108c7e992e177e1",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    }
+  ],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 1,
+    "excluded_source_count": 100,
+    "excluded_audit_id_count": 100,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 3450,
+    "candidate_rows_removed": 300
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2_formal\\pubmed_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2_formal\\pubmed_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "f3a82d7ad210e0ba88697fed4870a64a27c2a75760621c950713fa455a4de78d",
+  "annotator_b_hash": "998c74f8f5a947425b96a49b29928462c9d4c318c36fb5084a2089cb1db1b829"
+}

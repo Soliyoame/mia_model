@@ -559,7 +559,10 @@ def build_pair_candidates(
         for item in inventory
         if item["effective_type"] == effective_type
     }
-    cue = next(RELATION_CUE_RE.finditer(masked))
+    cue = next(RELATION_CUE_RE.finditer(masked), None)
+    if cue is None:
+        # 目标实体可能本身就是唯一 relation cue；此候选不可构造可恢复 pair。
+        return [], ("relation_cue_missing_after_masking",)
     explicit_arguments = len(set(content_tokens(masked[: cue.start()]))) + len(
         set(content_tokens(masked[masked.index(ENTITY_SLOT) + len(ENTITY_SLOT) :]))
     )

@@ -1,0 +1,155 @@
+{
+  "status": "passed",
+  "protocol": "v6_3_budget6_formal_integrity_v1",
+  "api_calls_performed": 0,
+  "retriever_runs": 0,
+  "datasets": {
+    "edgar": {
+      "split_source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_row_counts": {
+        "KB_Member": 31173,
+        "True_Non_Member": 33217,
+        "Reserve": 15791
+      },
+      "benchmark_rows": 80181,
+      "benchmark_hash": "0c47a6e07cd42293476a1880d9bbfd9d737efbc0f22ec9a1bef59a76faa1d380",
+      "relations": {
+        "source_count": 1250,
+        "fact_count": 3750,
+        "pair_count": 3750,
+        "query_count": 7500,
+        "groups": {
+          "Reserve": 750,
+          "KB_Member": 1500,
+          "True_Non_Member": 1500
+        },
+        "fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae"
+      },
+      "queries": {
+        "query_count": 7500,
+        "query_id_count": 7500,
+        "pair_count": 3750,
+        "source_count": 1250,
+        "source_counts_by_group": {
+          "True_Non_Member": 500,
+          "Reserve": 250,
+          "KB_Member": 500
+        },
+        "queries_per_source": 6,
+        "pairs_per_source": 3,
+        "duplicate_query_text_sources": 0,
+        "source_plan_hash": "bd859976d9bce18c2d4ca287fccae135691ea180ce84d7d65d46c053ca8836dc",
+        "query_plan_hash": "b94b7540bc629a160cef66c1d51928ce50c10a5e56983817ff29905332228514",
+        "fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embedding_local_files_only": true,
+        "embedding_batch_size": null
+      },
+      "claims_hash": "e4e6a54c0d1728aa616276af1667d4c8bba45617c6dc975efde6923d6bae4bd3",
+      "queries_hash": "fe2944c6e6def833a29c9873c8195648206037972513a236d6f5329a15f1cdf3",
+      "release_eligibility_hash": "f1ad2059420f439d1c412767da3028e48f3de6d9bb348a57d95a1a6bce38e003"
+    },
+    "enron": {
+      "split_source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_row_counts": {
+        "KB_Member": 2611,
+        "True_Non_Member": 2539,
+        "Reserve": 1284
+      },
+      "benchmark_rows": 6434,
+      "benchmark_hash": "b65cbb6bed9651c821ab0a9b85b75d449ed4f3297a558041f23a481de5286b19",
+      "relations": {
+        "source_count": 1250,
+        "fact_count": 3750,
+        "pair_count": 3750,
+        "query_count": 7500,
+        "groups": {
+          "True_Non_Member": 1500,
+          "KB_Member": 1500,
+          "Reserve": 750
+        },
+        "fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61"
+      },
+      "queries": {
+        "query_count": 7500,
+        "query_id_count": 7500,
+        "pair_count": 3750,
+        "source_count": 1250,
+        "source_counts_by_group": {
+          "True_Non_Member": 500,
+          "Reserve": 250,
+          "KB_Member": 500
+        },
+        "queries_per_source": 6,
+        "pairs_per_source": 3,
+        "duplicate_query_text_sources": 0,
+        "source_plan_hash": "7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327",
+        "query_plan_hash": "dc343102162ff69dd5817bf87e9631c566da67af77cd367a317b4ffd196420b2",
+        "fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61",
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embedding_local_files_only": true,
+        "embedding_batch_size": null
+      },
+      "claims_hash": "7b73b85e493c971a1de77d99e4f147f6db6a75b23187e3fcd9d3e39e098a8489",
+      "queries_hash": "aba6937e4b3d5ea18b89210a63461b3840f231ab17acf6a7959c6830b1163342",
+      "release_eligibility_hash": "1d25d00a858b633ad00992c46599ec5426e4fb73926054207dd1c8e7118e8f5c"
+    },
+    "pubmed": {
+      "split_source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_row_counts": {
+        "KB_Member": 6658,
+        "True_Non_Member": 7018,
+        "Reserve": 3352
+      },
+      "benchmark_rows": 17028,
+      "benchmark_hash": "2dfe77d70175049e6fc2c1d3dd8ddc3151eb230ebe9bcb99a539916ade5d29bb",
+      "relations": {
+        "source_count": 1250,
+        "fact_count": 3750,
+        "pair_count": 3750,
+        "query_count": 7500,
+        "groups": {
+          "KB_Member": 1500,
+          "True_Non_Member": 1500,
+          "Reserve": 750
+        },
+        "fixed_budget_plan_hash": "942978e928b625d30bc771883dec9e3c3dfc2b89e2b09f2a6fc2101eb7c8ce52"
+      },
+      "queries": {
+        "query_count": 7500,
+        "query_id_count": 7500,
+        "pair_count": 3750,
+        "source_count": 1250,
+        "source_counts_by_group": {
+          "True_Non_Member": 500,
+          "Reserve": 250,
+          "KB_Member": 500
+        },
+        "queries_per_source": 6,
+        "pairs_per_source": 3,
+        "duplicate_query_text_sources": 0,
+        "source_plan_hash": "6a145697be6e50f68755cd38a5a25820b5dbf759a5fafce4fa1acd709de36968",
+        "query_plan_hash": "9609054dfa0c65755a85c67c8c185a432bcc5667b260769da09250e751a48bec",
+        "fixed_budget_plan_hash": "942978e928b625d30bc771883dec9e3c3dfc2b89e2b09f2a6fc2101eb7c8ce52",
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embedding_local_files_only": true,
+        "embedding_batch_size": null
+      },
+      "claims_hash": "8f4dd6893f5ecca947bc7af078a5752550ab32d4e28de16418e500a2f925f21b",
+      "queries_hash": "cb47ed253ab48688b8055c7ad9985779ebe467c2cd36dad9bf795a642a2dd993",
+      "release_eligibility_hash": "3231e2786c912df99f0ce80704dda03fddcf8c0aa5e3a44066285649e66b92df"
+    }
+  }
+}

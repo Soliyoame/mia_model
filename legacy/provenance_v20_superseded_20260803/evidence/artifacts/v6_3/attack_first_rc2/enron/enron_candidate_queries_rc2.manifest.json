@@ -1,0 +1,15 @@
+{
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_candidate_queries_rc2.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_candidate_queries_rc2.errors.jsonl",
+  "created_at": "2026-07-28T04:36:56.863728+00:00",
+  "queries": 18368,
+  "errors": 0,
+  "query_types": [
+    "compressed_verification"
+  ],
+  "queries_by_type": {
+    "compressed_verification": 18368
+  },
+  "validation_failures_by_reason": {},
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2"
+}

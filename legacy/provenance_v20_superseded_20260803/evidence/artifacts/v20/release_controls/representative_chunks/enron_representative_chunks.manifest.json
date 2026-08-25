@@ -1,0 +1,21 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "enron",
+  "retriever_backend": "dense",
+  "retriever_id": "BAAI/bge-base-en-v1.5",
+  "index_manifest_hash": "f0312afc216a50e63d6257bcd4a53b4dd93b96dca90c8af443fe77c4dcb29bd0",
+  "chunk_size": 128,
+  "chunk_overlap": 32,
+  "selection": "max_bge_cosine_over_six_frozen_queries",
+  "tie_break": "chunk_id_lexicographic",
+  "shared_across_methods": true,
+  "source_count": 1000,
+  "input_hashes": {
+    "queries": "627405f676fed6420a1031165829a8f6f2bfe0c929c29109e8095b9c4bdd798f",
+    "KB_Member": "bab805ede2b11ea9140ab7c7a284d5cc74fdffd70970b03decf63f446c1f5e4f",
+    "True_Non_Member": "e63e056a831f7cd7bdf285c823b525d01c31b8aee87e5e00a93bce1ea7e634e4"
+  },
+  "representative_chunk_manifest_hash": "adab44eeac57d57db2a79a22903fa25305925e2a38435eef9265a25f983f6c94",
+  "source_chunk_binding_hash": "9571e339d973a44d98ff10a69d157874178cddeaffcec2026ebf587d75d9789f",
+  "api_calls_made": 0
+}

@@ -1,0 +1,513 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "checkpoint_version": "retrieval-gate-checkpoint-v1",
+  "requested_datasets": [
+    "edgar",
+    "enron",
+    "pubmed"
+  ],
+  "selection_uses_attack_metrics": false,
+  "datasets": {
+    "edgar": {
+      "tokens-128-overlap-32": {
+        "chunk_size": 128,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.7733333333333333,
+            "target_doc_recall_at_10": 0.8393333333333334,
+            "mrr": 0.6648314814814815,
+            "zero_hit_sources": 1,
+            "zero_hit_source_rate": 0.004,
+            "latency_ms_p95": 27.67049998510629,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9493333333333334,
+            "target_doc_recall_at_10": 0.9726666666666667,
+            "mrr": 0.8938997354497354,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 226.8437000166159
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9146666666666666,
+            "target_doc_recall_at_10": 0.9146666666666666,
+            "mrr": 0.8092333333333332,
+            "zero_hit_sources": 2,
+            "zero_hit_source_rate": 0.008,
+            "latency_ms_p95": 522.1168999851216,
+            "recall_at_5_drop_vs_dense": -0.1413333333333333
+          }
+        }
+      },
+      "tokens-256-overlap-32": {
+        "chunk_size": 256,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.686,
+            "target_doc_recall_at_10": 0.752,
+            "mrr": 0.5532185185185186,
+            "zero_hit_sources": 8,
+            "zero_hit_source_rate": 0.032,
+            "latency_ms_p95": 21.76919998601079,
+            "gate": {
+              "passed": false,
+              "checks": {
+                "recall_at_5": false,
+                "recall_at_10": false,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9506666666666667,
+            "target_doc_recall_at_10": 0.964,
+            "mrr": 0.8792780423280424,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 101.19630000554025
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.886,
+            "target_doc_recall_at_10": 0.886,
+            "mrr": 0.765588888888889,
+            "zero_hit_sources": 2,
+            "zero_hit_source_rate": 0.008,
+            "latency_ms_p95": 516.1390999855939,
+            "recall_at_5_drop_vs_dense": -0.19999999999999996
+          }
+        }
+      },
+      "tokens-384-overlap-64": {
+        "chunk_size": 384,
+        "chunk_overlap": 64,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.6726666666666666,
+            "target_doc_recall_at_10": 0.7393333333333333,
+            "mrr": 0.5453891534391535,
+            "zero_hit_sources": 12,
+            "zero_hit_source_rate": 0.048,
+            "latency_ms_p95": 14.959599997382611,
+            "gate": {
+              "passed": false,
+              "checks": {
+                "recall_at_5": false,
+                "recall_at_10": false,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9506666666666667,
+            "target_doc_recall_at_10": 0.9653333333333334,
+            "mrr": 0.8791198412698413,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 87.70060000824742
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.8953333333333333,
+            "target_doc_recall_at_10": 0.8953333333333333,
+            "mrr": 0.7714888888888889,
+            "zero_hit_sources": 2,
+            "zero_hit_source_rate": 0.008,
+            "latency_ms_p95": 437.72739998530596,
+            "recall_at_5_drop_vs_dense": -0.22266666666666668
+          }
+        }
+      }
+    },
+    "enron": {
+      "tokens-128-overlap-32": {
+        "chunk_size": 128,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.8653333333333333,
+            "target_doc_recall_at_10": 0.8946666666666667,
+            "mrr": 0.7805494708994709,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 13.38039999245666,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9846666666666667,
+            "target_doc_recall_at_10": 0.99,
+            "mrr": 0.9402997354497354,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 7.7043999917805195
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9886666666666667,
+            "target_doc_recall_at_10": 0.9886666666666667,
+            "mrr": 0.9409555555555555,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 176.81269999593496,
+            "recall_at_5_drop_vs_dense": -0.1233333333333334
+          }
+        }
+      },
+      "tokens-256-overlap-32": {
+        "chunk_size": 256,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.8046666666666666,
+            "target_doc_recall_at_10": 0.8486666666666667,
+            "mrr": 0.6982230158730158,
+            "zero_hit_sources": 4,
+            "zero_hit_source_rate": 0.016,
+            "latency_ms_p95": 12.302099989028648,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.986,
+            "target_doc_recall_at_10": 0.9913333333333333,
+            "mrr": 0.9349849206349207,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 5.191299977013841
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9873333333333333,
+            "target_doc_recall_at_10": 0.9873333333333333,
+            "mrr": 0.9312888888888889,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 273.2170000090264,
+            "recall_at_5_drop_vs_dense": -0.18266666666666664
+          }
+        }
+      },
+      "tokens-384-overlap-64": {
+        "chunk_size": 384,
+        "chunk_overlap": 64,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.7973333333333333,
+            "target_doc_recall_at_10": 0.8413333333333334,
+            "mrr": 0.6867224867724867,
+            "zero_hit_sources": 4,
+            "zero_hit_source_rate": 0.016,
+            "latency_ms_p95": 12.807799997972324,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9833333333333333,
+            "target_doc_recall_at_10": 0.9913333333333333,
+            "mrr": 0.9312719576719577,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 4.683100007241592
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.984,
+            "target_doc_recall_at_10": 0.984,
+            "mrr": 0.9297888888888889,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 358.723999990616,
+            "recall_at_5_drop_vs_dense": -0.18666666666666665
+          }
+        }
+      }
+    },
+    "pubmed": {
+      "tokens-128-overlap-32": {
+        "chunk_size": 128,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9073333333333333,
+            "target_doc_recall_at_10": 0.9253333333333333,
+            "mrr": 0.8452616402116402,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 15.748999983770773,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9986666666666667,
+            "target_doc_recall_at_10": 0.9986666666666667,
+            "mrr": 0.9858777777777777,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 55.69459998514503
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.996,
+            "target_doc_recall_at_10": 0.996,
+            "mrr": 0.9581000000000001,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 247.6256999943871,
+            "recall_at_5_drop_vs_dense": -0.08866666666666667
+          }
+        }
+      },
+      "tokens-256-overlap-32": {
+        "chunk_size": 256,
+        "chunk_overlap": 32,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.8326666666666667,
+            "target_doc_recall_at_10": 0.88,
+            "mrr": 0.7200063492063493,
+            "zero_hit_sources": 2,
+            "zero_hit_source_rate": 0.008,
+            "latency_ms_p95": 13.323699997272342,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.998,
+            "target_doc_recall_at_10": 0.9986666666666667,
+            "mrr": 0.9848888888888888,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 30.54189999238588
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9706666666666667,
+            "target_doc_recall_at_10": 0.9706666666666667,
+            "mrr": 0.8963333333333333,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 333.298499986995,
+            "recall_at_5_drop_vs_dense": -0.138
+          }
+        }
+      },
+      "tokens-384-overlap-64": {
+        "chunk_size": 384,
+        "chunk_overlap": 64,
+        "overlap_audit": {
+          "wrong_group_chunks": 0,
+          "forbidden_source_overlap": 0,
+          "overlapping_source_keys": []
+        },
+        "methods": {
+          "dense": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.7813333333333333,
+            "target_doc_recall_at_10": 0.836,
+            "mrr": 0.6503248677248678,
+            "zero_hit_sources": 5,
+            "zero_hit_source_rate": 0.02,
+            "latency_ms_p95": 42.51470000599511,
+            "gate": {
+              "passed": true,
+              "checks": {
+                "recall_at_5": true,
+                "recall_at_10": true,
+                "zero_hit_source_rate": true,
+                "forbidden_group_overlap": true
+              }
+            }
+          },
+          "bm25": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.998,
+            "target_doc_recall_at_10": 0.9986666666666667,
+            "mrr": 0.9781444444444445,
+            "zero_hit_sources": 0,
+            "zero_hit_source_rate": 0.0,
+            "latency_ms_p95": 66.38060000841506
+          },
+          "hybrid_reranker": {
+            "query_count": 1500,
+            "source_count": 250,
+            "target_doc_recall_at_5": 0.9533333333333334,
+            "target_doc_recall_at_10": 0.9533333333333334,
+            "mrr": 0.8750444444444444,
+            "zero_hit_sources": 1,
+            "zero_hit_source_rate": 0.004,
+            "latency_ms_p95": 402.5256999884732,
+            "recall_at_5_drop_vs_dense": -0.17200000000000004
+          }
+        }
+      }
+    }
+  },
+  "candidate_identities": {
+    "edgar": {
+      "tokens-128-overlap-32": "ce20f468faff81f918142d5db96d1749bbba434ae608a55569a7d4d29beee65c",
+      "tokens-256-overlap-32": "40e4c4af69364344bcd70fd984cb081e67c872a5c75541cac220a809dc96f7d4",
+      "tokens-384-overlap-64": "1a0720b0a5ab76e1c8f6fd3efab3a75ddb3c918016cc063ff6243b8bf2dd0446"
+    },
+    "enron": {
+      "tokens-128-overlap-32": "790c849ce32100ca5e9843ae0bfab2b00def5e69bdcbfc76a7f0c8b82e3cac2b",
+      "tokens-256-overlap-32": "7b2882bfcc868f9e4f6b014702f1be7c16f9f3fd1e5e139e18b99df7c1ddf819",
+      "tokens-384-overlap-64": "410a30911edc015af00ed2424a63cc1f6caafd3f996bae188aa7382dd596f9a1"
+    },
+    "pubmed": {
+      "tokens-128-overlap-32": "aab9e7d67e14b4a6df3bf55d1f75bed2f5f4d24891484b36f9c85406da0bbb5f",
+      "tokens-256-overlap-32": "f822564bb0ec2f41821576cfb45f7a9957cbd85c39babb7ce130bfc9541e3e5f",
+      "tokens-384-overlap-64": "462dfcaf395d1265bf2f5bd957bd6783af9962d95d5c4bf1db69108d48cce821"
+    }
+  },
+  "completed": true,
+  "fallback_run": false,
+  "completed_candidate_count": 9,
+  "passing_chunk_config_ranking": [
+    {
+      "chunk_config_id": "tokens-128-overlap-32",
+      "macro_recall_at_5": 0.8486666666666666,
+      "macro_mrr": 0.7635475308641976,
+      "macro_p95_latency_ms": 18.93329998711124
+    }
+  ],
+  "selected_chunk_config": {
+    "chunk_config_id": "tokens-128-overlap-32",
+    "macro_recall_at_5": 0.8486666666666666,
+    "macro_mrr": 0.7635475308641976,
+    "macro_p95_latency_ms": 18.93329998711124
+  },
+  "base_bge_gate_passed": true,
+  "fallback_required": false
+}

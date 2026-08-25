@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-07-28T04:58:53.339502+00:00",
+  "promotion_protocol": "formal_fixed_pair_promotion_v2",
+  "dataset": "pubmed",
+  "benchmark_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\benchmarks\\pubmed_attack_benchmark.jsonl",
+  "benchmark_hash": "2dfe77d70175049e6fc2c1d3dd8ddc3151eb230ebe9bcb99a539916ade5d29bb",
+  "benchmark_manifest_hash": "58dced27780a34d01201d1f0793103bccdf7074bb5494da15c904d54aefd1a73",
+  "query_eligibility_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\pubmed\\pubmed_query_eligible_sources.json",
+  "query_eligibility_hash": "3231e2786c912df99f0ce80704dda03fddcf8c0aa5e3a44066285649e66b92df",
+  "query_eligibility_protocol": "pre_split_local_query_eligibility_v6_3_attack_first_rc2_budget6_release_v1_unique_query_text",
+  "query_eligibility_whitelist_hash": "6a145697be6e50f68755cd38a5a25820b5dbf759a5fafce4fa1acd709de36968",
+  "upstream_fixed_budget_plan_hash": "942978e928b625d30bc771883dec9e3c3dfc2b89e2b09f2a6fc2101eb7c8ce52",
+  "formal_fixed_budget_plan_hash": "942978e928b625d30bc771883dec9e3c3dfc2b89e2b09f2a6fc2101eb7c8ce52",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "source_counts_by_group": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "pair_counts_by_group": {
+    "KB_Member": 1500,
+    "True_Non_Member": 1500,
+    "Reserve": 750
+  },
+  "query_counts_by_group": {
+    "True_Non_Member": 3000,
+    "Reserve": 1500,
+    "KB_Member": 3000
+  },
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\paired_queries\\pubmed_paired_queries.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\paired_queries\\pubmed_paired_queries.errors.jsonl",
+  "queries": 7500,
+  "errors": 0,
+  "query_types": [
+    "compressed_verification"
+  ],
+  "queries_by_type": {
+    "compressed_verification": 7500
+  },
+  "validation_failures_by_reason": {},
+  "output_hash": "cb47ed253ab48688b8055c7ad9985779ebe467c2cd36dad9bf795a642a2dd993",
+  "error_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

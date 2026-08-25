@@ -1,0 +1,18 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "enron",
+  "status": "read_only_ground_truth_source_store",
+  "group_counts": {
+    "KB_Member": 500,
+    "Reserve": 250,
+    "True_Non_Member": 500
+  },
+  "source_count": 1250,
+  "input_hashes": {
+    "KB_Member": "bab805ede2b11ea9140ab7c7a284d5cc74fdffd70970b03decf63f446c1f5e4f",
+    "True_Non_Member": "e63e056a831f7cd7bdf285c823b525d01c31b8aee87e5e00a93bce1ea7e634e4",
+    "Reserve": "d2c9b9429ceca6503b73c11ab37dafd7046095594b12b5f2b2ba75ef76a1b622"
+  },
+  "source_keys_hash": "7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327",
+  "store_hash": "c4ddf8ec1b35437f22af6307e66c561c88404e0185c8c2fe772c92665ebb1b47"
+}

@@ -1,0 +1,21 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "pubmed",
+  "retriever_backend": "dense",
+  "retriever_id": "BAAI/bge-base-en-v1.5",
+  "index_manifest_hash": "b1328e9207d71d0ecf06e3e6e48dd06a319e995dc672a68b9e45528907e85690",
+  "chunk_size": 128,
+  "chunk_overlap": 32,
+  "selection": "max_bge_cosine_over_six_frozen_queries",
+  "tie_break": "chunk_id_lexicographic",
+  "shared_across_methods": true,
+  "source_count": 1000,
+  "input_hashes": {
+    "queries": "cb47ed253ab48688b8055c7ad9985779ebe467c2cd36dad9bf795a642a2dd993",
+    "KB_Member": "28272790afa62f632e4d82927ad6006ff9798d986907a962fd0942599e901834",
+    "True_Non_Member": "06715ababf1f86aee70fe6db408911ce26830d9c9ae60e5a679f3ba03af91a6c"
+  },
+  "representative_chunk_manifest_hash": "20572fa4f2ebd3ddb135324a40d3fef1f26dc54a79e78974ab259ec57fbec22d",
+  "source_chunk_binding_hash": "012211332455829a00b1c6482a53e7bc442684a5befdf8114978cbb77093673a",
+  "api_calls_made": 0
+}

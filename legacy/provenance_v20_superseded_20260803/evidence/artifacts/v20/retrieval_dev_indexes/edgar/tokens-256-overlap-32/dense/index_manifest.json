@@ -1,0 +1,177 @@
+{
+  "dataset": "edgar",
+  "retriever_backend": "dense",
+  "retriever_id": "BAAI/bge-base-en-v1.5",
+  "index_filename": "faiss.index",
+  "embedding_model": "BAAI/bge-base-en-v1.5",
+  "requested_embedding_model": "BAAI/bge-base-en-v1.5",
+  "embedding_revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+  "query_instruction": "Represent this sentence for searching relevant passages: ",
+  "embedding_backend": "faiss.IndexFlatIP",
+  "embedding_local_files_only": true,
+  "embedding_dim": 768,
+  "chunk_size": 256,
+  "chunk_overlap": 32,
+  "chunking_unit": "tokens",
+  "tokenizer_model": "BAAI/bge-base-en-v1.5",
+  "tokenizer_revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+  "num_docs": 15685,
+  "num_chunks": 17882,
+  "kb_hash": "2568689bc5fd99d5c9606d9a352f0d51f7b624e0e08bff01b560eca5786cdd32",
+  "docstore_hash": "fa4b44023073d48bc6d802bc2d78091305c83425a9afdd9d379e35e5cf999192",
+  "index_hash": "babfb0ebbb48de6d2319ca9731f3d4a5b4e87b67d8b5613c2afe3634704e0068",
+  "created_at": "2026-07-31T03:03:01.791183+00:00",
+  "config_hash": "0baf6aafb9ba78d3f34c1806edc560c1424ee1858434f156537be9b4218679f3",
+  "config_snapshot": {
+    "logging": {
+      "level": "INFO",
+      "file": "artifacts/v20/logs/rag.log"
+    },
+    "llm_profiles_path": "configs/llm_profiles.yaml",
+    "generator_registry_path": "configs/generator_families.yaml",
+    "generator_family": "llama",
+    "experiment_protocol": {
+      "protocol_version": "pcv-mia-v20",
+      "method_version": "pcv-rag-only-source-v20",
+      "dataset_status": "pre_response_frozen_canonical",
+      "metrics_version": "source-conformal-bootstrap-v2",
+      "reserve_role": "retriever_dev_and_conformal",
+      "conformal_source_count": 245,
+      "conformal_alphas": [
+        0.01,
+        0.05
+      ],
+      "execution": "source_block_interleaved",
+      "pairs_per_source": 3,
+      "logical_victim_calls_per_source_per_mode": 6,
+      "dense_retriever_model": "BAAI/bge-base-en-v1.5"
+    },
+    "paths": {
+      "query_controls_dir": "artifacts/v6_3/query_controls",
+      "query_control_responses_dir": "artifacts/v6_3/query_control_responses",
+      "splits_dir": "artifacts/v6_3/splits",
+      "indexes_dir": "artifacts/v20/indexes",
+      "retrieval_dev_indexes_dir": "artifacts/v20/retrieval_dev_indexes",
+      "benchmark_dir": "artifacts/v6_3/benchmarks",
+      "queries_dir": "artifacts/v6_3/stealth_filtered_queries",
+      "rag_responses_dir": "artifacts/v20/rag_responses",
+      "llm_only_responses_dir": "artifacts/v20/llm_only_responses",
+      "scores_dir": "artifacts/v20/scores",
+      "reports_dir": "artifacts/v20/reports",
+      "runs_dir": "artifacts/v20/runs",
+      "pilots_dir": "artifacts/v20/pilots",
+      "release_controls_dir": "artifacts/v20/release_controls",
+      "reserve_roles_dir": "artifacts/v20/release_controls/reserve_roles",
+      "ground_truth_source_store_dir": "artifacts/v20/release_controls/ground_truth_source_store",
+      "execution_schedule_path": "artifacts/v20/release_controls/execution_schedule.jsonl",
+      "execution_schedule_manifest_path": "artifacts/v20/release_controls/execution_schedule.manifest.json",
+      "generator_registry_state_dir": "artifacts/v20/generator_registry_state",
+      "facts_dir": "artifacts/v6_3/facts"
+    },
+    "dataset_paths": {
+      "edgar": {
+        "splits_dir": "artifacts/v6_3/splits/edgar"
+      },
+      "enron": {
+        "splits_dir": "artifacts/v6_3/splits/enron"
+      },
+      "pubmed": {
+        "splits_dir": "artifacts/v6_3/splits/pubmed"
+      }
+    },
+    "embedding": {
+      "model": "BAAI/bge-base-en-v1.5",
+      "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "backend": "auto",
+      "local_files_only": true,
+      "dim": 768,
+      "query_instruction": "Represent this sentence for searching relevant passages: "
+    },
+    "chunking": {
+      "unit": "tokens",
+      "tokenizer_model": "BAAI/bge-base-en-v1.5",
+      "tokenizer_revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "tokenizer_local_files_only": true,
+      "chunk_size": 128,
+      "chunk_overlap": 32,
+      "offline_gate_candidates": [
+        {
+          "chunk_size": 128,
+          "chunk_overlap": 32
+        },
+        {
+          "chunk_size": 256,
+          "chunk_overlap": 32
+        },
+        {
+          "chunk_size": 384,
+          "chunk_overlap": 64
+        }
+      ]
+    },
+    "retrieval": {
+      "backend": "dense",
+      "top_k": 5,
+      "query_rewriting": false,
+      "retriever_ids": {
+        "dense": "BAAI/bge-base-en-v1.5",
+        "bm25": "bm25",
+        "hybrid": "bge-base-en-v1.5+bm25+rrf+bge-reranker-base",
+        "none": "none"
+      },
+      "hybrid": {
+        "dense_candidate_top_k": 20,
+        "bm25_candidate_top_k": 20,
+        "rrf_k": 60,
+        "fusion_top_k": 20,
+        "reranker_model": "BAAI/bge-reranker-base",
+        "reranker_revision": "2cfc18c9415c912f9d8155881c133215df768a70",
+        "reranker_local_files_only": true,
+        "final_top_k": 5
+      },
+      "offline_gate": {
+        "recall_at_5_min": 0.7,
+        "recall_at_10_min": 0.8,
+        "zero_hit_source_rate_max": 0.05,
+        "forbidden_group_overlap": 0,
+        "fallback_dense_model": "BAAI/bge-large-en-v1.5",
+        "fallback_chunk_size": 256,
+        "fallback_chunk_overlap": 32
+      },
+      "context_controls": {
+        "oracle_max_chunks": 5,
+        "random_token_tolerance": 0.05,
+        "minhash_jaccard_exclusion": 0.85,
+        "dense_cosine_exclusion": 0.85
+      }
+    },
+    "generation": {
+      "run_llm_only": false,
+      "victim_profile": null,
+      "temperature": 0.0,
+      "max_tokens": 512,
+      "timeout": 60,
+      "retries": 2,
+      "retry_backoff_base": 30,
+      "retry_backoff_max": 300,
+      "retry_until_success": true,
+      "retry_cooldown_seconds": 300,
+      "request_interval_seconds": 20,
+      "requests_per_minute": 4,
+      "sibling_requests_per_minute": 4,
+      "max_workers": 4
+    }
+  },
+  "security_boundary": {
+    "allowed_groups": [
+      "Reserve"
+    ],
+    "forbidden_groups": [
+      "KB_Member",
+      "True_Non_Member",
+      "Spoof_Seed",
+      "Spoofed_Non_Member"
+    ],
+    "is_shadow_index": true
+  }
+}

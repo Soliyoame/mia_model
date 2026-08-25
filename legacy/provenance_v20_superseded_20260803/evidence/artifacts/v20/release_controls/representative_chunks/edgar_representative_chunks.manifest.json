@@ -1,0 +1,21 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "edgar",
+  "retriever_backend": "dense",
+  "retriever_id": "BAAI/bge-base-en-v1.5",
+  "index_manifest_hash": "b868d1c700912b028d9181f1780541ef93d6258cf8a57848efc1b43a4aa641ca",
+  "chunk_size": 128,
+  "chunk_overlap": 32,
+  "selection": "max_bge_cosine_over_six_frozen_queries",
+  "tie_break": "chunk_id_lexicographic",
+  "shared_across_methods": true,
+  "source_count": 1000,
+  "input_hashes": {
+    "queries": "250a392f18db2e91a56a8ace8d75c79e9e96be8d2b8289f67dfe0dafba28ff0d",
+    "KB_Member": "305997b00766c4f71d6570cac3d8600c3102c8e7122fa3617ebb55fd00340a5b",
+    "True_Non_Member": "33da7f15cc57c39aec50589e981bb57a58daf97c5184e62b14749d706285a4d1"
+  },
+  "representative_chunk_manifest_hash": "35f60e4ec4cffbf016374501e728bd27793ed7af21eb08986116a54523922821",
+  "source_chunk_binding_hash": "5d3c78ba08a688cc817d012b672262e1e5f35024ed2f9fb395d4ee165dd15842",
+  "api_calls_made": 0
+}

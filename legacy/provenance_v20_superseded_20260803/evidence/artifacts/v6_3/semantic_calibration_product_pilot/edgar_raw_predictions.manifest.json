@@ -1,0 +1,25 @@
+{
+  "dataset": "edgar",
+  "source_path": "D:\\MIA\\mia_model\\artifacts\\v19\\audits\\claim_pair_ai_adjudication\\edgar_claim_pair_ai_adjudication.jsonl",
+  "source_sha256": "189fc1ed5b6c51404a63e0a0aa233e3ab7cd34e3aeef5523dc3e50292f04baa0",
+  "model_lock_path": "D:\\MIA\\mia_model\\configs\\semantic_entity_models_v6_3.lock.yaml",
+  "model_lock_sha256": "48859a5f79b1956044b1cc610d08cea6845d62913b45e61803463450ddf9c206",
+  "schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "supplement_path": "D:\\MIA\\mia_model\\configs\\semantic_v6_3_dev_supplement.yaml",
+  "supplement_sha256": "d3663907b7ecfe6d56b818e018bd313e102f1f80e880a42ca5c42bece76a0ae2",
+  "max_rows_per_dataset": null,
+  "supplement_only": true,
+  "created_at": "2026-07-24T02:53:43.774871+00:00",
+  "rows": 4,
+  "labels": {
+    "pass": 1,
+    "fail": 3
+  },
+  "entity_types": {
+    "PRODUCT": 4
+  },
+  "api_calls_performed": 0,
+  "label_scope": "AI-assisted historical development labels; not a release audit and not a two-human blind annotation.",
+  "output_path": "artifacts\\v6_3\\semantic_calibration_product_pilot\\edgar_raw_predictions.jsonl",
+  "output_sha256": "4b3e9846e10ff6f2062669df4159f3db13364f46b6c356a1b9f0f803a4a710b4"
+}

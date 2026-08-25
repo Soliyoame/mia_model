@@ -2543,3 +2543,497 @@
 - 本轮未执行真实 reservation 或 pilot，未读取新的正式 source，未修改真实 ledger/budget/checkpoint/selection artifact，未加载 GPU 模型，API/victim/Retriever/费用均为 0。当前代码尚未提交，active revision 3 对工作树新代码应继续 fail closed；不得直接运行真实新入口。
 
 当前唯一下一步：等待用户确认提交本轮 runner。提交不等于 freeze；提交后仍需单独授权 successor runtime freeze，冻结完成后再单独授权真实 reservation/write-ahead 与逐数据集 development pilot。fresh audit、formal、split、shadow、release、Luna、四个 Generator、Retriever、victim 与 evaluation 继续 blocked。
+
+### 2026-08-16 至 2026-08-17：v23 revision 4、reservation 与 EDGAR development pilot 授权
+
+- 用户确认按收敛路线推进：提交并 freeze 当前实现，运行三数据集 reserve 与 development pilot，并严格按预注册门槛一次性判定 pass/fail；禁止查看 AUC 调参或无限版本迭代。长时间命令改由用户本人运行。
+- reserve/pilot runner 已提交为 `4856e31da50e7316e0b5b298401739097df0d3e3`（`feat(v23): add reserve and development pilot runtime`），仅含 7 个授权范围文件，未推送且未纳入既有无关脏工作树。
+- successor freeze authorization=`f07c7f3510be5a739793f01e7ac9b7c7efa71a701d510144a94c55f97e225fc6`；revision 4 runtime bundle=`bc5a81dead12db4c2ac3a333f926a6ea66bd65b0530035547c24b2ce2e298833`，protocol revision=`71e862b7591b2ac9bd1a1759b3784fc3b0e4b7286b96098d4997f0f173b78043`，freeze 与 validator 均 `passed`，外部调用为 0。
+- aggregate-DF fingerprint 保持 `9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`；authorization=`b8cd218a924107f744d1735f6614ec98c89a5c5811830cf1e06182b96d028199`、attestation=`7f37e1d3afd8b67667623cd886c40270641033fa5bc97406cd644b5dea98b6c8`、文件 SHA-256=`985b6ebd67dd590207518e2732efe07aa43d1fde9ed804236952a20af0e43912`。三套 DF 在 revision 4 下 `carried_forward`；未重读 source、未新增预算、未写 ledger。
+- revision reservation authorization=`49ce6a80ed424e267a80c456c0acfecc414feffee99da6a35e6327de692c6965`、attempt=`73c1911799852a3f0ee8e67b2ae022ddb623de2ad65e84ecbd06a51b04931d5a`。首次由助手启动后，应用户要求在 ledger 已写入 1,652 条 source 前缀时停止；确认 ledger/budget 前缀一致并删除已终止 PID 遗留的三个 stale lock 后，由用户使用同一 authorization/attempt 恢复，没有生成新 attempt，也未把操作中断记作方法失败。
+- reservation 执行与独立 validator 均 `passed`：EDGAR/Enron/PubMed development 各 1,000，fresh-audit reserve 各 250，budget charge=`3750`；common prior tip=`41a77b70...f57e`，final ledger tip=`3c912fd1...a8e1`，checkpoint SHA-256=`0c16fa63...75e2`，group completion SHA-256=`54983e73...4b17`，ledger mutation 已验证，外部调用为 0。
+- CUDA preflight 通过：`mia_model` 环境为 PyTorch `2.11.0+cu130`，`torch.cuda.is_available()=True`，设备为 RTX 4060 Laptop GPU。冻结模型仍为本地 `fastino/gliner2-base-v1@f5b2ec...`，CUDA/fp16；这不是 Generator/victim，不调用 API。
+- 已生成 EDGAR development pilot authorization=`a40eab77e95df4a9625e39921aaf641425f1715c5cc734f9ac61acc353a9a67d`、attempt=`385a242b02ff9fac40d90f444257fb669be27c42ba709f11c2c44b42043423ea`，预算为 1,000 sources。授权准备阶段未加载 GLiNER、未读取 development 正文、未扣 pilot 预算；正式命令由用户本人执行。
+
+当前唯一下一步：用户本人运行 EDGAR `run-development-pilot` 并在完成后执行正式 validator。EDGAR 未通过前不签发 Enron/PubMed pilot authorization；fresh audit、formal、split、shadow、release、Luna、四个 Generator、Retriever、victim 与 evaluation 继续 blocked。
+
+### 2026-08-17：EDGAR pilot revision 4 运行时类型错误与最小修复
+
+- 用户首次启动 EDGAR development pilot 后，runner 在第一个 development source 的 pair candidate 构造阶段抛出 `ValueError: invalid literal for int() with base 10`。这是 operation/runtime failure，不是 `failed_development_gate`，没有 capacity、AUC、victim、LLM-only 或 Retriever 结果可供判定。
+- 失败现场原样保留：authorization=`a40eab77e95df4a9625e39921aaf641425f1715c5cc734f9ac61acc353a9a67d`、attempt=`385a242b02ff9fac40d90f444257fb669be27c42ba709f11c2c44b42043423ea`；budget journal 已有 1 条 exact operation charge，source results=`0`，无 checkpoint，进程已退出且 lock 已由 context manager 移除。未删除、改写或伪造任何 partial artifact。
+- 根因是冻结 v22 source pool 将 `source_order_rank` 存为 SHA-256 十六进制字符串，v23 selector source contract 同样声明为 `str`，但 pair artifact 构造错误使用十进制 `int(value)`；合成测试只使用可按十进制转换的 `"000001"`，未覆盖包含 `a-f` 的真实生产格式。
+- 用户以“开始吧”明确授权最小 runtime 修复与离线验证，不包含提交、successor freeze、新 authorization、pilot resume、Enron/PubMed、API/victim/Retriever 或付费调用。工作树仅将转换改为 `int(value, 16)`，保持 design-r6、execution erratum e1、fact extraction、Restoration hard gates、17 项 rank、capacity 门槛与 canonical pair 的整数 schema 不变；非法非十六进制输入继续 fail closed。
+- 新增真实 64 位十六进制 rank 回归；修复前该测试精确复现同一异常，修复后单测 `1/1`、selector tests `6/6`、完整 `tests.test_restoration_first_v23` `50/50` 与两个目标文件内存 AST 均通过。测试只使用离线/临时 fixture，未重读真实 EDGAR source、未加载 GPU 模型、未产生外部调用或新增真实预算。
+- 用户确认继续验证与本地提交；全仓 `unittest discover -s tests` 为 `469/469` passed（`605.003s`），`src/`、`scripts/`、`tests/` 共 308 个 Python 文件内存 AST、敏感值扫描与 `git diff --check` 均通过。日志中的 timeout/API-key 文本均来自 mock 的预期失败路径，没有真实网络或 provider 调用。锁定 `mia_model` 环境未安装 `ruff`/`mypy`，未调用 PATH 上属于 Conda base 的同名可执行文件，也未联网安装依赖。
+- active revision 4 / bundle `bc5a81de...9833` 仍是当前冻结身份；工作树修复不得配合旧 authorization 直接续跑。后续必须保留本次 partial evidence，并在提交与 successor freeze 后按新 bundle/revision 重新取得受控执行授权；是否可复用既有 reservation/aggregate-DF 只能由 stage-scoped identity 与显式 validator/authorization 决定，不能人工假定。
+
+当前唯一下一步：仅提交本次代码与回归测试，不纳入其他脏工作树；提交不等于 successor freeze。提交后等待用户单独授权新 revision freeze，不重跑 EDGAR、不生成新 authorization、不启动 Enron/PubMed，也不修改或清理 revision 4 partial artifact。
+
+### 2026-08-17：v23 source-order-rank 最小修复已本地提交
+
+- 用户确认以 `fix(attack): parse v23 source order rank as hex` 提交；本地 commit=`e8f5a3f6cea68bfa87bbc37eb40c813f8ada254f`，仅包含 `src/attack/restoration_first_v23.py` 与 `tests/test_restoration_first_v23.py`，未推送，未纳入两份项目总表或其他既有脏工作树。
+- 提交不改变 revision 4 partial evidence 的保留结论，也不构成 successor freeze、新 EDGAR authorization、pilot resume、Enron/PubMed、GPU/API/victim/Retriever 或付费调用授权；active revision 4 的旧 authorization 仍不得用于修复后的工作树。
+
+当前唯一下一步：等待用户单独授权 successor runtime freeze；授权前不修改 runtime 身份、不生成新 EDGAR authorization、不运行任何 development pilot，并继续保留 revision 4 partial artifact。
+
+### 2026-08-17：revision 5 freeze、aggregate-DF carry-forward 与 EDGAR authorization 阻断
+
+- 用户明确授权 successor runtime freeze、stage fingerprint 验证与新 EDGAR authorization 准备；授权不包含运行 pilot、Enron/PubMed、API/victim/Retriever 或付费调用。successor freeze authorization=`71235950d7daea6133e316d5455344a6b4b5051e0470d94eb2176f339977ac38`（文件 SHA-256=`0e41de29d29792bc4e82b117e11e5a4af02c28cd354cc9dc6f452a67b7f63549`）。
+- revision 5 freeze 与独立 validator 均 `passed`：HEAD/code commit=`e8f5a3f6cea68bfa87bbc37eb40c813f8ada254f`，runtime bundle=`439c2c14cfcfe9dac612794a7a734fdaa963bcdff222e2465b6ac2bd8eb40991`，protocol revision=`26cf914046ec36e7dc8714c302c5ef7f8e55dca988eeb8b8d8278df6a3876b2d`，revision ordinal=`5`，ledger tip 保持 `3c912fd1...a8e1`，external calls=`0`。freeze checkpoint SHA-256=`15a103b49067639e179ff56e89317f9ef5e163de52e5228b37338574369ba852`。
+- execution erratum e1 只为可 carry-forward 的 `aggregate_df_precomputation` 定义 stage dependency fingerprint；revision 4 与 revision 5 均为 `9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`。据此生成 authorization=`0e948bef13d7a910b351c8895375073233a71f9db530524e1629bead12b85de5` 并执行三数据集 carry-forward；独立 validator 返回 `passed/carried_forward`，attestation=`ef1e7d33d66f522fa57a7234922c998691d7393704027b043f2ee80689a03020`，文件 SHA-256=`c05bc3d3f04618d6f8b407878db18f0218a3f39cfe43e869b07ba738e9fc9394`。source reread=`0`、新增预算=`0`、ledger mutation=`false`、external calls=`0`。
+- revision 5 的 reservation 是 revision-specific，当前 `stage-status` 为 `not_started/revision_reservation_group_missing`；e1 没有为 reservation 或 development pilot 定义可 carry-forward fingerprint。尝试通过官方入口生成新 EDGAR authorization 时，在任何 attempt/authorization 写入前由 `revision_reservation_authorization_count_invalid` fail closed；revision 5 run authorization 数量保持 `0`。
+- 只读预检发现第二个后续阻断：revision 4 partial attempt 留下设计规定的非 revision-scoped 目录 `artifacts/v23/selection/development/edgar/source_results/`（0 个 result），而当前 `prepare_development_pilot_authorization` 对 `artifacts/v23/selection/development/edgar` 的任何存在都拒绝并返回 `development_pilot_attempt_or_artifact_already_exists`。不得删除/移动该 partial 目录、手工造 authorization 或绕过门禁；否则破坏失败证据与预注册路径语义。
+- 当前无 Python 进程、无 governance lock；revision 4 reservation checkpoint/group completion 文件 SHA-256 仍为 `0c16fa63...75e2` / `54983e73...4b17`，旧 partial budget=`1`、source results=`0` 保持不变。未生成新的 EDGAR authorization，也未启动 reservation/pilot/Enron/PubMed。
+
+当前唯一下一步：等待用户单独授权设计并实现“保留旧 partial evidence、允许新 revision development attempt”的最小恢复语义及回归测试；完成提交与再次 successor freeze 后，先按新 revision 生成/运行 reservation，再生成 EDGAR authorization。未获授权前不生成无用的 revision 5 reservation attempt，不清理旧目录，不运行任何 pilot。
+
+### 2026-08-17：development recovery r1 最小恢复语义已实现、等待长回归
+
+- 用户以“行”授权并在中断后要求继续完成最小 recovery runtime 与离线测试；授权仍不包含提交、successor freeze、新 authorization、真实 pilot、Enron/PubMed、API/victim/Retriever 或付费调用。实现新增机器可读契约 `configs/restoration_first_v23.development_recovery_r1.yaml`，SHA-256=`8b57250c66413352afc9707dfa0b582dbc6be2fa3e3816927994f4e2d22056ef`，revision=`pcv-restoration-first-v23-design-r6-execution-e1-development-recovery-r1`，并将其纳入后继 runtime closure；design-r6 与 execution erratum e1 本身未改写。
+- 恢复窗口严格限定为：active revision 尚未开始 reservation、最近一个 prior revision reservation 已完整 `passed`、当前 ledger tip 与该 reservation final tip 完全相等、development batch identity 仍逐项一致；该复用仅是 development prerequisite，不授权复用或读取 fresh-audit reserve。若 active reservation 已出现、ledger 已前进、历史 reservation/aggregate 身份漂移，仍 fail closed。
+- revision 4 EDGAR partial 只有在旧 authorization/budget 均可验证、budget charge 至少为 1 且未耗尽、source result=`0`、无 checkpoint、无 canonical selected-pairs/manifest、旧目录无其他条目时才可恢复。旧 authorization、budget 与空 `source_results/` 目录保持原字节；新 source results 写入 attempt-scoped 路径 `artifacts/v23/selection/development/<dataset>/attempts/<attempt_id>/source_results/`，并在任何新 source 可见前生成绑定 prior reservation、partial hashes、新 authorization/attempt 与 ledger tip 的 recovery attestation。任何历史 source result 非空都明确拒绝自动恢复。
+- 合成端到端回归先在实现前稳定复现 `revision_reservation_authorization_count_invalid`（`1/1` failed as expected，115.712s），实现后同一场景通过（`1/1`，205.121s），验证 prior ledger 不变、旧 authorization/budget 字节不变、旧空目录不变且新结果进入 attempt 路径。历史非空 result 拒绝与既有 development group 回归为 `2/2`（289.220s）；capacity terminal、runtime bundle closure 也已分别通过。恢复后秒级复核为 `2/2`（0.015s），两个目标文件内存 AST 与 recovery contract 哈希/精确身份加载均通过。
+- 完整 `tests.test_restoration_first_v23` 在运行中按用户“停一下”被主动中断；中断前未显示失败，但测试未完成，不能记为全量 passed。恢复后遵守“长命令由用户本人运行”，未重启该长回归。`git diff --check` 未发现 whitespace error，仅报告既有 CRLF conversion warning。
+- 本轮只使用临时合成 fixture 和只读治理身份，未读取真实 development 正文或任何 membership、victim/LLM-only response、Retriever 输出、AUC；未加载 GPU 模型，真实 source/API/victim/Retriever/付费调用、ledger mutation、新 run authorization 与新 attempt 均为 0。active revision 仍为 5 / bundle `439c2c14...40991` / protocol revision `26cf9140...76b2d`；工作树 recovery 代码未提交，因此不得用于任何真实 runtime 命令。
+
+当前唯一下一步：由用户本人运行完整 v23 离线回归；返回结果通过后，再由用户单独确认是否仅提交 recovery contract、runtime 与对应测试。提交不等于 successor freeze；freeze、新 EDGAR authorization 与真实 pilot 仍需后续分别授权，且 EDGAR passed 前不得启动 Enron/PubMed。
+
+### 2026-08-17：development recovery r1 完整 v23 离线回归通过
+
+- 用户本人使用锁定 `mia_model` 解释器完成 `tests.test_restoration_first_v23` 全模块回归，结果为 `Ran 52 tests in 789.765s`、`OK`，即 `52/52 passed`。这 supersede 前条目中的“长回归待运行”状态；此前被中断的那一次执行仍只作为操作中断记录，不改写成 passed。
+- 结合已通过的恢复端到端、非空旧 result 拒绝、既有 development group、capacity terminal、runtime closure、AST 与契约身份检查，recovery r1 的当前离线验证闭环已通过。测试使用合成/临时 fixture；没有由本次回归产生真实 source 读取、GPU/API/victim/Retriever 调用、费用、ledger mutation、run authorization 或 attempt。
+- recovery 文件仍未提交，active runtime 仍为 revision 5 / bundle `439c2c14...40991` / protocol revision `26cf9140...76b2d`；未冻结的工作树实现不得用于真实 EDGAR 命令。两份项目总表及其他既有脏工作树继续独立保留，不得顺带纳入 recovery commit。
+
+当前唯一下一步：等待用户明确确认仅提交 `configs/restoration_first_v23.development_recovery_r1.yaml`、`src/prepare/restoration_first_v23.py` 与 `tests/test_restoration_first_v23.py`。该提交不等于 successor freeze、新 EDGAR authorization 或 pilot 执行授权；提交后仍需分别授权 freeze/validator 与 authorization 准备。
+
+### 2026-08-17：development recovery r1 已限定范围本地提交
+
+- 用户两次明确确认提交与提交信息；已创建本地 commit=`a964e63676b95d71f85975eaa3390c0bfb1bca03`（`fix(prepare): add audited v23 development recovery`），仅包含 recovery contract、`src/prepare/restoration_first_v23.py` 与对应测试，共 3 个文件；未纳入两份项目总表或其他既有脏工作树，未推送。
+- commit message 明确记录 protocol scope、runtime bundle closure 将变化、只新增机器可读 recovery contract、真实 run artifact/API/victim/Retriever 调用均为 0，以及完整 v23 `52/52 passed` 验证。提交后分支相对远端为 ahead 5。
+- 该提交尚未写入 active runtime lineage；active revision 仍为 5 / bundle `439c2c14...40991` / protocol revision `26cf9140...76b2d`。因此当前真实 runtime 继续 fail closed，不得直接生成或使用 EDGAR authorization。
+
+当前唯一下一步：等待用户单独授权 successor runtime freeze 与 validator。freeze 完成前不生成新 EDGAR authorization、不运行 pilot；freeze 本身也不授权 Enron/PubMed、API/victim/Retriever 或付费调用。
+
+### 2026-08-17：revision 6 successor freeze 与独立 validator 通过
+
+- 用户明确授权范围仅为 successor runtime freeze 与 validator；不包含 stage fingerprint/carry-forward、新 EDGAR authorization、reservation、pilot、Enron/PubMed 或任何外部调用。预检确认 HEAD=`a964e63676b95d71f85975eaa3390c0bfb1bca03`，runtime closure 相对 HEAD 无脏改动，无 governance lock；freeze 前 `status` 以预期的 `active_runtime_commit_drift` fail closed。
+- 生成一次性 freeze authorization=`d03228af1f17815ed823183610bba507106072c4137269d990173ba51ea61c17`，文件 SHA-256=`a6f513238c0c4c2f84926a66c8c21af877259a5f8a5e4c6c2524e9c0afbe347d`；绑定 prior revision 5 / bundle `439c2c14...40991` / protocol revision `26cf9140...76b2d`、prior ledger tip=`3c912fd1...aa8e1`，以及 target code commit=`a964e636...ca03`。
+- successor freeze 已写入并激活 revision ordinal=`6`：runtime bundle=`c946f3503d269ecafa262abc2be158439ecd22a2cca86adb244340c150f22e1a`，protocol revision=`1275ff12203350073b7bbe2fd3188974dc88b648445e033dc2c4ce1d65ae348f`。bundle manifest SHA-256=`ac374c22d3c69b4017c5d561ed27e33d088762cec1bb1b648685b318af6a2b9b`，revision file SHA-256=`a630899c6aea1918c31e58d7339e9d53dced652b51faf6e0a873fe0f28e7a4d6`。
+- 独立 `validate-successor-runtime` 重新运行并以 exit code 0 返回 `status=passed`；checkpoint SHA-256=`4f117da20e268ba90ace8d895b05fe550cad0f0d537472aa99a6ebe1c46698ac`，code commit、bundle、protocol revision、ordinal、authorization 与 ledger tip 全部一致。ledger tip 保持 `3c912fd1...aa8e1`，external calls=`0`，无遗留 lock。
+- validator 通过后补充运行的全链只读 `status` 超出短时预期，按“长命令由用户本人运行”主动中止；它不是 freeze/validator 必需门禁，不改变上述 passed 判定，也不记录为协议失败。本轮未执行 aggregate-DF carry-forward、未创建 run authorization/attempt、未读取真实 source、未调用 GPU/API/victim/Retriever，费用为 0。
+
+当前唯一下一步：等待用户单独授权 revision 5→6 的 `aggregate_df_precomputation` stage fingerprint 比对，以及仅在 fingerprint 精确相等时的 carry-forward；该授权不自动包含 EDGAR authorization 或 pilot。carry-forward 独立验证通过后，才能再单独准备 recovery-aware EDGAR authorization。
+
+### 2026-08-17：revision 6 aggregate-DF fingerprint 相等并完成 carry-forward
+
+- 用户明确授权 revision 5→6 的 `aggregate_df_precomputation` stage fingerprint 比对及 carry-forward；不包含 EDGAR authorization、reservation、pilot 或外部调用。只读重算显示 revision 5 bundle `439c2c14...40991` 与 revision 6 bundle `c946f350...2e1a` 的 fingerprint 完全相同，均为 `9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`；不同 bundle/revision 的 stage execution identity 不同是预期，未被误当作 dependency drift。
+- 生成 stage compatibility authorization=`3e1483b6f3ef4d4a8fca2237c10e7278a042e6b828f4041a7d4e17179b77b83c`，文件 SHA-256=`2029c4fa4cb102fc3dee1e26d144a7cb6c95e52ec26dae445eefc33d34d9668e`。authorization 的 `from_*` 按 provenance 绑定三套 DF 的原始生产者 revision 2 / bundle `c1e61ac5...285ea`，而非把 revision 5 carrier 改写成生产者；target 绑定 active revision 6。
+- carry-forward 进程自然完成并以 exit code 0 返回 `status=passed`、`validation_mode=carried_forward`。attestation=`5a1428ebd4aaafbfb9c90f646fc596b763b021b4d2407acdbb915ab6e30904ed`，文件 SHA-256=`b7e29bb49d326ad2380622d5d43e2da2b395419d584be48734c0f502dca65ed0`；EDGAR/Enron/PubMed 三套 producer authorization、budget、checkpoint、DF manifest 与 rows hashes 均已绑定。
+- carry runner 的末尾内嵌 validator 已通过；为遵守“长命令由用户本人运行”，没有再由助手启动耗时的独立 CLI 复跑。carry 前后 ledger 文件 SHA-256 均为 `0f05967af6bf97ff9dff2fd34970500cef7365ba8374f18af520f69dfb3dd394`，ledger mutation=`false`；revision 6 run authorization/attempt 数量仍为 `0/0`，source pool contents read=`false`，external calls=`0`，无 governance lock。
+- 未生成 recovery-aware EDGAR authorization，未创建 revision 6 reservation，未启动任何 development pilot、Enron/PubMed 或下游阶段。旧 revision 4 partial evidence 与全部既有脏工作树保持不变。
+
+当前唯一下一步：用户本人运行独立 `validate-carry-forward --stage aggregate_df_precomputation` 长命令；返回 `passed/carried_forward` 后，再等待单独授权准备 recovery-aware EDGAR authorization。独立验证本身不授权 pilot。
+
+### 2026-08-17：revision 6 aggregate-DF 独立 carry-forward validator 通过
+
+- 用户本人使用锁定 `mia_model` 解释器运行独立 `validate-carry-forward --stage aggregate_df_precomputation`，返回 `status=passed`、`validation_mode=carried_forward`、external calls=`0`、ledger mutation=`false`、source pool contents read=`false`。
+- 独立结果与 runner 内嵌 validator 完全一致：attestation=`5a1428ebd4aaafbfb9c90f646fc596b763b021b4d2407acdbb915ab6e30904ed`，文件 SHA-256=`b7e29bb49d326ad2380622d5d43e2da2b395419d584be48734c0f502dca65ed0`，stage fingerprint=`9fc3c9d28016b5d3483ca414145c5a9a025d4ec4196ab9679525b8ae268c8011`，target revision 6 / bundle `c946f350...2e1a`；三数据集 artifact/budget/checkpoint hashes 全部一致。
+- 至此 revision 6 aggregate-DF carry-forward 的授权、执行与独立验证闭环完成。未生成 EDGAR authorization/attempt，未创建 revision 6 reservation，未启动 pilot 或任何外部调用。
+
+当前唯一下一步：等待用户单独授权准备 recovery-aware EDGAR development pilot authorization。该准备操作只允许生成 revision 6 的新 authorization/attempt 与 recovery attestation，不授权运行 pilot；旧 revision 4 authorization 继续不可复用。
+
+### 2026-08-17：recovery-aware EDGAR authorization preparation 转交用户长命令
+
+- 用户明确授权仅准备 revision 6 recovery-aware EDGAR authorization，不授权运行 pilot。助手启动冻结 `prepare-development-pilot-authorization --dataset edgar` 入口后，命令持续进行本地 aggregate/reservation/source-order identity 完整性验证超过 15 分钟，未出现方法失败或治理错误；按“长命令由用户本人运行”主动中止。
+- 中止后只读核验 revision 6 run authorization/attempt 仍为 `0/0`，说明尚未分配新身份；ledger 文件 SHA-256 仍为 `0f05967af6bf97ff9dff2fd34970500cef7365ba8374f18af520f69dfb3dd394`，旧 revision 4 authorization/budget SHA-256 仍为 `8be11eee...b2358` / `43bcf7a8...4ce51`，legacy source results=`0`，均未变化。
+- 中断进程遗留 `development_pilot_preparation.lock`，其内容 PID=`956776`；确认该 PID 已不存在后，仅删除这一精确 stale lock。没有删除、移动或改写任何 authorization、budget、selection 或历史 artifact；该操作中断不记为实验/协议失败，也不生成第二个 attempt。
+- 用户已给出的 preparation 授权继续有效；下一次必须使用同一冻结 CLI 和同一 user authorization record。完成前不得手工生成 authorization、跳过 recovery attestation 或运行 pilot。
+
+当前唯一下一步：用户本人运行 recovery-aware EDGAR authorization preparation 长命令并返回完整 JSON。预期只生成一个 revision 6 authorization/attempt 与 recovery attestation，预算 charge、source result、ledger mutation 和 external calls 均应为 0。
+
+### 2026-08-17：revision 6 recovery-aware EDGAR authorization 已生成并核验
+
+- 用户本人完成冻结 preparation 命令，生成唯一 EDGAR development authorization=`09f1466ae6d03b5914afa3ea6de5b085e2c3da7d378f1d4c3ff3af01cfca93bd`（文件 SHA-256=`e34795500642a58d446fe6431e27c5ff0be662313871b4f939ca8585bb0d4f5c`）、attempt=`093ed478887dff5734d8a4ba1868beaf3254b45d8bc2939e175bf8b5221a3991`。attempt registry 恰有 1 条匹配，row SHA-256=`836f7c40a240e821e86f9f7e2279e7bc48fd65212ef382908ee8de97a54ff42b`；protocol revision 6 / bundle `c946f350...2e1a`、budget limit=`1000 sources`、expected ledger tip=`3c912fd1...aa8e1`。
+- reservation validation mode=`prior_revision_development_recovery`。recovery attestation ID=`1928af0b7d35c49500aa7248f9f9f0b8e484b9bce769448b887ba020f98c9286`，文件 SHA-256=`ad58e959b4d728d696fe0736e0bdd13f7a0301cf7849737b04837a7a747715ad`，canonical ID 校验通过；绑定 prior reservation protocol revision 4=`71e862b7...8043`、旧 partial authorization=`a40eab77...a67d`、旧 budget charge=`1`、旧 source result=`0`。
+- preparation 后新 budget journal 不存在、新 attempt source-result 目录不存在、新 checkpoint 不存在，说明 budget charge/source result 均为 0；ledger 文件 SHA-256 保持 `0f05967a...d394`，旧 authorization/budget SHA-256 保持 `8be11eee...b2358` / `43bcf7a8...4ce51`，legacy result 仍为 0，无 governance lock，external calls=`0`。
+- preparation 阶段没有读取 development 正文、没有运行 GLiNER/GPU、没有启动 pilot/Enron/PubMed，也没有修改 revision 4 partial evidence。旧 revision 4 authorization 继续不可用于运行；revision 6 新 authorization 在用户单独授权 pilot 前保持未执行。
+
+当前唯一下一步：等待用户明确授权使用 revision 6 authorization=`09f1466a...a93bd` 运行 EDGAR development pilot。长命令必须由用户本人运行；完成后先独立 validator，再按预注册 determinism、hard-gate 与 capacity 门槛一次性判定 passed/failed。EDGAR 未 passed 前不启动 Enron/PubMed。
+
+### 2026-08-17：revision 6 EDGAR pilot 已获运行授权、等待用户长命令
+
+- 用户明确授权使用 revision 6 authorization=`09f1466a...a93bd` 运行 EDGAR development pilot；授权不扩展到 Enron/PubMed、API/victim/Retriever 或其他下游。运行前 CUDA preflight 通过：锁定解释器 `D:\python\anaconda\envs\mia_model\python.exe`、PyTorch `2.11.0+cu130`、`torch.cuda.is_available()=true`、设备 RTX 4060 Laptop GPU。
+- 授权仍未消费：new budget/source-result directory/checkpoint 均不存在，无 governance lock。runner 使用 dataset exclusive lock；已有 checkpoint 时只做完整 validator 并幂等返回，已有 source result 时校验其 source/order/operation charge 后跳过；若 budget 已扣但 result 尚未落盘，则同一 operation identity 走 `resume_existing_charge`，不会重复扣费。
+- 因此命令可续跑，但只能原样复用同一 authorization/attempt；不得重新 preparation 或创建新 attempt。若正常 Ctrl+C，context manager 应移除 lock；若强制终止留下 lock，必须先确认锁内 PID 已退出，再只移除该精确 stale lock。方法级 `failed_development_gate` checkpoint 是终态，不能当作中断继续补样本或调门槛。
+- runner 默认没有逐 source 控制台进度，通常只在最终完成或异常时输出 JSON/traceback；长时间无输出不等于未运行。进度只能通过不读取 result 内容的 budget/source-result 文件计数做治理监控，禁止查看选择内容、membership、AUC、victim/LLM-only response 或 Retriever 输出。
+
+当前唯一下一步：用户本人运行冻结 EDGAR pilot 命令；若中断，原样重复同一命令即可 resume。完成后先返回 runner JSON，再运行独立 validator，一次性判定 passed/failed；EDGAR 未 passed 前 Enron/PubMed 继续 blocked。
+
+### 2026-08-17：strict governance 被轻量 development execution 取代
+
+- 用户明确批准 `v23 轻量开发运行重构`。本次只改变 development 执行治理，不改变 Restoration hard gates、source-level 统计单位、每数据集 `1000 development + 250 fresh-audit reserve`、aggregate-DF 内容、capacity 判定、membership/response/Retriever/AUC 隔离或正式测试冻结边界。
+- development 主 CLI 已收敛为六个入口：`status [--dataset]`、`aggregate-df --dataset`、`validate-aggregate-df --dataset`、`run-development-pilot --dataset`、`validate-development-pilot --dataset`、`validate-development-pilot-group`。bootstrap、successor freeze、carry-forward、revision reservation 运行入口和所有 `prepare-*-authorization` 入口均已退出 development 主流程；用户手动运行本地命令即视为该次 development 执行授权，API/victim/Retriever、fresh audit 与 formal test 仍需另行明确授权。
+- 新 execution revision=`pcv-restoration-first-v23-lightweight-dev-r1`。attempt identity 只绑定协议设计、逐数据集固定 development reservation 及 1000-source identity hash、该数据集 aggregate-DF manifest/rows hash、selection/实体策略配置及科学实现文件 hash、GLiNER 单个 lock entry 与实际包版本；Git HEAD 仅作非阻断元数据。prepare/governance、日志和进度代码不进入 attempt identity；启动时不再扫描 runtime lineage、不运行历史 `git show`、不做三数据集 group validator，也不重哈希 833 MB 模型权重。
+- development reservation 直接只读复用 revision 4 的逐数据集 plan；EDGAR 运行不会解析 Enron/PubMed plan 或 fresh-audit reserve 内容，也不扫描或修改 reservation ledger。容量公式中的既定 `consumed_non_development_c=250` 从冻结设计读取。现有 aggregate-DF 原样复用，缺失或 hash 漂移时 fail closed，不自动重建或覆盖。
+- 新 runner 按科学依赖生成稳定 attempt ID，并写入 `artifacts/v23/selection/development/<dataset>/attempts/<attempt_id>/`。每个 source result 原子写入；同一身份重跑校验并跳过已完成 result，死亡 PID lock 自动恢复，活跃 PID 拒绝第二实例；每完成 10 条只打印 `Completed/1000`、耗时和 ETA，eligible count 只在全部完成后一次性计算。pilot 不获取 ledger lock，也没有 authorization budget journal。
+- 只保留每数据集 development run lock 与 aggregate-DF build lock。capacity failure/hard-gate failure 写入 attempt-scoped manifest/checkpoint 后即为终态，续跑只验证返回，不能补样本或改门槛。正式实验尚未启动；未来 formal test 前只做一次 formal runtime freeze，绑定正式科学代码、配置、模型、Retriever 与 split。
+- 历史 runtime bundles、lineage、carry-forward、reservation、authorization、budget、partial evidence 与全部既有脏工作树均原样保留，不迁移、不覆盖、不删除。revision 6 EDGAR authorization=`09f1466a...a93bd` / attempt=`093ed478...a3991` 现标记为历史未使用证据：development source result=`0/1000`、新 budget journal=`0`、checkpoint=`0`、external calls=`0`；重构后不再消费或重新生成该 authorization。
+- 只读验证：新 CLI help 仅含六个命令；现有 EDGAR aggregate-DF 继续 `passed`，manifest SHA-256=`aeb7af6c...fdf6`、rows SHA-256=`add48dd0...e27f`；轻量 EDGAR attempt identity 可在不加载 GPU、不触及历史 Git 对象的情况下稳定生成。新增轻量回归 `7/7 passed`，selector/primitive/evaluation 定向回归 `14/14 passed`，合并模块运行 `60 tests / OK / 39 superseded strict-governance tests skipped`；AST import 与 `git diff --check` 通过，仅有既有 CRLF warning。未运行真实 pilot、未读取 membership/victim/LLM-only/Retriever/AUC、未加载 GPU，外部调用与费用为 0。
+
+当前唯一下一步：由用户本人运行仓库全量离线 `unittest discover`；通过后，用户可直接运行不带 authorization 参数的 `run-development-pilot --dataset edgar` 长命令。EDGAR 终态 `passed` 才继续 Enron；`failed_*` 则停止并记录。fresh audit、formal test、API/victim/Retriever 与付费调用继续保持未授权。
+
+### 2026-08-18：EDGAR development 在 451/1000 处暴露 selector 边界异常并完成续跑兼容修复
+
+- 用户本人运行轻量 EDGAR pilot 后在 `Completed 451/1000` 处收到 `StopIteration`：候选的唯一 relation cue 位于原实体 span 内，mask 为 `ENTITY_SLOT` 后 cue 集合为空，而 pair builder 仍无条件调用 `next(...)`。这不是 capacity failure、数据泄漏或 GPU 故障。
+- 已按用户确认做最小 crash-only 修复：无 masked relation cue 的候选现在返回 `relation_cue_missing_after_masking`，作为正常 hard-gate rejection；既有 451 个 source result、attempt 目录、aggregate-DF、reservation 与历史 artifact 均未修改或删除。
+- 为保留已完成结果，增加仅针对这一精确“异常转拒绝”变更的 scientific hash compatibility：当前 attempt ID 仍为 `2dedf433989be511c459e3004425ba5df1ff84bee1085fc67c17fe776c60f342`，旧的 451 条可以继续跳过，后续 source 继续写入同一 attempt。该兼容不适用于其他科学代码、配置、模型、reservation 或 DF 变化。
+- 定向验证：新增 relation-cue 回归与轻量 development tests 共 `8/8 passed`；未运行真实续跑、未读取 source result 内容、未调用 API/victim/Retriever、未读取 membership/AUC，外部调用与费用仍为 `0`。
+
+当前唯一下一步：用户本人原样重跑同一 EDGAR 命令；预期从 `451/1000` 继续，不应重新生成 authorization 或新 attempt。完成后再运行 `validate-development-pilot --dataset edgar`，按 eligible、determinism、hard-gate 与 capacity 门槛一次性判定。
+
+### 2026-08-18：EDGAR development capacity gate 终态失败
+
+- 用户本人完成 EDGAR development attempt=`2dedf433...f342` 的全部 `1000/1000` source；eligible=`138`、selected pairs=`414`、external calls=`0`。
+- 预注册 capacity 计算为 `K_L=636`、`consumed_non_development_c=250`、`formal_eligible_lower=248`，低于 required formal=`2250`；终态为 `failed_capacity_shortfall`。EDGAR 远低于最低观察门槛 `623/1000`，不能进入 fresh audit 或 formal test。
+- 该失败是正式研究证据，不通过续跑增加样本、降低门槛、调 selector 或迁移结果来修复。attempt manifest、source results、selected pairs 与 checkpoint 均保留；未读取 membership/victim/LLM-only/Retriever/AUC，未执行外部调用。
+- 按预注册顺序，Enron/PubMed development、fresh audit、formal runtime freeze、formal test 与全部下游均停止；不得将 EDGAR failure 表述为方法通过或正式攻击结果。
+
+当前唯一下一步：记录 EDGAR failure 的失败模式并评估是否提出新的、明确版本化的科学设计；在新设计获单独批准前不启动 Enron/PubMed、不修改旧 attempt、不进入 formal。
+
+### 2026-08-18：EDGAR capacity failure 的安全失败模式分析
+
+- 仅读取 attempt-scoped 的 source-level 安全元数据（计数、gate reason union、candidate/pair 数、determinism/hard-gate 状态），未读取 source 正文、membership、victim/LLM-only response、Retriever 输出或 AUC。分析 bundle=`artifacts/v23/analysis/edgar_development_failure/`，包含报告、统计附录、图目录、两张诊断图和机器可读 summary。
+- 主要瓶颈位于 candidate→pair hard gate：862 条失败 source 中，`pair_candidate_count=0` 有 457 条；失败 source 的 candidate 数均值/中位数为 51.97/49，但 pair 数均值/中位数仅 4.51/0。138 条 eligible source 的 pair 数均值/中位数为 29.31/27，且全部通过 3-pair 门槛并选择 3 对。
+- 失败 source 的 reason union 高频项为 `relation_cue_missing`（855/862）、`source_specific_anchor_missing`（848/862）、`unresolved_reference`（809/862）和 `fact_token_count`（773/862）；这些列表是非互斥的 source-level 汇总，不能据此宣称单个 gate 的因果贡献。另有 128 条失败 source 虽有超过 10 个 pair candidates 仍未选出 pair，提示 distinct fact signature / original-entity diversity 约束是第二个待诊断瓶颈，但现有 artifact 不含候选级计数，不能进一步归因。
+- 完整性方面：1000/1000 source 的 deterministic rerun hash 均匹配，hard-gate violation count 全为 0；因此本次是可复现的科学容量短缺，不是运行器完整性或数据泄漏事故。eligible=`138/1000=13.8%`，距离最低观察门槛 `623` 尚差 485 条；`K_L=636` 在扣除 `c=250` 后仅余 formal lower=`248`，距离 required formal=`2250` 尚差 2002。
+- 该分析不改变失败终态，不调整阈值、不续跑补样本、不迁移结果；不启动 Enron/PubMed、fresh audit 或 formal。若要改变 selector/gate，必须提出新的预注册、版本化科学设计并从新 attempt 开始；当前 EDGAR attempt 及诊断 artifact 原样保留。
+
+当前唯一下一步：在新设计获得单独批准前，项目停在 `failed_capacity_shortfall`，不运行其他数据集或正式实验。
+
+### 2026-08-18：v23 独立 Fact Layer r1 实现完成
+
+- 用户明确批准新增独立、可续跑的 fact extraction workflow；本实现不修改或消费 r6 EDGAR failed attempt、旧 selected pairs、旧 checkpoint、v19/v22 facts/claims/whitelist。
+- 新增 `configs/restoration_first_v23_fact_layer_r1.yaml`、`src/attack/restoration_first_v23_fact_layer.py`、`src/prepare/restoration_first_v23_fact_layer.py`、`scripts/42_run_v23_fact_layer.py` 与对应回归测试。新的 artifact namespace 为 `artifacts/v23/selection/development_fact_layer/<dataset>/attempts/<attempt_id>/`。
+- fact signature 改为绑定 `dataset/source_key/sentence_hash/original_span/effective_type`，允许同一句中不同非重叠槽位形成不同事实；不生成启发式 subject/relation 文本，true claim 直接保留 supporting sentence。
+- P0 fact validity 与 retrieval diagnostics 分离：source-specific anchor 与旧固定 relation-cue 不再是 P0 硬门槛；完整 proposition、精确 span、source 内 recoverability、单槽 replacement、source absence、content-token 自包含仍保留。DATE/MONEY/PERCENT/IDENTIFIER/SECTION_ID 仅进入 structured diagnostic。
+- runner 只读复用 v22 source pool/reservation 与模型缓存，不读取 r6 aggregate-DF 或其他旧 selection artifact；DF/IDF 诊断字段保持非阻断的未使用状态。新 runner 使用新的 fact identity、source-level 原子 result、checkpoint/resume、PID stale-lock recovery；不获取 ledger lock、不读取 membership/victim/LLM-only response/Retriever/AUC，external calls=`0`。
+- 已完成静态验收：新 fact-layer 回归 `5/5 passed`，新模块与 CLI AST compile 通过，CLI help/status 可用；尚未加载 GPU、尚未读取真实 development source、尚未生成新 attempt artifact。
+
+当前唯一下一步：用户本人先运行新 CLI 的 `extract-facts --dataset edgar` 长命令；返回 fact manifest 后再运行 `validate-facts`，不得直接启动 formal 或外部调用。
+
+### 2026-08-19：EDGAR Fact Layer r1 development 全链通过
+
+- 用户本人依次完成 `extract-facts`、`validate-facts`、`select-pairs`、`run-development-pilot` 与 `validate-development-pilot`；全链绑定同一 attempt=`eac91b4b35113019c3d32ea3b86451136e9d2f77d7d2567de3774664742ffcd9`，validator mode=`recomputed_from_fact_and_selection_artifacts`。
+- 事实层完成 `1000/1000` development source：candidate=`661689`、structured diagnostic=`608652`、fact-valid=`27749`、P0-ready=`21021`；fact manifest SHA-256=`731cc2848f040348c4061705c968a47a5f0741b1af6831ecc1485cb042fd2e38`。
+- pair selection 得到 candidate pairs=`141065`、eligible source=`970/1000`、selected pairs=`2910=970×3`；selection manifest SHA-256=`5897fe990c44c0666d73aabb7c7c401b67b01128b63f3b23515e19694ebe4488`。
+- 预注册容量门槛通过：`N=5210`、`n=1000`、`x=970`、`K_L=5005`、`c=250`、formal eligible lower=`3785`，高于 required formal=`2250`；pilot 与独立 validator 均返回 `status=passed`。
+- 该结果 supersede 的仅是新 Fact Layer r1 的 EDGAR development 推进状态；旧 r6 attempt=`2dedf433...f342` 的 `failed_capacity_shortfall` 证据继续原样保留，不改写为 passed。当前仍未执行 membership、victim/LLM-only response、Retriever、AUC、fresh audit 或 formal test，external calls=`0`。
+- 解释边界：这是 source-level development capacity 与 artifact integrity 通过，不是正式 MIA 攻击效果、AUC 或人工事实质量结论；不能据此直接写成论文主结果。
+
+当前唯一下一步：等待用户单独授权是否按同一 Fact Layer r1 运行 Enron `extract-facts`；未获授权前不启动 Enron/PubMed、fresh audit、formal runtime freeze、API/victim/Retriever 或付费调用。
+
+### 2026-08-19：Enron Fact Layer r1 development 全链通过
+
+- 用户本人完成 Enron `extract-facts`、`validate-facts`、`select-pairs`、`run-development-pilot` 与独立 `validate-development-pilot`；同一 attempt=`1d90a39588905229a8bffc4bb74e7299764580783032ffe1ac64f318b6c9d343`，validator mode=`recomputed_from_fact_and_selection_artifacts`。
+- 事实层完成 `1000/1000` development source：candidate=`24303`、structured diagnostic=`5948`、fact-valid=`2399`、P0-ready=`1175`；fact manifest SHA-256=`001e0bc5de8ec644392195d333c33965e9b7a5c7db59748f546bc5e298f7d155`。
+- pair selection 得到 candidate pairs=`9548`、eligible source=`149/1000`、selected pairs=`447=149×3`；selection manifest SHA-256=`41a17212f756652cd432311fb67501624425a134d8bdb8385fc1218b63419dd5`。
+- 预注册容量门槛通过：`N=35000`、`n=1000`、`x=149`、`K_L=4586`、`c=250`、formal eligible lower=`4187`，高于 required formal=`2250`；pilot 与独立 validator 均返回 `status=passed`。
+- 该结果是 Enron Fact Layer r1 的 source-level development capacity 与 artifact integrity 证据，不是 formal MIA/AUC、victim response、Retriever 或人工事实质量结论；external calls=`0`，未读取 membership/victim/LLM-only response/Retriever/AUC。
+
+当前唯一下一步：等待用户单独授权是否运行 PubMed Fact Layer r1；在授权前不启动 PubMed、fresh audit、formal runtime freeze、API/victim/Retriever 或付费调用。
+
+### 2026-08-20：三数据集 Fact Layer r1 development 全部闭环
+
+- 用户本人完成 PubMed `extract-facts`、`validate-facts`、`select-pairs`、`run-development-pilot` 与独立 `validate-development-pilot`；同一 attempt=`920b51fbfd2ca9a668ffe307cb11d2216ea382141b3b3d74494d66899bb4d672`，validator mode=`recomputed_from_fact_and_selection_artifacts`。
+- PubMed 事实层完成 `1000/1000` source：candidate=`243433`、structured diagnostic=`194238`、fact-valid=`26800`、P0-ready=`18041`；fact manifest SHA-256=`d6beeab538b7e36786b5f34e425ab97471459d420104dc1318a472c52c7a478c`。
+- PubMed pair selection 得到 candidate pairs=`146122`、eligible source=`948/1000`、selected pairs=`2844=948×3`；selection manifest SHA-256=`ef8aea8f22852be487cac2d1c5a8eb9795d73974b111f137b3cbc09e963dc54a`。
+- PubMed 预注册容量门槛通过：`N=47950`、`n=1000`、`x=948`、`K_L=44837`、`c=250`、formal eligible lower=`43639`，高于 required formal=`2250`；pilot 与独立 validator 均返回 `status=passed`。
+- 至此 EDGAR=`970/1000`、Enron=`149/1000`、PubMed=`948/1000` 三个 Fact Layer r1 development 均完成 facts、pair selection、capacity gate 与独立 validator 闭环，三者 external calls 均为 `0`。
+- 解释边界保持不变：这是 development source-level capacity 与 artifact integrity 通过，不是 formal MIA 攻击效果、AUC、victim response、Retriever 结果或人工事实质量结论；旧 r6 EDGAR `failed_capacity_shortfall` 证据继续原样保留。
+
+当前唯一下一步：等待用户单独决定并授权 fresh audit；在授权前不启动 fresh reserve 消费、formal runtime freeze、formal test、API/victim/Retriever 或付费调用。
+
+### 2026-08-20：Fact Layer r1 AI 预审（diagnostic-only）
+
+- 对 EDGAR/Enron/PubMed 三套已通过 artifact 只读核验 `facts.jsonl`、`selected_pairs.jsonl` 与 manifest；未读取 membership、victim/LLM-only response、Retriever、AUC 或 fresh reserve。三套文件 hash、fact-to-pair 绑定、original span、single-slot counterfactual、每 source 三 pair、fact signature 去重和同一原实体最多两 pair 均无结构违规。
+- 高置信度语义风险标记：EDGAR 选中 pair 中约 `144` 条 original entity 为 `The Company` 一类泛化实体，另有 `2 acres`、`2015`、`$2` 等数值/度量被 formal type 接受；Enron 有 `4` 条 `Start Date:` 邮件头样式、`3` 条带时间戳 `To:` 头样式，以及数值标识符 `347356` 被 formal type 接受；PubMed 有 `2` 条 Date/Subject 邮件头样式、`organization` 泛化实体和 `14`、`39`、`25 days` 等数值/度量被 formal type 接受。
+- 代表样本包括：`The Company -> Vanta Industries`、`2 acres -> Sydney`、`Start Date -> Jordan Ellis`、`PLOS ONE -> Alex Carter`、`14 -> Dublin`。这些是 AI 预审的高置信度疑点，不把启发式计数直接当成人工标签或 fresh-audit 结论。
+- 该预审不回写、不删除、不改写任何 r1 artifact，不调整阈值，不消费 fresh reserve，external calls=`0`。当前 development capacity `passed` 与语义质量疑点并存；不能把 capacity 通过直接解释为事实质量或 formal 攻击通过。
+
+当前唯一下一步：用户先复核上述样本；若确认属于误接受，则实现新的 Fact Layer revision/attempt 修复泛化实体、邮件头和 structured-type 泄漏后再考虑 fresh audit，旧 r1 通过 artifact 原样保留。
+
+### 2026-08-19：Enron Fact Layer r1 development 全链通过
+
+- 用户本人完成 Enron `extract-facts`、`validate-facts`、`select-pairs`、`run-development-pilot` 与独立 `validate-development-pilot`；同一 attempt=`1d90a39588905229a8bffc4bb74e7299764580783032ffe1ac64f318b6c9d343`，validator mode=`recomputed_from_fact_and_selection_artifacts`。
+- 事实层完成 `1000/1000` source：candidate=`24303`、structured diagnostic=`5948`、fact-valid=`2399`、P0-ready=`1175`；fact manifest SHA-256=`001e0bc5de8ec644392195d333c33965e9b7a5c7db59748f546bc5e298f7d155`。
+- pair selection 得到 candidate pairs=`9548`、eligible source=`149/1000`、selected pairs=`447=149×3`；selection manifest SHA-256=`41a17212f756652cd432311fb67501624425a134d8bdb8385fc1218b63419dd5`。
+- 预注册容量门槛通过：`N=35000`、`n=1000`、`x=149`、`K_L=4586`、`c=250`、formal eligible lower=`4187`，高于 required formal=`2250`；pilot 与独立 validator 均返回 `status=passed`。
+- 该结果是 Enron development capacity 与 artifact integrity 证据，不是 formal MIA/AUC 或 victim/Retriever 结果；membership、victim/LLM-only response、Retriever、AUC、fresh audit、formal test 均未启动，external calls=`0`。
+
+当前唯一下一步：等待用户单独授权是否运行 PubMed Fact Layer r1；未获授权前不启动 PubMed、fresh audit、formal runtime freeze、API/victim/Retriever 或付费调用。
+
+### 2026-08-20：Fact Layer selection r2 实现并完成三数据集 development 闭环
+
+- 用户确认基于 r1 AI 预审实现 r2。r2 被限定为 selection-only revision=`pcv-restoration-first-v23-fact-layer-selection-r2`：直接复用三套已验证 r1 `facts.jsonl`，不重新运行 GLiNER、不重新读取 source pool、不修改 r1 fact/pair/pilot artifact。新增 r2 config、attack/prepare selection 模块与测试；CLI 对 selection/pilot/validator 增加显式 `--selection-revision r2`，r1 默认入口仍可复现。
+- r2 只过滤开发审计确认的高置信问题：邮件/投稿元数据、结构化数值或度量被映射到 formal type、`The Company`/`organization` 等通用占位实体、明确 PERSON 表面错型以及 table/author-contribution 元数据；略显生硬但类型兼容的 probe 保留。每个 source 继续要求三个不同 fact signature、同一 original entity 最多两对；被过滤后优先从同一 r1 P0 候选池确定性补位。
+- r2 artifact 独立写入每个 r1 attempt 下的 `selection_r2/attempts/<selection_attempt_id>/`，包含完整 scientific identity、selected pairs、quality-filter diagnostics、selection manifest 与 pilot manifest。identity 绑定 r1 fact attempt/manifest hash、r2 config 和 r2 scientific implementation hash；不绑定 Git HEAD、治理 lineage 或 CLI 日志。
+- EDGAR r2 selection attempt=`cc693e3a73ee534d8f1f68c77578e8b87d4295eb0ef18e950c18f12a5d39c917`：raw/candidate pairs=`141065/131014`，quality-rejected facts=`1205`（generic=`908`、PERSON surface=`257`、structured numeric=`40`），eligible=`969/1000`、selected=`2907`；selection manifest SHA-256=`6acb9f9a900feb08045fa1f42b0bafd47ec3ecc117bc5793bdebec04bee0eb3c`。
+- Enron r2 selection attempt=`f0e8b529ae8c3c5ae1b2ab1428e3e4e31262ceb62bed445b021b07c5471de668`：raw/candidate pairs=`9548/9229`，quality-rejected facts=`33`（mail metadata=`29`、PERSON surface=`3`、structured numeric=`1`），eligible=`148/1000`、selected=`444`；selection manifest SHA-256=`9e07f489ed2d4361bfedfdfe866d39160428376658fda92cd25fb4650fb08228`。
+- PubMed r2 selection attempt=`65e8b9fa7173b3f7f95e93a281323cc974be85a755d0bca657e64dbab75a3620`：raw/candidate pairs=`146122/143123`，quality-rejected facts=`323`（document metadata/table=`141`、generic=`5`、mail metadata=`7`、PERSON surface=`144`、structured numeric=`32`），eligible=`946/1000`、selected=`2838`；selection manifest SHA-256=`d90696d2f962da0e9519eb94609b1a554a0c6b69a67583ebb73d0fd533336dfc`。
+- 三套 development capacity 继续通过：EDGAR `K_L=4999` / formal lower=`3780`，Enron `K_L=4553` / formal lower=`4155`，PubMed `K_L=44732` / formal lower=`43536`，均高于 required formal=`2250`。三套独立 validator 均以 `recomputed_from_r1_fact_and_r2_selection_artifacts` 通过。
+- r1 非回归确认：三套 fact manifest hashes 仍为 `731cc284...2e38` / `001e0bc5...d155` / `d6beeab5...a478c`，r1 selection manifest hashes 仍为 `5897fe99...4488` / `41a17212...9dd5` / `ef8aea8f...dc54a`。已知样例 `The Company`、`2 acres`、`$2`、`2015`、`Start Date`、`347356`、timestamp `To:`、`organization`、`14`、`39`、`25 days` 与投稿头误接受均未进入对应 r2 selected pairs。
+- 全过程只读取 development r1 fact artifact；未读取或消费 fresh reserve、membership、victim/LLM-only response、Retriever 或 AUC，未加载 GPU，external calls=`0`。r1 AI 预审和 r1 passed artifact 均保留为历史证据；r2 capacity passed 仍不等于 formal MIA/AUC 或真人事实质量通过。
+- 最终验收：Fact Layer r1+r2+lightweight 定向回归共 `18 tests / OK`，四个 r2 Python/CLI 文件 AST compile 通过，新增文件尾随空白检查与 `git diff --check` 通过；仅出现工作树既有 LF→CRLF warning。环境未安装 `ruff`，本次未为此改变依赖。
+
+当前唯一下一步：用户复核 r2 过滤范围与 development 结果；确认后再对 r2 做 AI 语义复审，并据此决定是否启动尚未消费的真人 blind fresh audit。formal runtime freeze、formal test、API/victim/Retriever 与付费调用继续保持未启动。
+
+### 2026-08-20：Fact Layer selection r2 AI 语义复审（diagnostic-only）
+
+- 只读复核三套 r2 `selected_pairs.jsonl` 共 `6189` 条；未读取 membership、victim/LLM-only response、Retriever、AUC 或 fresh reserve，未改写 r2 artifact，external calls=`0`。
+- 结构层继续通过：EDGAR `2907`、Enron `444`、PubMed `2838` 条的 `original_span`/single-slot replacement 重算均为 `0` mismatch。r2 已知的泛化实体、结构化数值、邮件/投稿头样例未重新进入 selected pairs。
+- 仍发现列表/元数据残留：以 `>=10` 个逗号作为保守 list/clause-dump 诊断，EDGAR=`33`、Enron=`3`、PubMed=`48`，另有 PubMed `1` 条多 email/header 形态。代表样本包括 Enron `Listed by: ... Federal ...`、PubMed `Antibodies against ... UK`、EDGAR 多公司/合同条款枚举句；这些与 P0 的“列表/元数据不进入主选择”边界冲突或高度接近。
+- 仍发现未解析指代表面：EDGAR=`6`、Enron=`2` 条 original entity 是 `our/them` 等代词；代表样本为 Enron `possibly buying gas from them` 被替换为 `Orion Services Inc`，不应作为已恢复事实进入 P0。
+- AI 人工复核的高置信类型错配残留包括：Enron `Texas Exes→Tokyo`（组织/地点且冠词异常）、`gas→Meridian Service`（普通物质/产品）；PubMed `ER→Summit Data Corp`（生物学缩写/组织）、`slaughter→Renewal Period`（事件/合同项）、`caudate→Dublin`（解剖区域/地点）、`Statgraphics Centurion→Casey Brooks`（软件/人物）、`Educational Psychology→Morgan Lee`（学科/人物）、`5 years old girl→Quinn Harper`（描述短语/人物）；EDGAR `college students→Alex Carter`（群体名词/人物）。
+- PERSON 表面形态启发式还标出 EDGAR=`13`、Enron=`3`、PubMed=`123` 条疑点；这只是 AI diagnostic 上界，不把启发式计数直接当真人标签。残留说明 r2 解决了首批高置信问题，但尚未证明整体事实质量足以开 fresh audit。
+
+复审结论：r2 development capacity 仍然 passed，但语义质量不 clean。fresh reserve 继续未消费；在再次收紧列表/代词/实体角色规则并建立新 selection revision 前，不启动真人 blind fresh audit 或 formal。
+
+### 2026-08-20：固定 Fact Layer selection r2 与 API 登录切换交接
+
+- 用户决定接受 r2 的少量残余语义风险，不再实现 r3 或重新抽取实体；r2 作为当前 development/fresh-audit 准备版本固定。该决定不改写、不删除 r1/r2 facts、pairs、pilot 或 AI diagnostic artifact。
+- r2 三数据集 development capacity 与独立 validator 均已通过：EDGAR eligible=`969/1000`、Enron=`148/1000`、PubMed=`946/1000`；formal lower 分别为 `3780`、`4155`、`43536`，均高于 required=`2250`。
+- 当前 r2 selection manifest：EDGAR=`6acb9f9a900feb08045fa1f42b0bafd47ec3ecc117bc5793bdebec04bee0eb3c`，Enron=`9e07f489ed2d4361bfedfdfe866d39160428376658fda92cd25fb4650fb08228`，PubMed=`d90696d2f962da0e9519eb94609b1a554a0c6b69a67583ebb73d0fd533336dfc`。
+- API 登录/账号切换仅改变后续命令使用的本地凭据与额度，不改变协议、r2 identity、selection、reservation、fresh reserve 或正式测试边界；不得把登录成功解释为 API/victim/Retriever/付费调用授权。
+- 截至本条目，membership、victim/LLM-only response、Retriever、AUC、fresh reserve 与 formal test 均未读取/消费，`external_calls_performed=0`。不得在交接时自动启动长任务或外部调用。
+
+当前唯一下一步：新登录环境先只读核验本交接文档、两份项目总表和 r2 manifest；用户明确授权后再按冻结的 r2 版本进入 fresh audit。任何 API/victim/Retriever 或付费调用仍需单独、明确授权。
+
+### 2026-08-20：frozen-r2 fresh audit 准备授权与只读核验
+
+- 用户确认 Fact Layer selection r2 固定，授权范围仅为 frozen-r2 fresh audit 的准备与只读验证；不授权 API、victim、Retriever、付费调用或正式实验。
+- 三套 `validate-development-pilot --selection-revision r2` 只读重算均通过：EDGAR `969/1000`、Enron `148/1000`、PubMed `946/1000`；三套 selection manifest hash 与 pilot manifest 绑定一致，`external_calls_performed=0`。
+- 只读核验确认现有共同 prior snapshot、三套 250-source reserve plan 与 group completion 属于 execution revision `71e862b7591b2ac9bd1a1759b3784fc3b0e4b7286b96098d4997f0f173b78043`；未读取 reserve source 内容，未生成 fresh-audit packet、authorization 或 ledger 新行。
+- 当前 `scripts/42_run_v23_restoration_first.py` 没有 `fresh-blind-audit`/packet-preparation 入口，`artifacts/v23/audit/` 尚不存在；不得用临时脚本或通用原语绕过冻结 runtime 与 reserve 可见性门禁。
+
+当前唯一下一步：在不消费 fresh reserve 的前提下，等待用户另行授权实现/冻结 frozen-r2 fresh-audit preparation runner；API、victim、Retriever、付费调用和正式实验继续 blocked。
+
+### 2026-08-20：frozen-r2 fresh-audit preparation runner 已实现并冻结
+
+- [x] 新增 preparation config、runner 与 CLI，入口包含 `freeze`、`validate-freeze`、`status`、authorization 校验、`prepare-dataset` 和 `build-packets`。
+- [x] freeze identity=`09b9a362ec56acddc3e348084521d3fee41171143c5b37589e782c8ac7acf803`，freeze manifest SHA-256=`93629f040910d5f48ce4e3346364a9a24ee7bd40dbdbfafba5434ff5c37ced0f`；绑定三数据集 r2 manifest、reserve/group metadata、design/selection/model lock 与 implementation hash。
+- [x] runner fail-closed 校验连续 reserve prefix、完整 source-result aggregate hash、数据库 hash/schema、盲包 visible/hidden schema、deterministic HMAC order；authorization 明确禁止 API、victim、Retriever、外部调用和 formal experiment。
+- [x] 定向 unittest `8/8 OK`，内存 AST compile、CLI help、`git diff --check` 通过；`validate-freeze` 与 `status` 通过，`source_content_read=false`、`external_calls_performed=0`，audit directory 尚不存在。
+- [x] 本轮未执行 `prepare-dataset`、`build-packets`、authorization 生成、fresh reserve source 内容读取、ledger 写入、membership、victim/LLM-only response、Retriever 或 AUC。
+- [ ] 实际 dataset preparation、blind packet 构造与 human audit 仍需用户另行明确授权，不得表述为 fresh audit 已执行或 formal 结果。
+
+当前唯一下一步：等待实际 `prepare-dataset` 的单独明确授权；保持 frozen-r2、reserve 未消费、外部调用为 `0`。
+
+### 2026-08-20：用户授权由本人启动 dataset preparation
+
+- [x] 用户明确授权 frozen-r2 `dataset preparation`；授权仅覆盖本地 reserve source 读取、事实抽取、r2 pair selection 与 dataset manifest 生成。
+- [x] 授权不包含 API、victim、Retriever、付费调用、membership、AUC、blind packet 构造或 formal experiment。
+- [ ] 本会话不启动长任务；由用户按数据集分别运行命令。执行前仍需确认 `mia_model` Python 与 CUDA；中断后只允许使用同一 authorization 和连续 prefix resume。
+
+当前唯一下一步：用户自行运行第一个数据集的 `prepare-authorization` 与 `prepare-dataset` 命令；本轮截至交接仍未读取 fresh reserve source，`external_calls_performed=0`。
+
+### 2026-08-20：EDGAR preparation 首次启动失败与 r1-fix1 修复
+
+- [x] 用户生成的 EDGAR authorization=`d98e00efaa41cce983d3624af975b4e344edd47e0e3286106363fff5346d775d.json` 保留为历史授权记录；首次 `prepare-dataset` 在 `_FreshAuditSourceReader` 进入 `with` 时因缺少上下文管理协议而失败。
+- [x] 失败发生在 source 读取循环前；仅创建了旧 freeze identity 下的空 audit 目录并完成 reader metadata/schema 初始化，没有写 source-result、dataset manifest、selected pairs 或 ledger，没有读取 fresh reserve source 内容，外部调用仍为 `0`。
+- [x] 修复为 reader 增加 `__enter__`/`__exit__` 并新增回归测试；由于 freeze 绑定 implementation hash，未覆盖旧 `r1.freeze.json`，新建 runner revision=`r1-fix1`。
+- [x] 新 freeze identity=`bf3808063e71ff46f371bd8a27c3d3023b39dfe57f54b76bfeb0456db2b17f74`，manifest SHA-256=`9acd8c85ec08a924ae23b55026d62a25bb7ada9ce62c085367a115812e88dc79`；`validate-freeze`、`status` 通过，`9/9` preparation tests 通过。
+- [ ] 旧 authorization 不得复用；需按新 freeze 重新生成 dataset-specific authorization 后再重试 EDGAR。旧失败目录和旧 freeze 保留，不做清理或覆盖。
+
+当前唯一下一步：用户使用新 `r1-fix1` freeze 生成新的 EDGAR authorization，并重新运行 `prepare-dataset`；仍不启动 packet、API、victim、Retriever 或 formal experiment。
+
+### 2026-08-20：EDGAR preparation 第二次失败与 r1-fix2 顺序身份修复
+
+- [x] 用户使用 `r1-fix1` authorization=`811720960ee96d3406c6500c9c0322c1440d10c1b31074f9e9610321984d296e` 重试；首个 reserve source 已进入 reader，但因错误比较 DB `source_order_rank` 与 reserve numeric index，触发 `fresh_audit_source_order_identity_drift`。
+- [x] 只读核验确认冻结 source-order 文件中该 source 的 index=`1000`，SQLite `source_order_rank` 为 hash 字符串；本次已读取首个 reserve source 内容但没有写 source-result、dataset manifest、selected pairs 或 ledger，继续保留旧 audit 目录与 authorization。
+- [x] 修复为读取并校验冻结 `source_order[index] == source_key`，不再误比较 DB rank 字段；新增顺序身份回归测试，runner revision=`r1-fix2`。
+- [x] 新 freeze identity=`3bfad5b67a7f71f7d8278e6e18a5149d37e78464b64d750fc41a40129a8bc4ae`，manifest SHA-256=`99c12c2e74336b83503bfe3e33b95ce3df8cc9d8aa295e1028e949da81699c41`；`validate-freeze/status` 通过，preparation tests=`10/10`。
+- [ ] `r1-fix1` authorization 不得复用；需按 `r1-fix2` freeze 重新生成 EDGAR authorization 后再重试。
+
+当前唯一下一步：用户为 `r1-fix2` 生成新的 EDGAR authorization 并重试；仍不启动 packet、API、victim、Retriever 或 formal experiment。
+
+### 2026-08-20：EDGAR frozen-r2 dataset preparation 通过
+
+- [x] 用户使用 r1-fix2 authorization=`6fa812eeef25ae6f687ab54999e97e2b013192145ca3263e77e97facae6924f9` 完成 EDGAR dataset preparation。
+- [x] 按冻结 reserve 顺序评估 `104` 个 source，选出前 `100` 个 eligible source，生成 `300=100×3` 个 selected pair；dataset identity=`aff3fe282ce788e439ad3de696da99c6bf4507239eddb2ace9bc55ca848a553e`。
+- [x] EDGAR dataset manifest `status=passed`，source-results aggregate identity=`cc8e607ce28cb1edf652a2a8dc8090cdb462eff02dc73cfdf6bb5f6d930b84cc`，`external_calls_performed=0`；未读取 membership、victim/LLM-only response、Retriever 或 AUC。
+- [x] 本阶段仅消费 EDGAR fresh-audit reserve 内容；Enron/PubMed 尚未运行，blind packet、human audit、API/victim/Retriever、付费调用和 formal experiment 仍未授权/未启动。
+
+当前唯一下一步：等待用户决定是否分别授权并运行 Enron、PubMed dataset preparation；三数据集完成前不得构造 blind packet。
+
+### 2026-08-20：Enron preparation 改由用户续跑
+
+- [x] 用户要求 Enron 达到 `100` eligible 即停止；runner 原有停止条件已满足该要求，无需改代码或改配置。
+- [x] 本会话启动的 Enron 进程已由用户要求停止；已保留连续 `157/250` 个 source-result，其中 `22` 个 eligible；尚未写 dataset manifest、selected pairs manifest 或 packet。
+- [x] 现有 Enron authorization=`dc54a681eea863dc15cebc35b712a80f516eb91cddd8330e953d67b27d526446` 仍绑定当前 freeze，可用于连续 prefix resume；未发生 API/victim/Retriever/付费调用，external calls=`0`。
+
+当前唯一下一步：用户自行使用原 authorization 续跑 Enron；达到 `100` eligible 后 runner 自动停止并生成 dataset manifest。随后再决定是否运行 PubMed。
+
+### 2026-08-20：Enron fresh-audit reserve eligible shortfall
+
+- [x] Enron 使用当前 freeze=`3bfad5b67a7f71f7d8278e6e18a5149d37e78464b64d750fc41a40129a8bc4ae` 与 authorization=`dc54a681eea863dc15cebc35b712a80f516eb91cddd8330e953d67b27d526446` 完整评估 `250/250` 个 reserve source，source-result index 连续 `0..249`。
+- [x] 最终仅 `29` 个 source eligible，低于冻结目标 `100`；runner 按 fail-closed 规则抛出 `fresh_audit_reserve_eligible_shortfall`，未生成 Enron dataset manifest 或 selected-pairs release artifact。
+- [x] 保留全部 250 个 source-result 与授权记录；不把 shortfall 改写为 passed，不增加 reserve、不放宽 selected count、不重新抽取实体、不修改 r1/r2 历史 artifact。
+- [x] 本次无 API、victim、Retriever、付费调用、membership、AUC 或 formal experiment，`external_calls_performed=0`。
+
+当前唯一下一步：Enron 本轮 fresh-audit preparation 以 shortfall 失败证据封存；不得继续重跑同一 reserve 以凑数。PubMed 是否运行仍需单独决定，blind packet 不能构造。
+
+### 2026-08-20：Enron 1000-source reserve 扩展 revision 已实现并冻结 policy
+
+- [x] 用户决定在保留 Fact Layer selection r2 的前提下，为 shortfall 后的 fresh audit 建立版本化 reserve 扩展；不实现 r3、不重新抽取实体、不修改或覆盖旧 r1/r2 artifact，也不把旧 Enron `29/250` shortfall 改写为 passed。
+- [x] 新增 `pcv-restoration-first-v23-fresh-audit-preparation-r2` / runner revision=`r2-enron-reserve-1000`。新的原子 reservation group 使用未消费 source，容量冻结为 EDGAR=`250`、Enron=`1000`、PubMed=`250`；每数据集 selected target 仍为 `100` source×`3` pair，blind packet 总量仍为 `900` pair。
+- [x] 新 execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`；policy freeze identity=`20b0972141748e0b8f7b6ed1565df3294a3215dc1b49f5ffaccc4b41975dcc72`，policy manifest SHA-256=`71927082970303e974b85069f07bad72030470b67335fb9540d942e4539170a0`。
+- [x] 新 runner 增加 policy freeze/validator、显式 reserve-registration authorization、append-only ledger/hash-chain 注册与恢复、逐数据集 preparation authorization、dataset preparation、packet gate；旧 `scripts/43_prepare_v23_fresh_audit.py` 与 freeze=`3bfad5b6...a8bc4ae` 只读回归仍为 `passed`。
+- [x] 定向测试为 `14/14 passed`（含隔离临时 ledger 的 batch hash-chain、预算 journal、anchor 与幂等恢复），AST 编译与 `git diff --check` 通过；环境未安装 `ruff`，未安装新依赖。当前只完成 policy freeze，reservation group=`not_started`，preparation freeze=`not_started`。
+- [x] 本轮没有生成 reserve-registration authorization，没有读取/登记新 reserve，没有修改 ledger；ledger tip 仍为 `3c912fd1...6aa8e1`。未运行 CUDA selector、blind packet、human audit、API/victim/Retriever、付费调用或 formal experiment，`external_calls_performed=0`。
+
+当前唯一下一步：等待用户明确授权并自行运行新 revision 的 reserve-registration authorization 与 `register-reserve-group` 长命令；注册和 validator 通过后才允许 `freeze-preparation`。在此之前不得运行 dataset preparation 或 `build-packets`。
+
+### 2026-08-20：expanded reserve group 注册通过
+
+- [x] 用户运行 reservation authorization=`d4abd2b93dbf80ebb7fd9ea7085e8ab6c8247d4f6cb64044a835db3b64f3f2dc`，明确授权 identity-only registrar 与 append-only ledger mutation；API、victim、Retriever、付费调用、membership、AUC、blind packet、human audit 和 formal experiment 均未授权。
+- [x] 新 reservation group 注册通过：EDGAR=`250`、Enron=`1000`、PubMed=`250`，合计 `1500` 条新 source identity；新 execution revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`，最终 ledger tip=`3dce5019c9272c7f0abb0c182bed077d9f57f58e6ab8234eb9b7e11014c40912`。
+- [x] reservation validator 通过，reservation validation identity=`1b4e230aaf0989e0dd13d82538032780561db08df423f09ce21987d1311d869d`；source content 仅由 identity registrar 瞬时读取以重算 hash，未持久化 source 内容、facts、claims 或 derived feature。
+- [x] 旧 r1-fix2 freeze 仍通过；本阶段没有运行 fact selector、dataset preparation、blind packet、human audit、API/victim/Retriever 或 formal experiment，`external_calls_performed=0`。
+
+当前唯一下一步：用户自行运行 `freeze-preparation` 并只读 `validate-freeze`；在 preparation freeze 通过前不得运行 dataset preparation 或 `build-packets`。
+
+### 2026-08-20：expanded frozen-r2 preparation freeze 通过
+
+- [x] 用户连续运行 `freeze-preparation` 与 `validate-freeze`，两次回传的冻结身份一致；preparation freeze identity=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19`，freeze manifest SHA-256=`f51640c9385a4cebc94b1ffe4a59c8e377c6ad4ef5f427ef1d40dd2e1a8614c6`。
+- [x] 只读复验确认 policy freeze、expanded reservation group 与 preparation freeze 均为 `passed`；runner status=`policy_frozen_downstream_blocked`，execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`。
+- [x] 新 freeze 继续绑定固定 Fact Layer selection r2 的三套 passed selection/pilot identity，并绑定新原子 reserve group：EDGAR=`250`、Enron=`1000`、PubMed=`250`，每数据集目标仍为前 `100` eligible source × `3` pair。
+- [x] 旧 r1-fix2 EDGAR passed 与 Enron `29/250` shortfall artifact 继续按旧 freeze/execution revision 保留，不覆盖、不改写，也不跨 reservation group 计入新 revision；新 revision 的三数据集 preparation 必须分别授权并重新产生自身身份。
+- [x] 本次 freeze/status/validator 未读取 reserve source 内容，未启动 dataset preparation、blind packet、human audit 或 formal experiment；API/victim/Retriever/付费调用继续禁止，`external_calls_performed=0`。
+
+当前唯一下一步：等待用户明确授权 expanded revision 下按冻结 dataset order 开始 EDGAR dataset preparation；授权前不生成 preparation authorization、不读取新 reserve 内容、不运行 `build-packets`，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded revision EDGAR preparation authorization 已生成
+
+- [x] 用户明确授权 expanded frozen-r2 revision 的 EDGAR `dataset_preparation`；生成 authorization=`1d507ecf2fc29e2f90cf0bf031336ed209b3bbc9b6b2bf2239b84eb21fd327cb`，绑定 preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`。
+- [x] authorization scope 仅为 `dataset_preparation` / `edgar`，预算上限为 `250` source reads；`validate-authorization` 通过，API/victim/Retriever/付费调用、membership、AUC、blind packet、human audit 与 formal experiment 均明确禁止。
+- [x] 授权生成与验证未读取 reserve source 内容，未复用旧 EDGAR dataset preparation，未运行 dataset preparation，`external_calls_performed=0`。
+
+当前唯一下一步：用户本人执行该 authorization 绑定的 expanded EDGAR `prepare-dataset` 长命令；运行前后不得执行 `build-packets`，Enron/PubMed preparation 仍需分别授权，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded frozen-r2 EDGAR dataset preparation 通过
+
+- [x] 用户执行 expanded EDGAR `prepare-dataset` 成功；按新 reservation 顺序评估 `106` 个 source，`eligible=100`，选出 `100` 个 source，生成 `300=100×3` 个 selected pair。
+- [x] dataset manifest `status=passed`，manifest SHA-256=`8106c4218d12e8b976968ea7e3db1d9e0b3b873eef8cdd1a84975c687e80e004`；dataset identity=`39beeeee95dc464050c7068c15744de48f9e8e03ad438b95a53cbd23f06110aa`，source-results identity=`36e0b21812867fa44138b7639895032e6086da8ed07d4b77021ce57c8a1cf829`。
+- [x] EDGAR manifest 绑定 expanded preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与新 reserve snapshot/plan；未复用旧 EDGAR dataset manifest，旧结果继续保留为历史证据。
+- [x] 本次仅消费 expanded EDGAR reserve；`external_calls_performed=0`，未读取 membership、victim/LLM-only response、Retriever 或 AUC，未构造 blind packet、未启动 human audit 或 formal experiment。
+
+当前唯一下一步：等待用户单独授权 expanded revision 的 Enron dataset preparation；在 Enron 与 PubMed preparation 均通过前不得构造 blind packet，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded revision Enron preparation authorization 已生成
+
+- [x] 用户明确授权 expanded frozen-r2 revision 的 Enron `dataset_preparation`；生成 authorization=`8280df6a9c0c0446dec09e5e324efc4df0a4ba5141550900bb76ba0e646e0232`，绑定 preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`。
+- [x] authorization scope 仅为 `dataset_preparation` / `enron`，预算上限为 `1000` source reads；`validate-authorization` 通过，API/victim/Retriever/付费调用、membership、AUC、blind packet、human audit 与 formal experiment 均明确禁止。
+- [x] 授权生成与验证未读取 Enron reserve source 内容；不复用旧 `29/250` shortfall 或旧 preparation，`external_calls_performed=0`。
+
+当前唯一下一步：用户本人执行该 authorization 绑定的 expanded Enron `prepare-dataset` 长命令；运行前后不得执行 `build-packets`，PubMed preparation 仍需单独授权，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded frozen-r2 Enron dataset preparation 通过
+
+- [x] 用户执行 expanded Enron `prepare-dataset` 成功；按新 reservation 顺序评估 `665` 个 source，`eligible=100`，选出 `100` 个 source，生成 `300=100×3` 个 selected pair。
+- [x] dataset manifest `status=passed`，manifest SHA-256=`597cb9f9a66777eb747591fcd9015b6907b43ee36f376b0e8ab7bcaaf781f920`；dataset identity=`cdd27cfb745ef58876db26c70b837cc9689e9e4cba0ae9fccb536619f2b2dbb5`，source-results identity=`3b0b0337250051cca36a6358a6ea2c26b1d7f26274143b1c32e24f0b7f35d429`。
+- [x] Enron manifest 绑定 expanded preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 1000-source reserve snapshot/plan；旧 `29/250` shortfall 继续作为旧 revision 失败证据保留，未覆盖、未改写、未跨 revision 复用。
+- [x] 本次仅消费 expanded Enron reserve；`external_calls_performed=0`，未读取 membership、victim/LLM-only response、Retriever 或 AUC，未构造 blind packet、未启动 human audit 或 formal experiment。
+
+当前唯一下一步：等待用户单独授权 expanded revision 的 PubMed dataset preparation；PubMed 通过后三数据集 preparation 才算齐备，届时仍需单独授权才能构造 blind packet。API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded revision PubMed preparation authorization 已生成
+
+- [x] 用户明确授权 expanded frozen-r2 revision 的 PubMed `dataset_preparation`；生成 authorization=`52127310a0595205a672e2e598bf314d3c551efc653eadd78fbac75c44b496c2`，绑定 preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`。
+- [x] authorization scope 仅为 `dataset_preparation` / `pubmed`，预算上限为 `250` source reads；`validate-authorization` 通过，API/victim/Retriever/付费调用、membership、AUC、blind packet、human audit 与 formal experiment 均明确禁止。
+- [x] 授权生成与验证未读取 PubMed reserve source 内容；不复用旧 PubMed preparation，`external_calls_performed=0`。
+
+当前唯一下一步：用户本人执行该 authorization 绑定的 expanded PubMed `prepare-dataset` 长命令；三数据集 preparation 全部通过后，仍需单独授权才能构造 blind packet，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-21：expanded frozen-r2 三数据集 preparation 全部通过
+
+- [x] 用户完成 expanded PubMed `prepare-dataset`；按新 reservation 顺序评估 `107` 个 source，`eligible=100`，选出 `100` 个 source，生成 `300=100×3` 个 selected pair。
+- [x] PubMed dataset manifest `status=passed`，manifest SHA-256=`b97a306335532c8d98a3341205b6189836f32685ec81f8bd4cd36389aab065db`；dataset identity=`1fb181e18968106bd9cd05593e57f8526ba5b46c714687a9640bd0c985f7dd35`，source-results identity=`4931244841ae2cc18af9214e31ba6fea487122b489e5c6334e99ee0780f96c24`。
+- [x] expanded freeze 下三数据集 preparation 均通过且身份一致：EDGAR `106` evaluated / `100` selected，Enron `665` / `100`，PubMed `107` / `100`；总计 `900` selected pair。各 dataset manifest 均绑定 freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19`，各自 `external_calls_performed=0`。
+- [x] 旧 r1/r2 preparation、EDGAR 旧 passed、Enron 旧 `29/250` shortfall 与旧 freeze/ledger 继续保留；expanded 结果未跨 revision 复用旧 dataset artifact，也未覆盖历史证据。
+- [x] 本阶段未构造 blind packet、未进行 human audit，未读取 membership、victim/LLM-only response、Retriever 或 AUC；API/victim/Retriever、付费调用和 formal experiment 仍未授权。
+
+当前唯一下一步：等待用户单独授权 expanded frozen-r2 的 `packet_preparation` / `build-packets`；授权前不得构造 blind packet，API/victim/Retriever、付费调用与 formal experiment 继续 blocked。
+
+### 2026-08-24：expanded frozen-r2 packet preparation authorization 已生成
+
+- [x] 用户明确授权 expanded frozen-r2 三数据集 `packet_preparation` / `build-packets`；生成 authorization=`0f646578e6d2089303288cd94afe892ddd917cb51b628dc118c076b92b4ad491`，绑定 freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 execution reservation revision=`f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b`。
+- [x] authorization scope 仅为 `packet_preparation`，dataset=`null` 表示消费三套已通过 dataset manifest；`validate-authorization` 通过，`budget_maximum_source_reads=0`，只允许 packet artifact 写入。
+- [x] API/victim/Retriever/付费调用、membership、AUC、human audit 与 formal experiment 均明确禁止；授权生成与验证未执行 `build-packets`，`external_calls_performed=0`。
+
+当前唯一下一步：用户本人执行该 authorization 绑定的 `build-packets` 长命令；完成并验证 packet manifest 后，human audit 仍需单独授权，API/victim/Retriever、付费调用与 formal experiment继续 blocked。
+
+### 2026-08-24：兼容层协议放宽但科学 freeze 保持不变
+
+- [x] 针对 packet builder 将 freeze 摘要误当完整 manifest 的兼容缺陷，采用“科学层 freeze + 兼容层 envelope”分层规则；不生成 successor freeze，不改变三数据集 selection、reserve 顺序、预算、pair 数量或任何历史 artifact。
+- [x] 原 policy identity=`20b0972141748e0b8f7b6ed1565df3294a3215dc1b49f5ffaccc4b41975dcc72` 与 preparation identity=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 继续通过；兼容 envelope=`configs/restoration_first_v23_fresh_audit_compatibility_r1.json`，identity=`e40222d9bf30631353677039ded6b5e425439eba3fd71a6df24651fdf3d18ac2`。
+- [x] 兼容白名单仅覆盖 packet adapter：legacy `build_packets`、r2 wrapper 的 `_legacy_packet_freeze_manifest` / `_legacy_profile` / `build_packets`；fact extraction、selection、source identity、reserve ledger、模型锁与 CLI 科学参数仍 fail-closed。
+- [x] legacy packet builder 现在从同一路径读取并校验完整 freeze manifest，再计算 reserve snapshot binding；未运行 `build-packets`，未读取 membership、victim/LLM-only response、Retriever 输出或 AUC，`external_calls_performed=0`。
+
+当前唯一下一步：用户本人重新执行既有 packet `build-packets` 长命令；兼容验证通过后仍需单独授权 human audit，API/victim/Retriever、付费调用与 formal experiment继续 blocked。
+
+### 2026-08-24：expanded frozen-r2 blind packet preparation passed
+
+- [x] 用户使用既有 `packet_preparation` authorization=`0f646578e6d2089303288cd94afe892ddd917cb51b628dc118c076b92b4ad491` 执行 `build-packets`，结果为 `status=passed`。
+- [x] 生成 `900` 行 blind packet；packet manifest SHA-256=`bbe1479a6e679e052a7e1b6312afdcca72ee803806d61a1d129ada68f363e587`；artifact 位于 frozen-r2 audit root 下。
+- [x] `external_calls_performed=0`；本阶段未授权或启动 human audit、API、victim、Retriever、付费调用或 formal experiment，未读取 membership、victim/LLM-only response、Retriever 输出或 AUC。
+- [x] 对前一条兼容层记录作 superseding：最终 compatibility envelope identity=`388a8a99b704422dceed3254aa672dda2a4d1fe8397ba76ee4c0bbbee64d68fc`；原 frozen-r2 scientific identities 未变化。
+
+当前唯一下一步：等待用户单独明确授权 human blind audit；在此之前不得打开/解盲 packet、运行 API/victim/Retriever 或启动正式实验。
+
+### 2026-08-24：AI-only blind-packet structural audit 完成（superseding）
+
+- [x] 用户明确授权只做 AI 审计、不做人工审计；生成并验证 assistant-only authorization=`aed7737ca2c698f9c289b19d99f50ce0810cabe2ddf77e760d355d15340a6aab`，绑定 frozen-r2 preparation freeze=`4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19` 与 packet manifest SHA-256=`bbe1479a6e679e052a7e1b6312afdcca72ee803806d61a1d129ada68f363e587`。
+- [x] `scripts/45_run_v23_ai_audit.py run` 完成：packet `900` 行，`875 pass / 25 uncertain / 0 fail`；25 条不确定均为 `not_exact_single_slot_replacement`，不等同于人工语义标注或 formal gate。
+- [x] 产物为独立 `ai_audit/` diagnostic-only artifact：audit identity=`467c29448144182f3907462c5eeddeaeee87ce5eced8d98cb9f1497556338b67`，manifest SHA-256=`1fa1a3547c0a20da9b6b34e1f591f8cbd9d5c7b8c360f87f2d8eea4708960d27`；`reviewer_role=assistant`、`review_mode=assistant_only_structural_review`、`human_validation_performed=false`，不产生人工一致性或 Cohen's kappa 证据。
+- [x] 审计只读取公开 blind packet；manifest 记录 private key、membership、victim response、Retriever output、AUC 均未读取，`external_calls_performed=0`，未启动 formal experiment。
+
+当前唯一下一步：AI 审计结果仅作为 diagnostic-only 结构审查证据；除非用户另行明确授权，不得进行人工审计、解盲、API/victim/Retriever 调用、付费调用或 formal experiment。
+
+### 2026-08-24：AI 结果封存口径锁定
+
+- [x] 明确将 frozen-r2 AI audit 结果封存为 `diagnostic evidence`；不纳入 canonical formal release，不改写为 passed，不替代独立人工盲审或 formal gate。
+- [x] 原始 AI audit manifest、labels、`25` 条 uncertain 及 audit identity 原样保留；不再基于该结果重跑、调参、补样或消费 fresh reserve。
+
+当前唯一下一步：保持该 diagnostic evidence 封存；除非用户另行明确授权，不进行人工审计、解盲、API/victim/Retriever 调用、付费调用或 formal experiment。
+
+### 2026-08-24：API 登录切换交接更新
+
+- [x] 新建 `研究记录/API登录切换_工作交接_20260824.md`，绑定当前 frozen-r2 preparation、expanded reserve、900-row packet 与 AI-only diagnostic evidence 的完整 identity/hash。
+- [x] 交接文件明确：AI 结果仅为 `diagnostic evidence`；旧交接和全部历史 artifact 原样保留；账号切换不改变协议或授权。
+- [x] 当前下一步改为等待用户明确授权实现并冻结 v23 formal runtime；该授权仅包含 runtime 代码/配置/测试、离线验证和新的 runtime freeze，不包含 formal test、GPU、API、victim、Retriever、付费调用、membership、response、AUC 或 fresh reserve。
+
+当前唯一下一步：新账号接管后先只读核验交接文件和两份项目总表；获得 formal runtime 实现/冻结授权前，不修改实验 artifact、不运行正式实验、不发起外部调用。
+
+### 2026-08-24：v23 formal runtime r1 已实现并冻结（superseding）
+
+- [x] 新账号按交接顺序完成只读核验：expanded frozen-r2 policy/preparation、三套 dataset manifest、900-row blind packet 与 AI-only diagnostic evidence 的逻辑 identity 和实际文件 SHA-256 均与交接表一致；只核验公开 manifest/hash，未打开 private audit key，未读取 membership、victim/LLM-only response、Retriever output 或 AUC。
+- [x] 新增独立 `pcv-restoration-first-v23-formal-runtime-r1` 配置、runtime guard、freeze/validator/status CLI 与定向测试；没有改写旧 `scripts/42_run_v23_restoration_first.py` lightweight 状态入口，也没有修改 frozen-r2 preparation、packet、AI labels、ledger、旧 runtime bundle 或历史失败 artifact。
+- [x] formal runtime 实现冻结了 source-level evaluation、Fact Layer r1 / selection r2、每数据集 `2250` eligible source、`3` pair / `6` query / backend、dense/BM25/hybrid 分离、`1000/1000/250` source-exclusive split、主 index `KB_Member` only、shadow index `Reserve` only、递归 forbidden-input、stage authorization 与预算操作前 fail-closed 守卫。
+- [x] 新 formal runtime identity=`e8cc004b05a317b7b74b559757f46bd62e2c7ab28b961bd885e0fa9e1636a72c`；runtime bundle SHA-256=`4434cf5c43a6a676d1d1cbd66cf7c4f1b7df33712cd751438c20b19876ece369`；freeze manifest SHA-256=`c3ef3159ea8b6372e0a59ae6f2899578614962ba6426de2b11b4da6630d8fe14`，精确绑定 `30` 个 runtime 文件。因本轮明确禁止提交，`code_commit=a964e636...bca03` 仅作 freeze-time provenance，执行身份由 exact worktree file SHA-256 closure 冻结。
+- [x] 独立 `validate-freeze`、`status` 与第二次 `freeze` 幂等复验均通过；formal runtime 定向 unittest=`11/11 OK`，3 个新增 Python 文件内存 AST 与 CLI help 通过。扩大到全部 `test_restoration_first_v23*.py` 的离线回归共 `102` 项，其中 `62 passed / 39 skipped / 1 failed`；唯一失败是既有 frozen-r2 测试仍断言 reservation/preparation=`not_started`，与当前已冻结的 `passed` artifact 状态冲突，未为凑通过改写该历史测试。`compileall` 因既有 Windows `__pycache__` 权限失败，按仓库规则未删除缓存或修改权限。
+- [x] 首次 `freeze` 已在内存完成 manifest/identity 构造，但 Windows 在目标文件 `xb` 创建时返回 `PermissionError`；只读确认目标文件不存在、没有 partial artifact 后，使用同一 builder 的完整 canonical JSON 经 `apply_patch` 新增 freeze 文件，再由独立 validator 重算对象 identity、30-file closure 与完整文件 SHA-256。未改目录权限、未清理缓存、未覆盖任何既有文件。
+- [x] freeze/status 均记录 `formal_test_started=false`、`source_content_interpreted=false`、`membership_read=false`、`victim_or_llm_only_response_read=false`、`retriever_output_read=false`、`auc_read=false`、`fresh_reserve_consumed=false`、`packet_rebuilt=false`、`external_calls_performed=0`；未运行 GPU、API、victim、Retriever、付费调用、formal test，也未提交或推送。
+- [x] AI-only audit 继续以 `diagnostic_only=true`、`accepted_as_formal_gate=false` 绑定。design-r6 要求的 canonical independent human blind audit result 仍不存在，runtime status 因此为 `formal_runtime_frozen_downstream_blocked`；runtime freeze 不等于 formal test 授权。
+
+当前唯一下一步：停止在已冻结 runtime 边界，等待用户对 canonical independent human blind audit 或其他下一项工作的单独明确授权；在 human gate 通过且 formal test 另行授权前，不启动 formal scan、GPU、API、victim、Retriever、付费调用、membership/split、response、AUC、fresh reserve 或 packet 重建。
+
+### 2026-08-24：runtime-r1 门禁按项目负责人指令原位改为 AI 审计 + 人工核验（superseding）
+
+- [x] 用户明确取消 canonical independent human blind audit 硬门禁，要求不新建 design/runtime revision，改由已绑定的 AI-only audit 与项目负责人人工核验共同满足 formal-scan 前置门禁。为避免改变 `configs/restoration_first_v23.yaml` 的 hash 并连锁失效 frozen-r2 preparation/packet，本次没有修改 design-r6、design manifest、frozen-r2 artifact、AI labels 或 packet，只原位修改现有 runtime-r1 执行门禁、守卫、测试和同名 freeze。
+- [x] 新门禁准确记录：AI artifact 继续为 `diagnostic_only=true`，AI 单独不能满足门禁；项目负责人声明人工核验结果与绑定 AI audit 一致，组合门禁 `status=passed`。该人工核验明确为非独立、非盲审、无单独 human-label artifact，不得声称独立人工盲审、reviewer agreement 或 Cohen's kappa。
+- [x] 原 runtime-r1 identity=`e8cc004b05a317b7b74b559757f46bd62e2c7ab28b961bd885e0fa9e1636a72c` / bundle=`4434cf5c43a6a676d1d1cbd66cf7c4f1b7df33712cd751438c20b19876ece369` 由本条 supersede；同名 runtime-r1 原位重算后 identity=`2f45761bd0f5c9656378d1295eec26e2b91760bbd1f32173eedc918624ad03d3`，runtime bundle SHA-256=`db051de1c31f00dec6898c03ad9b06aa0086a4ea0ed859151cd3427251a3eef7`，freeze manifest SHA-256=`b4545bc82bea38494ab2f7702770f4502591e1eae19ccbc768ce0a4814fe5e0b`，仍绑定 `30` 个 runtime 文件。
+- [x] 定向 unittest `11/11 OK`、内存 AST、`validate-freeze`、`status` 与重复 `freeze` 幂等复验通过；status=`formal_runtime_frozen_gate_passed_awaiting_formal_test_authorization`，`human_blind_audit_gate_required=false`，`ai_plus_project_owner_verification_gate_passed=true`，`formal_test_started=false`。
+- [x] 第一次经终端传递新 canonical JSON 时，非 ASCII 路径被控制台编码替换为 U+FFFD，独立 validator 以 `formal_runtime_freeze_identity_drift` 拒绝；随后改用 ASCII-escaped JSON 原位重算并通过。未将失败状态写成 passed，也未读取 source content、private key、membership、victim/LLM-only response、Retriever output 或 AUC。
+- [x] 本次没有启动 formal scan/test、GPU 长任务、API、victim、Retriever 或付费调用，没有消费 fresh reserve、重建 packet、提交或推送；所有相关计数保持 `0/false`。runtime 门禁通过不等于正式实验已获授权或已经执行。
+
+当前唯一下一步：等待用户单独明确授权 formal test 的具体首阶段、dataset、预算及 GPU/外部调用边界；在该授权前保持 formal scan/test、GPU、API、victim、Retriever、membership/split、response 与 AUC 未启动。

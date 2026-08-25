@@ -1,0 +1,158 @@
+{
+  "dataset": "edgar",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\edgar.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\edgar.errors.jsonl",
+  "membership_unit": "filing",
+  "cleaner_version": null,
+  "chunk_limit": null,
+  "source_limit": 1600,
+  "raw_unique_source_count": 1600,
+  "unique_source_count": 1549,
+  "raw_sample_count": 1600,
+  "cleaned_sample_count": 97051,
+  "avg_length": 934.7028675644764,
+  "entity_density_distribution": {
+    "min": 0.005747,
+    "max": 0.795082,
+    "avg": 0.03941354170487682
+  },
+  "examples": [
+    {
+      "doc_id": "edgar_000000",
+      "source_id": "raw_00000000",
+      "text_preview": "Item 1. The Business\n\nOrganization and Operation\n\nThe Company. The Company was organized under the laws of the State of Vermont in 1982 and became a registered bank holding company under the Bank Holding Company Act of 1956, as amended, in October 1983 when it acquired all of the voting shares of th",
+      "metadata": {
+        "length": 630,
+        "has_money": false,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 3,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 3,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 4
+        },
+        "entity_density": 0.029412
+      }
+    },
+    {
+      "doc_id": "edgar_000001",
+      "source_id": "raw_00000000",
+      "text_preview": "The Bank; Banking Services. Community National Bank was organized in 1851 as the Peoples Bank, and was subsequently reorganized as the National Bank of Derby Line in 1865. In 1975, after 110 continuous years of operation as the National Bank of Derby Line, the Bank acquired the Island Pond National ",
+      "metadata": {
+        "length": 929,
+        "has_money": false,
+        "has_date": true,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 8,
+        "entity_counts": {
+          "money": 0,
+          "date": 1,
+          "percent": 0,
+          "org": 7,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 6
+        },
+        "entity_density": 0.055172
+      }
+    },
+    {
+      "doc_id": "edgar_000002",
+      "source_id": "raw_00000000",
+      "text_preview": "The opportunities for growth continue to be primarily in the Central Vermont and Chittenden County markets where economic activity is more robust than in the Company’s Orleans and Caledonia County markets, and where the Company is increasing its presence and market share. The Company is also focusin",
+      "metadata": {
+        "length": 711,
+        "has_money": false,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 2,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 1
+        },
+        "entity_density": 0.018349
+      }
+    },
+    {
+      "doc_id": "edgar_000003",
+      "source_id": "raw_00000000",
+      "text_preview": "Business Banking - The Company offers a range of credit products for a variety of general business purposes, including financing for commercial business properties, equipment, inventories and accounts receivable, as well as letters of credit. The Company also offers business checking and other depos",
+      "metadata": {
+        "length": 439,
+        "has_money": false,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 2,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 0
+        },
+        "entity_density": 0.032258
+      }
+    },
+    {
+      "doc_id": "edgar_000004",
+      "source_id": "raw_00000000",
+      "text_preview": "Commercial Real Estate Lending - The Company provides a range of products to meet the financing needs of commercial developers and investors, residential builders and developers and community development entities. Credit products are available to facilitate the purchase of land and/or build structur",
+      "metadata": {
+        "length": 769,
+        "has_money": false,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 2,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 2
+        },
+        "entity_density": 0.017241
+      }
+    }
+  ],
+  "raw_records": 1600,
+  "fragments": 185927,
+  "kept": 97051,
+  "too_few_entities": 35729,
+  "no_entity": 50395,
+  "duplicate": 2752,
+  "template_like": 18
+}

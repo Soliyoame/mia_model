@@ -1,0 +1,80 @@
+{
+  "dataset": "edgar",
+  "seed": 6401,
+  "sample_size": 100,
+  "source_count": 100,
+  "strata": {
+    "KB_Member::DATE": 4,
+    "KB_Member::LOCATION": 4,
+    "KB_Member::MEDICAL_VALUE": 4,
+    "KB_Member::MONEY": 4,
+    "KB_Member::NUMERIC_VALUE": 4,
+    "KB_Member::ORG": 4,
+    "KB_Member::PERCENT": 4,
+    "KB_Member::PERSON": 1,
+    "KB_Member::PRODUCT": 2,
+    "KB_Member::SECTION_ID": 4,
+    "Reserve::DATE": 4,
+    "Reserve::LOCATION": 4,
+    "Reserve::MEDICAL_VALUE": 4,
+    "Reserve::MONEY": 4,
+    "Reserve::NUMERIC_VALUE": 4,
+    "Reserve::ORG": 4,
+    "Reserve::PERCENT": 4,
+    "Reserve::PRODUCT": 1,
+    "Reserve::SECTION_ID": 4,
+    "True_Non_Member::DATE": 4,
+    "True_Non_Member::DURATION": 1,
+    "True_Non_Member::LOCATION": 4,
+    "True_Non_Member::MEDICAL_VALUE": 4,
+    "True_Non_Member::MONEY": 4,
+    "True_Non_Member::NUMERIC_VALUE": 4,
+    "True_Non_Member::ORG": 3,
+    "True_Non_Member::PERCENT": 3,
+    "True_Non_Member::PERSON": 1,
+    "True_Non_Member::PRODUCT": 1,
+    "True_Non_Member::SECTION_ID": 3
+  },
+  "sample_whitelist_hash": "0d3e16d7fa729745c567625550720a49f5c3cc73f6da065370987571e122660c",
+  "annotator_a_shuffle_seed": 7402,
+  "annotator_b_shuffle_seed": 8403,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\paired_claims\\edgar_paired_claims.jsonl",
+  "claims_hash": "fc97730e714fb9c3da2bb105bf2640747e315bdf8ff5db06266920e3d300ba31",
+  "prior_audit_exclusions": [
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100\\edgar_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "464ce40ee857e42fc0b1bfd97c54362577f9fe0510c06514ba0777df205b0d43",
+      "annotator_b_hash": "c63f2ab0a033987a1334da7b5c9f91b24947ce636c05ab51c1178da0923cab14",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    },
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200\\edgar_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "01e88d46d117c1ad79f83b89fcedc1bdc0b89005f79b178b09ed5853675ce79e",
+      "annotator_b_hash": "5d049b9d3f7cc7c9970f6ef9aea4f89623f0918a2caa1333d70e12739ffbdf89",
+      "excluded_source_count": 200,
+      "excluded_audit_id_count": 200
+    }
+  ],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 2,
+    "excluded_source_count": 300,
+    "excluded_audit_id_count": 300,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 2949,
+    "candidate_rows_removed": 801
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\edgar_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\edgar_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "040cfddfaecc39ab4f3d9e8bf59f9756b4367dcc3b476557fe6eae47f70d5065",
+  "annotator_b_hash": "ed739becb079e00319d4df8d47b0df604866ba5ee906150d13c8354576f07e31"
+}

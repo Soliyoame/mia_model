@@ -1,0 +1,1730 @@
+{
+  "created_at": "2026-08-03T03:29:51.963043+00:00",
+  "evidence_files": [
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/edgar/edgar_attack_first_rc2_manifest.json",
+      "sha256": "6f5819819977353595c40b101c3d72fbdefe0b9141eb109fe352eb513a2a6d71",
+      "size": 23167,
+      "source_path": "artifacts/v6_3/attack_first_rc2/edgar/edgar_attack_first_rc2_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_claims_rc2_raw.manifest.json",
+      "sha256": "9087d3181c155859eb8cd7882d23298c7ce76a379430b1562d7e02d0ec03b6c3",
+      "size": 4353,
+      "source_path": "artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_claims_rc2_raw.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_queries_rc2.manifest.json",
+      "sha256": "9057c1210b26edb6419c74a9bbb0904b85586c499c3ccdbce01d79934a6cdbac",
+      "size": 572,
+      "source_path": "artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_stealth_queries_rc2.manifest.json",
+      "sha256": "a663b579052f8df5044c6f8cf1d63df667c80fafa992857229b7f60ad0284be8",
+      "size": 14120,
+      "source_path": "artifacts/v6_3/attack_first_rc2/edgar/edgar_candidate_stealth_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/enron/enron_attack_first_rc2_manifest.json",
+      "sha256": "f30489cf84e64cf776edbde635801c81f43333c90d112b32607084b88b3b7cba",
+      "size": 70860,
+      "source_path": "artifacts/v6_3/attack_first_rc2/enron/enron_attack_first_rc2_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/enron/enron_candidate_claims_rc2_raw.manifest.json",
+      "sha256": "d4994a546d826ac5d0c9b5719e7a0e500704750138c11ecda13075ce7187e98d",
+      "size": 4804,
+      "source_path": "artifacts/v6_3/attack_first_rc2/enron/enron_candidate_claims_rc2_raw.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/enron/enron_candidate_queries_rc2.manifest.json",
+      "sha256": "ad3449648900c3ec718e4d57e5695ab6502b4bf04099c78b986c2934f802988d",
+      "size": 572,
+      "source_path": "artifacts/v6_3/attack_first_rc2/enron/enron_candidate_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/enron/enron_candidate_stealth_queries_rc2.manifest.json",
+      "sha256": "2673379dc9a273d8a4cba0344d4f8f690fdf413392d7203a006ea10549c0ebcb",
+      "size": 60482,
+      "source_path": "artifacts/v6_3/attack_first_rc2/enron/enron_candidate_stealth_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/pubmed/pubmed_attack_first_rc2_manifest.json",
+      "sha256": "eaee3264cb5e61af2d374a33c0d5aaa247ba7eace519cf35be42a3692c9bfad1",
+      "size": 44182,
+      "source_path": "artifacts/v6_3/attack_first_rc2/pubmed/pubmed_attack_first_rc2_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_claims_rc2_raw.manifest.json",
+      "sha256": "dc15c1f1d9586330774dd0e688d2ea402c48cbdbb82e1bed3e3898fdd620b84f",
+      "size": 4546,
+      "source_path": "artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_claims_rc2_raw.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_queries_rc2.manifest.json",
+      "sha256": "f00ab1960bfd3ae03fbec4ffc2d8d2000a4720f9d782314e4a12caf950d489e6",
+      "size": 576,
+      "source_path": "artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_stealth_queries_rc2.manifest.json",
+      "sha256": "a6af883720dba2b25c3afc9ab6c05816170c46cc06a41fae7a565e4021905d19",
+      "size": 35040,
+      "source_path": "artifacts/v6_3/attack_first_rc2/pubmed/pubmed_candidate_stealth_queries_rc2.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/attack_first_rc2_existing_audit_replay.json",
+      "sha256": "dab18569a415928133a368d529c8182f7c007d208907636f5e5c2d5bc86f9592",
+      "size": 15710,
+      "source_path": "artifacts/v6_3/audits/attack_first_rc2_existing_audit_replay.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/budget6_formal_integrity_report.json",
+      "sha256": "078239905b56a31613da5a1e04e753af1f2acde38e0e9eeb18c1b540bead7205",
+      "size": 5896,
+      "source_path": "artifacts/v6_3/audits/budget6_formal_integrity_report.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json",
+      "sha256": "84e1e74f6edea6f8797aca3f94c6dfeaacd9c98f14fe72e6dff383bdc37b02c3",
+      "size": 5896,
+      "source_path": "artifacts/v6_3/audits/budget6_formal_integrity_report_attack_first_rc2.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "464ce40ee857e42fc0b1bfd97c54362577f9fe0510c06514ba0777df205b0d43",
+      "size": 80531,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "c63f2ab0a033987a1334da7b5c9f91b24947ce636c05ab51c1178da0923cab14",
+      "size": 80531,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_manifest.json",
+      "sha256": "32a57a31403904829754efe71629ffd52d63cf2f3fd91909b173eed2acdc7111",
+      "size": 2560,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "2a19c25e53764ba5af447fcc1d4d43cb60be56ad3ec58dd4aadf1234fa60f762",
+      "size": 64861,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "e04c5deba560c8d7c92f81d509e7940674338485b84071c33c6ef1fcdb5606dc",
+      "size": 64861,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_manifest.json",
+      "sha256": "d05568db3c7661f9cb1e9b1f813598ef97bc1f92ac3495526f52c9576eedce7e",
+      "size": 2997,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "8729af47cbd77bf84c24a0de100f52460553deefbf9f67c5a4410c9a31f71951",
+      "size": 80362,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "b997ac2b1c9c81e521def382f098a3ab1ed30cb9d411e29d67c22dfc04733e31",
+      "size": 80362,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "c4740c3b1b61d1ab28d57d4acc2a757d35fa10bad40f7e97d653e61f1cbad4c0",
+      "size": 2687,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "fe8135fbf877eee88660bd8cba20586217a992ecb8cfa9f89eb5d495b4a56317",
+      "size": 84881,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "c1b9144e3db6e02d7da9a225b8138e643e7b1d76610fce7a5b2815b0eb72b388",
+      "size": 84881,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_manifest.json",
+      "sha256": "dd58122284cc50c0bbd9a8eff4650ea775fd2161feef71d1eea48acf6cc12c34",
+      "size": 2028,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "0f50cce1345257647cead3268d83ed8f13061b5f7847530588b4c04914eb6a57",
+      "size": 71523,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "1404d9ef3e226a0a031e22461fe2047408ce24803d69c114ce5b02d7203738ad",
+      "size": 71523,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_manifest.json",
+      "sha256": "b588e821c67d8b99d00088acbf67d5e3e3ec609b04911208f6c407c0c3946318",
+      "size": 2231,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "b1fdc95dc05a0508f2f880ac4e4e5ae5bacb106e5515c6a9c89130de9d26d784",
+      "size": 80691,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "9d10706cb992a8bb6c06f50d3ceda6f1b9eb6055ed6b5d90454c3456f8c979f9",
+      "size": 80691,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "c52a145b3a78980e1c296a87c4330d4c2486f80280d91dd69b0c2dcce4dc5fcc",
+      "size": 2071,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "04297a90e10d10ddf537c2475648c14273b302502c23f4bd5125068372be6842",
+      "size": 83259,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "973cc266b3e9207a5f0580928567d2ce6386ba3a3dd493bb8a11d6903edbb670",
+      "size": 83259,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_manifest.json",
+      "sha256": "9a366ae9eb8f344afa02ccd52e0948fd8ead7de52647fd35fba38f566ae11640",
+      "size": 2575,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "3f41b93ea372f805f487bdcda0b6f06c1009663b8b98ceeb759d0b82a72184d3",
+      "size": 68674,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "4d948adc9c456f0376552978b594d0b4631e8d30871646dca137be034bc00d4f",
+      "size": 68674,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_manifest.json",
+      "sha256": "32343c74c7572d812e1e0986ee7bee56fa9dcc5f93626105cda2ba88d6b0e91e",
+      "size": 3036,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "d3f0b6e9653ade59f018621e4b8c5524289c2bda748a41dad29b449337acc638",
+      "size": 80358,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "e3584b4ebc3a762057efd510e49ef623c96be25d65533c3bb108c7e992e177e1",
+      "size": 80358,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "3e1d66df15d6d7f42c7d2b1e34a9811be64032aa5aae7717d4f630473d181d1e",
+      "size": 2758,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_attack_first_rc2_formal/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "040cfddfaecc39ab4f3d9e8bf59f9756b4367dcc3b476557fe6eae47f70d5065",
+      "size": 84880,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "ed739becb079e00319d4df8d47b0df604866ba5ee906150d13c8354576f07e31",
+      "size": 84880,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_manifest.json",
+      "sha256": "9eb0f788acb57988a9b679310dc3ba5a2eb33574c2f6683a4d6bfc9e83a6a535",
+      "size": 3759,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "5323d542affa1a1929ddf5ee3c7241dca92e3221964934b7910796cab448fe99",
+      "size": 69444,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "8ade8b70d3a30099b3c01ca01e2fb9e82f5a03e75863def235454a66372ca927",
+      "size": 69444,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_manifest.json",
+      "sha256": "5fb81e9650144358ba744b53ae9f83864bf44059a3667a303c4d7d0097fea9bd",
+      "size": 4214,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "879d4d5ca6265ac9eef36b6fb68ab62e672d202cf1a99cfe286420f47a9b475b",
+      "size": 82387,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "51b121ce56ab19cd2b2816f07d9cfd28c2028285b9e64820f54e1e56a31748f3",
+      "size": 82387,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "a59845ec8ec836f0dee0c3e60f70a31ab01a90a7a59f50efbf0ff421f73d6867",
+      "size": 4042,
+      "source_path": "artifacts/v6_3/audits/claim_pair_rc_100_budget6_formal/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "01e88d46d117c1ad79f83b89fcedc1bdc0b89005f79b178b09ed5853675ce79e",
+      "size": 163080,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "5d049b9d3f7cc7c9970f6ef9aea4f89623f0918a2caa1333d70e12739ffbdf89",
+      "size": 163080,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_manifest.json",
+      "sha256": "edf2ed213e5be41e4b8db6f6a149967ab26e04741141637be65ac9f3d3c559f8",
+      "size": 3062,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "16e9f66f7c51d58c58f938417410681c107d8cfcc1a9bf626e3a71ed31d04095",
+      "size": 129542,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "f14a181eb169ee1b0b9a5d84bb1e474e86d2f8772be5a01e8640efc378d1674d",
+      "size": 129542,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_manifest.json",
+      "sha256": "063420df5a915a51818e1d850ab6bf8ee360510670a8bf69f69c0b990dc87729",
+      "size": 3465,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "a2ba7853bfcb4964c037a6d26314236ec97eb2549577769a721faef39c226f96",
+      "size": 160454,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "fa95b6dc7e205450622c48aa608afc125ac878dc71297725143627a7d8b941ff",
+      "size": 160454,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "5886ea28b7dc30bd2bafc8af9dc055a12f3460199c3ed27c9841f1023eb00291",
+      "size": 3262,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "b03c8b4e9b6618ec6ab50db0a6c98b8e1c56261fb540c7701a180ce4b8c60ac3",
+      "size": 171035,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "83791a7a70dadcab9a70af557826ce619393523e70bf83091ba5463122b2ba6c",
+      "size": 171035,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_manifest.json",
+      "sha256": "05770362a3bcda29b47a1c6e2b37b8c50925b33afcb4cbe1c9f82e81027e7359",
+      "size": 2662,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "8aca99cb11e68f172e9497288e9c592a200c2e305cf80857be878d3e82f336c5",
+      "size": 129673,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "b6c44e00e2ec741a1e770b6682ee603d56a91e2357d32fa22424f7c11c6041ea",
+      "size": 129673,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_manifest.json",
+      "sha256": "7017614c9e9f0c6ac320604a3aa389a1ad01e3eabd940b98b6b21b75f4f13167",
+      "size": 2833,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "a3c32f4e025e968b6c7ad8e83933a481f05935373b5b3f67bb324902bf940a29",
+      "size": 159694,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "94f7e8b7a0b7bea48c05501c2f3e59795ed4a793f1ada55eed39e31d312243f6",
+      "size": 159694,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "9dd549fecdd1b69782878812dd2f5da8f53c0b8b29f11a69833e25a9eb98d159",
+      "size": 2758,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "36e0e64628a314670d09451c228c0f465abddc209c6414352c1e14424e0c8f64",
+      "size": 170991,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "e0f04ab7f0558d76f22c748e66a0c8e2b116e01fe50bf04f0e1870fd40581196",
+      "size": 170991,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_manifest.json",
+      "sha256": "ea10cbeac019bf2eb62b44e46b2344ba10b1cf4f51a97c58bac330a56c9250e8",
+      "size": 3177,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "e21f719ffece49ebde73cc591cad3ab823311009b2a416068ac66171e4ba5fd7",
+      "size": 132981,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "7c96c91403218cda4ab921272f8966a00f40fcf807ef52c7a76b154d4e88d832",
+      "size": 132981,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_manifest.json",
+      "sha256": "0d064eef6b914648322c82a92fbe1d0a288724c6e1af0af116e83f62c486e431",
+      "size": 3570,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "f3a82d7ad210e0ba88697fed4870a64a27c2a75760621c950713fa455a4de78d",
+      "size": 159458,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "998c74f8f5a947425b96a49b29928462c9d4c318c36fb5084a2089cb1db1b829",
+      "size": 159458,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "411b16a22db0bdb70193d3ade834d85babf83cfa70ad23757ea3ff918079af70",
+      "size": 3261,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_attack_first_rc2_formal/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "52e1c4c62580c7a18c8d0a572fd9105def52dccb93db2da8cec5088cf282082b",
+      "size": 167981,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "bedc94c7fd2dc788d6661003a2a8367e7cb444eba6ec6be0cbee5b0601fc2d21",
+      "size": 167981,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_manifest.json",
+      "sha256": "1f02cabc3db9b5e598362d511c29019e9a8ad5be53996f0538287ecfc4779aeb",
+      "size": 4256,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/edgar_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "35d9d5f5f1d89f7da41786b084c4b2b4319d2df1117462d6d9d68e03b4796f76",
+      "size": 130134,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "9e034a45f087c8c9ccb0fd7e5347d9fedd377e8c1c06f6772e8a2909d01d4460",
+      "size": 130134,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_manifest.json",
+      "sha256": "b06787be4b256e844af333e7541f47bc01c7ffc8fcb5c4a14fab1378c74e3804",
+      "size": 4578,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/enron_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_annotator_a.jsonl",
+      "sha256": "93d0f5c7da344ad4eea526f0a8ccde2e61152b906794a84bd30bc89eb32cc488",
+      "size": 161997,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_annotator_a.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_annotator_b.jsonl",
+      "sha256": "9c0150d9f7d6c6d2fe1e2444b9ef92b90f766ecff1558b7e449fd2f0e485161d",
+      "size": 161997,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_annotator_b.jsonl"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_manifest.json",
+      "sha256": "60d2f3aee5575f9a209bbc5d2761f03137c05d8ddad98f14a30e743ee53d543d",
+      "size": 4656,
+      "source_path": "artifacts/v6_3/audits/claim_pair_release_200_budget6_formal/pubmed_claim_pair_audit_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/benchmarks/edgar_benchmark_manifest.json",
+      "sha256": "8e8787fc071b42770dd3ba5fbfc160948e213d616f9f02445025fe71e15214ec",
+      "size": 6800,
+      "source_path": "artifacts/v6_3/benchmarks/edgar_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/benchmarks/enron_benchmark_manifest.json",
+      "sha256": "2c52d368d05028ed25f65a03d37e2d2bdff4f15845c0ed3afc9673a3a65d1801",
+      "size": 6808,
+      "source_path": "artifacts/v6_3/benchmarks/enron_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/benchmarks/pubmed_benchmark_manifest.json",
+      "sha256": "58dced27780a34d01201d1f0793103bccdf7074bb5494da15c904d54aefd1a73",
+      "size": 6547,
+      "source_path": "artifacts/v6_3/benchmarks/pubmed_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_budget6_release_input_manifest.json",
+      "sha256": "5043e79bccd1c889792dc30d0d1b20ed945adbe0ca727b306bfe89cedec261e5",
+      "size": 3056,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_budget6_release_input_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_candidate_stealth_queries.manifest.json",
+      "sha256": "279fe2cef148293a6072476709cfff450fe29d9745011d47df82f5f25d97ffe9",
+      "size": 962,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_candidate_stealth_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_finalization_manifest.json",
+      "sha256": "4db07e1f633a4285c90257e76d21d96b6359af7e572c0c3a63dcecd30db70f8f",
+      "size": 1269,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_finalization_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_budget6_release_input_manifest.json",
+      "sha256": "e038a8131f6b4f7c420d872bc08b4032f9d8fcd9ec85890fd6d85584aec2cbdf",
+      "size": 3056,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_budget6_release_input_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_candidate_stealth_queries.manifest.json",
+      "sha256": "c4333bf32fa00de7a05875de2ef85968de718ba2dc9bbd3b7be2654b33b41716",
+      "size": 962,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_candidate_stealth_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_finalization_manifest.json",
+      "sha256": "e1c397facf3b20644be2b9e71a9e269022576a960cd3c92e1f66dc8eba7a9f19",
+      "size": 1269,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_finalization_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_budget6_release_input_manifest.json",
+      "sha256": "6991fd0a34aa82a480bddaae0c45c277f7b0e49fa0486281ec914050b50244d1",
+      "size": 3069,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_budget6_release_input_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_candidate_stealth_queries.manifest.json",
+      "sha256": "01119b9297f7ad1b40efee17a2a8480f53b30e58f3652cd6532f6dcb9c7a5327",
+      "size": 965,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_candidate_stealth_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_finalization_manifest.json",
+      "sha256": "20ee6f4eeac47fbf0f78ae242bca711c7854beb546f2bce1167636bd2dfd950e",
+      "size": 1274,
+      "source_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_finalization_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/facts/edgar_facts.manifest.json",
+      "sha256": "5318d07a9246fff8362d5735d2b03b00fbdeae51c876e578c19f9fdd7d97f5aa",
+      "size": 2918,
+      "source_path": "artifacts/v6_3/facts/edgar_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/facts/enron_facts.manifest.json",
+      "sha256": "91f4b96e9b4cd419750bf8b9d3a36a3325a76d575f1d08f97d639c5c03cbefbe",
+      "size": 3016,
+      "source_path": "artifacts/v6_3/facts/enron_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/facts/pubmed_facts.manifest.json",
+      "sha256": "0a7e003173a73c1c99cebb583aefd6048367765ed00872f5eb700163935df992",
+      "size": 2586,
+      "source_path": "artifacts/v6_3/facts/pubmed_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_claims/edgar_paired_claims.manifest.json",
+      "sha256": "a5893c30a2eb5d6ebd24b7097b7f4bc6f32b0aef7c03f773ea25c892726e978d",
+      "size": 2943,
+      "source_path": "artifacts/v6_3/paired_claims/edgar_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_claims/enron_paired_claims.manifest.json",
+      "sha256": "c65d2aba7192a97463ca3ece7eb63f126da85b9a6fa2a28f6f148ddb71f967a9",
+      "size": 3039,
+      "source_path": "artifacts/v6_3/paired_claims/enron_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_claims/pubmed_paired_claims.manifest.json",
+      "sha256": "032625ded7e19a5fc949a81bcce7356afe24c601d75eab8455a16d2364876ded",
+      "size": 2610,
+      "source_path": "artifacts/v6_3/paired_claims/pubmed_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_queries/edgar_paired_queries.manifest.json",
+      "sha256": "5f161cbca21dcbef6f996adb0afac3274bb76c542cc007888faafbabf246df42",
+      "size": 2606,
+      "source_path": "artifacts/v6_3/paired_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_queries/enron_paired_queries.manifest.json",
+      "sha256": "35745467e85a5700a0533b3cac4cb9e4de48fcfce8944c334b9652912f559301",
+      "size": 2606,
+      "source_path": "artifacts/v6_3/paired_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/paired_queries/pubmed_paired_queries.manifest.json",
+      "sha256": "14f554e98e67daafca0a458b7b30d8a27d7db56e4fbb23da0e868df0133a179e",
+      "size": 2256,
+      "source_path": "artifacts/v6_3/paired_queries/pubmed_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/processed/edgar.manifest.json",
+      "sha256": "70d39a1096de4cd31e4c9900932e727aae6d6a06af1572b5327b27a3c7f5c9c0",
+      "size": 5567,
+      "source_path": "artifacts/v6_3/processed/edgar.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/processed/enron.manifest.json",
+      "sha256": "9472a2de8d5c47d9a2f4113113a57afd8b156eafde31458d12efa5d40ece90d9",
+      "size": 5698,
+      "source_path": "artifacts/v6_3/processed/enron.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/processed/preprocess_manifest.json",
+      "sha256": "e6d2c8920a7a7ad0d008a136ef5e6a604cb6c6a251895d6ad49ebc9f3eeeb817",
+      "size": 5926,
+      "source_path": "artifacts/v6_3/processed/preprocess_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/processed/pubmed.manifest.json",
+      "sha256": "418de36e8da8f7920b506cb832ac39367d83c725b1b534d655c742bce45c796e",
+      "size": 5592,
+      "source_path": "artifacts/v6_3/processed/pubmed.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration/edgar_raw_predictions.manifest.json",
+      "sha256": "a7d337c4b20f546053d0f54d26b831cbe9370653b2638b7a2982536c71aac935",
+      "size": 1515,
+      "source_path": "artifacts/v6_3/semantic_calibration/edgar_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration/enron_raw_predictions.manifest.json",
+      "sha256": "0cca43917845bd6bbc7ccb0a9b350a0c9b5e506a2ff3e6149436ff8041b954c4",
+      "size": 1511,
+      "source_path": "artifacts/v6_3/semantic_calibration/enron_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration/pubmed_raw_predictions.manifest.json",
+      "sha256": "c2a74730782a3a9372e8fa6971bdaa4e93293546e59c3216294b8b2bc6c893fc",
+      "size": 1518,
+      "source_path": "artifacts/v6_3/semantic_calibration/pubmed_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_pilot/edgar_raw_predictions.manifest.json",
+      "sha256": "63eb8107c3de3ca872b546e27cd18f7a8e7362069ca4ce5c85ad45a886b95e92",
+      "size": 1049,
+      "source_path": "artifacts/v6_3/semantic_calibration_pilot/edgar_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_pilot/enron_raw_predictions.manifest.json",
+      "sha256": "07dcbee89290d565eb6458abb5657ddab2c933419816e74e7120b10647d60f01",
+      "size": 1065,
+      "source_path": "artifacts/v6_3/semantic_calibration_pilot/enron_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_pilot/pubmed_raw_predictions.manifest.json",
+      "sha256": "3f789a7a4c4802efde09969c1d6401fc343546d78e721ec394e07dfe97b2817d",
+      "size": 1070,
+      "source_path": "artifacts/v6_3/semantic_calibration_pilot/pubmed_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_precision_cascade/edgar_raw_predictions.manifest.json",
+      "sha256": "2426b6fe19590bd969c7d302e1e19f0d969d2713954f63a0a36302c8564026b5",
+      "size": 1695,
+      "source_path": "artifacts/v6_3/semantic_calibration_precision_cascade/edgar_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_precision_cascade/enron_raw_predictions.manifest.json",
+      "sha256": "7db6c73ecfc8b27af2e62699077c2a41b4001142e975e594d41539f3b5d2345d",
+      "size": 1691,
+      "source_path": "artifacts/v6_3/semantic_calibration_precision_cascade/enron_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_precision_cascade/pubmed_raw_predictions.manifest.json",
+      "sha256": "47376d8b05f8a12275cb638334ca252c50ed7f879eb0637a013d9613d7a5db9f",
+      "size": 1698,
+      "source_path": "artifacts/v6_3/semantic_calibration_precision_cascade/pubmed_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_product_pilot/edgar_raw_predictions.manifest.json",
+      "sha256": "1e0c6d0fcca012201ed9254ccfd16b9dd33a7676c199b866126fb85f73111862",
+      "size": 1266,
+      "source_path": "artifacts/v6_3/semantic_calibration_product_pilot/edgar_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_product_pilot/enron_raw_predictions.manifest.json",
+      "sha256": "415b6ce0eac588cb8a901f9c7ce2e5aa3abc9faa97a476c1f404cc32751e2906",
+      "size": 1266,
+      "source_path": "artifacts/v6_3/semantic_calibration_product_pilot/enron_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/semantic_calibration_product_pilot/pubmed_raw_predictions.manifest.json",
+      "sha256": "deab3e7d702ff0d828ee7af0560607c9a63fa6079e8e6e7f2bca9d0e58c3a74d",
+      "size": 1269,
+      "source_path": "artifacts/v6_3/semantic_calibration_product_pilot/pubmed_raw_predictions.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/splits/edgar/split_manifest.json",
+      "sha256": "9bb73a6fd110a5d6934b645e0ebf4b5ce0aa0594805b0ded68c47d17dc39b8b7",
+      "size": 6020579,
+      "source_path": "artifacts/v6_3/splits/edgar/split_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/splits/enron/split_manifest.json",
+      "sha256": "4b62721b54274ac510667ef21f8780e34d2783b74c1d419a103ba3629af8fd22",
+      "size": 495018,
+      "source_path": "artifacts/v6_3/splits/enron/split_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/splits/pubmed/split_manifest.json",
+      "sha256": "8467fc4907b974eb0bb0e38775b116a90bbab1f438f575e9df98dd97a0063ded",
+      "size": 1282845,
+      "source_path": "artifacts/v6_3/splits/pubmed/split_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/stealth_filtered_queries/edgar_paired_queries.manifest.json",
+      "sha256": "922cb7697fff0857b855f841ee6f3532f8a6bb23312d10b9d50bfd1c2f94aa6b",
+      "size": 3279,
+      "source_path": "artifacts/v6_3/stealth_filtered_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/stealth_filtered_queries/enron_paired_queries.manifest.json",
+      "sha256": "d3a2ab252819cf039bba68cf1765f660661efb1be38a2afe291a9db879f852b1",
+      "size": 3279,
+      "source_path": "artifacts/v6_3/stealth_filtered_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v6_3/stealth_filtered_queries/pubmed_paired_queries.manifest.json",
+      "sha256": "b5316777c52d50ed92da1c95b6b7bf4a3d6d45f6529ede9fa89dc6e6f3c62440",
+      "size": 2929,
+      "source_path": "artifacts/v6_3/stealth_filtered_queries/pubmed_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/edgar/bge-base-en-v1.5/index_manifest.json",
+      "sha256": "9195d9142ffaa27f0c6a99d7e78c06229bdc84666a08445a4b80a8f44219e1c1",
+      "size": 6357,
+      "source_path": "artifacts/v20/indexes/edgar/bge-base-en-v1.5/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/edgar/bm25/index_manifest.json",
+      "sha256": "a4e771e1335cdc2c3a68ae1a3d32cb8fcb2df65780d43b4cd3ba50f547a1de7f",
+      "size": 6198,
+      "source_path": "artifacts/v20/indexes/edgar/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/enron/bge-base-en-v1.5/index_manifest.json",
+      "sha256": "3d739c4e3655872817be75c2b77f17667ebc3b9e7cdff53923ba9ad6ed4512bd",
+      "size": 6355,
+      "source_path": "artifacts/v20/indexes/enron/bge-base-en-v1.5/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/enron/bm25/index_manifest.json",
+      "sha256": "de9f07ab79c26cfee128c2b3331aba27596f808df5aa9a35c0b375603ff51406",
+      "size": 6196,
+      "source_path": "artifacts/v20/indexes/enron/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/pubmed/bge-base-en-v1.5/index_manifest.json",
+      "sha256": "163cf40111ea44e699ffadd0d8ee0ac9dd8b15db6f5eb26d4c07baee673c5c2a",
+      "size": 5391,
+      "source_path": "artifacts/v20/indexes/pubmed/bge-base-en-v1.5/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/indexes/pubmed/bm25/index_manifest.json",
+      "sha256": "f82a61328c039be67e5db0b5cb86c113ab0d4a6208fe8caea039c76e70eac04e",
+      "size": 5232,
+      "source_path": "artifacts/v20/indexes/pubmed/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/local_sibling_gate/functional/edgar_menta_queries.manifest.json",
+      "sha256": "14e2eff6594506868674fa8c7b328bb52af156269650db444fb38bd1dbc70e72",
+      "size": 2040,
+      "source_path": "artifacts/v20/local_sibling_gate/functional/edgar_menta_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/local_sibling_gate/functional/enron_menta_queries.manifest.json",
+      "sha256": "151f93155312d8bb0b3506251d177c6007ab966cbf3427c79f7da0da70752679",
+      "size": 2040,
+      "source_path": "artifacts/v20/local_sibling_gate/functional/enron_menta_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/local_sibling_gate/functional/pubmed_menta_queries.manifest.json",
+      "sha256": "2c3c8168b631e6d001f75738d565d461b6d244b4663a6424acd2c831635429f1",
+      "size": 2042,
+      "source_path": "artifacts/v20/local_sibling_gate/functional/pubmed_menta_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/local_sibling_gate/stability/enron_menta_queries.manifest.json",
+      "sha256": "9228f95603b6736808ef314102bf01b860fa453f04e7000e48cc8c9271e5077e",
+      "size": 2041,
+      "source_path": "artifacts/v20/local_sibling_gate/stability/enron_menta_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/edgar_near_duplicate_audit.json",
+      "sha256": "2c972f93aaf456063318d81aded210658fe54221f9b28505843aa5aeaeef3ad8",
+      "size": 1710,
+      "source_path": "artifacts/v20/release_controls/edgar_near_duplicate_audit.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/edgar_regroup_manifest.json",
+      "sha256": "db50bd316f1d5f549112f4cabf5c33d8c1488ed9b4d702bbba8d9e584bd61f39",
+      "size": 1207,
+      "source_path": "artifacts/v20/release_controls/edgar_regroup_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/enron_near_duplicate_audit.json",
+      "sha256": "58f1bb198ad3b5e1904e29bf7c19fa64258c7039d5cb78125905695a9cecbbde",
+      "size": 5948,
+      "source_path": "artifacts/v20/release_controls/enron_near_duplicate_audit.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/enron_regroup_manifest.json",
+      "sha256": "c193bf7541476ab727560f6e3cf693af25488a48ba627cd9e51cf6509ea37856",
+      "size": 6375,
+      "source_path": "artifacts/v20/release_controls/enron_regroup_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/execution_schedule.manifest.json",
+      "sha256": "7c4c07dd5a74ead14aebf97208acceeeeb033b88608d2e8eae81256d7bfe3734",
+      "size": 802,
+      "source_path": "artifacts/v20/release_controls/execution_schedule.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/ground_truth_source_store/edgar_sources.manifest.json",
+      "sha256": "9dafcf56cbedf621bb5a2f0b9293fd681fb8646dbb8fe5e9c2393e3c3a3f05fe",
+      "size": 706,
+      "source_path": "artifacts/v20/release_controls/ground_truth_source_store/edgar_sources.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/ground_truth_source_store/enron_sources.manifest.json",
+      "sha256": "b95cc52a0418ef1a6d493954a60abfc7137dc6462365968293e3f439e6a3506b",
+      "size": 706,
+      "source_path": "artifacts/v20/release_controls/ground_truth_source_store/enron_sources.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/ground_truth_source_store/pubmed_sources.manifest.json",
+      "sha256": "e5e96e5e29ad70901e5a3fe3c75955a40ab356dd1a2ab8e9e0c8aaec7fc317b8",
+      "size": 707,
+      "source_path": "artifacts/v20/release_controls/ground_truth_source_store/pubmed_sources.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/preflight_report.json",
+      "sha256": "59c8162692057c76e4067c5c20777f1c71b5fbc4e3e8f0c000d64cdf275e604a",
+      "size": 6826,
+      "source_path": "artifacts/v20/release_controls/preflight_report.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/pubmed_near_duplicate_audit.json",
+      "sha256": "2090e9f080166b9331c0c7155438597cc4a42f2059976e602142d8371f47e2a5",
+      "size": 572,
+      "source_path": "artifacts/v20/release_controls/pubmed_near_duplicate_audit.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/release_controls_manifest.json",
+      "sha256": "12ea8e196e395979cf225d1df76673f202dee64e7e07cf1fe82543d794013692",
+      "size": 1728,
+      "source_path": "artifacts/v20/release_controls/release_controls_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/representative_chunks/edgar_representative_chunks.manifest.json",
+      "sha256": "48aa7bb36451fd70470d898afa4656945dad50a960bd906e8361af94d4114da8",
+      "size": 963,
+      "source_path": "artifacts/v20/release_controls/representative_chunks/edgar_representative_chunks.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/representative_chunks/enron_representative_chunks.manifest.json",
+      "sha256": "a6641f0dcd1a743232ca1cb6bee4ee171e115a0bb7397f384e60f3865ad16fa5",
+      "size": 963,
+      "source_path": "artifacts/v20/release_controls/representative_chunks/enron_representative_chunks.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/release_controls/representative_chunks/pubmed_representative_chunks.manifest.json",
+      "sha256": "ba14138ec46ef40a72f05a62e9923a3747f855154bff6b4dc6f2679e70127f5b",
+      "size": 964,
+      "source_path": "artifacts/v20/release_controls/representative_chunks/pubmed_representative_chunks.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-128-overlap-32/bm25/index_manifest.json",
+      "sha256": "711b8586771d9cd81896241a9fd68582e85c1de81f67563dfbcd07feaa3d7409",
+      "size": 6197,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-128-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-128-overlap-32/dense/index_manifest.json",
+      "sha256": "e7d4349c207a57526bbdf70ff6295daeb361aa0154911aaa246788ef80a538a2",
+      "size": 6356,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-128-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-256-overlap-32/bm25/index_manifest.json",
+      "sha256": "7ea5caa5f473d7732f575ab4c557db3ecaf34bb89bbf52c4087247922ff299c3",
+      "size": 6197,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-256-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-256-overlap-32/dense/index_manifest.json",
+      "sha256": "8d33954956124d3aa1e7ea4d8eb4c71d2bbcd082e7c6d7d4c0e6c0cf585d2e46",
+      "size": 6356,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-256-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-384-overlap-64/bm25/index_manifest.json",
+      "sha256": "ec81abc8b3c2ef9142316a5089c95b1b0d72cccb218c6e8990de1a6532b6bff8",
+      "size": 6197,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-384-overlap-64/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/edgar/tokens-384-overlap-64/dense/index_manifest.json",
+      "sha256": "16fc20cc162c18886cb05dfa87500db9ba6331c41647302655fd581f137331c0",
+      "size": 6356,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/edgar/tokens-384-overlap-64/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-128-overlap-32/bm25/index_manifest.json",
+      "sha256": "8b5ac9663087aeb4a493eb314cd41e8a9a58de4bec9df930c8789c2316a60acb",
+      "size": 6195,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-128-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-128-overlap-32/dense/index_manifest.json",
+      "sha256": "e38cfbd3fd3bcba1e3ce50ae6d523b5977391e67bdaa0e994066ea7bc8802ddf",
+      "size": 6354,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-128-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-256-overlap-32/bm25/index_manifest.json",
+      "sha256": "135373c37857a3c20ed0567f058fb800cdc6ba831aca9765300f679cd6925329",
+      "size": 6195,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-256-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-256-overlap-32/dense/index_manifest.json",
+      "sha256": "46b97bbaf55a508115533d97c1a700e91821657e6cab547ed450ebd219c5d049",
+      "size": 6354,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-256-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-384-overlap-64/bm25/index_manifest.json",
+      "sha256": "e8143742c0d3be869518c2959c9feda1d39e54309d4641e288ed614fad9b0db5",
+      "size": 6195,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-384-overlap-64/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/enron/tokens-384-overlap-64/dense/index_manifest.json",
+      "sha256": "e79de545b249366eb5757f0206e620f02180339e5ca6e01c7fea544cb818759d",
+      "size": 6354,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/enron/tokens-384-overlap-64/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-128-overlap-32/bm25/index_manifest.json",
+      "sha256": "f56c7549317956ae1e4a88a57d57ea8745ecb90eb046a4efe27be06157b259d3",
+      "size": 5231,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-128-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-128-overlap-32/dense/index_manifest.json",
+      "sha256": "4455962514754b4f9d1cf975a5ce0f60107b759d758ab3d4a0fb8a3f6aa44bac",
+      "size": 5390,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-128-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-256-overlap-32/bm25/index_manifest.json",
+      "sha256": "c9ac0bd0eee4e7caa6fbc56065ef819c4b0ad8b625a45f1672b115627bdac976",
+      "size": 5230,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-256-overlap-32/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-256-overlap-32/dense/index_manifest.json",
+      "sha256": "f2208c46b94407adae9f36b087be690e9ff32776c841f7ef430724a44bbe175e",
+      "size": 5389,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-256-overlap-32/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-384-overlap-64/bm25/index_manifest.json",
+      "sha256": "d4ea20041c69c8f5483239ab74015efcb4de46829fb4d72c0a06b49752d39fa5",
+      "size": 5230,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-384-overlap-64/bm25/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_dev_indexes/pubmed/tokens-384-overlap-64/dense/index_manifest.json",
+      "sha256": "5d8a006a6a60d7b922dff57ee99729c100476e0824b48fb5539a86a9a12ae0e6",
+      "size": 5389,
+      "source_path": "artifacts/v20/retrieval_dev_indexes/pubmed/tokens-384-overlap-64/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/artifacts/v20/retrieval_gate/retrieval_gate_report.json",
+      "sha256": "0150df8d70eb122a648f6c39df30967bd72fae59e0c5a3456ee3b7178daa9b07",
+      "size": 18150,
+      "source_path": "artifacts/v20/retrieval_gate/retrieval_gate_report.json"
+    },
+    {
+      "evidence_path": "evidence/indexes/edgar/index_manifest.json",
+      "sha256": "a4325628318aca7a06ea3b91276db56abd3c57b155ef68054e52ac4e114909cb",
+      "size": 2138,
+      "source_path": "indexes/edgar/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/indexes/enron/index_manifest.json",
+      "sha256": "805f68657c18e4c74c487e6adb4b85a502f44ccb679869cac83bea27c905853d",
+      "size": 2370,
+      "source_path": "indexes/enron/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/indexes/enron_shadows/shadow_00/index_manifest.json",
+      "sha256": "6c3263f3ccd3e4bad64fb6a7d7f6d789641065aab494ad559a5661b241842423",
+      "size": 998,
+      "source_path": "indexes/enron_shadows/shadow_00/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/indexes/enron_shadows/shadow_01/index_manifest.json",
+      "sha256": "2cda8317795f3a7d244de9585e3637edf101c6d86605ae35440b097bd0cce729",
+      "size": 998,
+      "source_path": "indexes/enron_shadows/shadow_01/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/archive/edgar_step10_qwen397b_partial/edgar_llm_only_responses.manifest.json",
+      "sha256": "58cdd82906375d92b97a28fd78823811d6a3d006bc6d3f6ba8b885f7c1b73dcf",
+      "size": 2145,
+      "source_path": "outputs/archive/edgar_step10_qwen397b_partial/edgar_llm_only_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/archive/edgar_step10_qwen397b_partial/edgar_rag_responses.manifest.json",
+      "sha256": "58cdd82906375d92b97a28fd78823811d6a3d006bc6d3f6ba8b885f7c1b73dcf",
+      "size": 2145,
+      "source_path": "outputs/archive/edgar_step10_qwen397b_partial/edgar_rag_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/baselines/edgar/edgar_baseline_comparison.manifest.json",
+      "sha256": "83fae1fd89e6dda2f54a225c4270b0554553adb3e7517df6cf0db48ebc1218ce",
+      "size": 809,
+      "source_path": "outputs/baselines/edgar/edgar_baseline_comparison.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/baselines/edgar/qwen3.5-397b-a17b/edgar_baseline_comparison.manifest.json",
+      "sha256": "dd9de21dee51f64724b5b09b4c5024410e179ea4d57786b4272d279bc1a75c36",
+      "size": 1139,
+      "source_path": "outputs/baselines/edgar/qwen3.5-397b-a17b/edgar_baseline_comparison.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/diagnostics/edgar/qwen3.5-397b-a17b/edgar_stance_audit_annotations.jsonl",
+      "sha256": "7a02c509e1dba15d8168d22b0d40a519c85b95693b724ba2cb040984121689ff",
+      "size": 77019,
+      "source_path": "outputs/diagnostics/edgar/qwen3.5-397b-a17b/edgar_stance_audit_annotations.jsonl"
+    },
+    {
+      "evidence_path": "evidence/outputs/diagnostics/edgar/qwen3.5-397b-a17b/edgar_stance_audit_annotations.manifest.json",
+      "sha256": "43b39b052cf616c13fbaafc418dc08a0bcbb692bb251f3f68f2b839b6dca4efa",
+      "size": 1285,
+      "source_path": "outputs/diagnostics/edgar/qwen3.5-397b-a17b/edgar_stance_audit_annotations.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/facts/edgar_facts.manifest.json",
+      "sha256": "526da92de48302d98ea26a04bd0c4ebc865548f8cfecb1b039e392a27f23df6f",
+      "size": 1226,
+      "source_path": "outputs/facts/edgar_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/facts/enron_facts.manifest.json",
+      "sha256": "d66f6a52566b488f33571950c17e4a5452a04f4847b273eddac1472bfa0d1c9e",
+      "size": 1272,
+      "source_path": "outputs/facts/enron_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/llm_only_responses/edgar/qwen3.5-397b-a17b/edgar_llm_only_responses.manifest.json",
+      "sha256": "6e8d64176eae2effc891d0e45d12e51bf4cc56324c1ef038546a41224328a97d",
+      "size": 2453,
+      "source_path": "outputs/llm_only_responses/edgar/qwen3.5-397b-a17b/edgar_llm_only_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/llm_only_responses/enron_llm_only_responses.manifest.json",
+      "sha256": "2e2090187e406ced6e665fc57322f6ad8ae4e7b27c6b937f41ecfade8a9a9d18",
+      "size": 2111,
+      "source_path": "outputs/llm_only_responses/enron_llm_only_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/mechanisms/edgar/qwen3.5-397b-a17b/edgar_mechanism_report.json",
+      "sha256": "3374baee9320ff591592d473282c86dfc1d9f00f8deedca0bc67346f2bcc93b9",
+      "size": 2888,
+      "source_path": "outputs/mechanisms/edgar/qwen3.5-397b-a17b/edgar_mechanism_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/paired_claims/edgar_paired_claims.manifest.json",
+      "sha256": "6c50ba67cf47e40f6a88e021183491802c624d2f390653ad1ccb8e64262cec0e",
+      "size": 788,
+      "source_path": "outputs/paired_claims/edgar_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/paired_claims/enron_paired_claims.manifest.json",
+      "sha256": "453ffabacb71c4fad58bdafe611e7b3ada3aab41ec2ad103e55ed34acec68c3c",
+      "size": 833,
+      "source_path": "outputs/paired_claims/enron_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/paired_queries/edgar_paired_queries.manifest.json",
+      "sha256": "98b58933463684c723384dba7fa2be6e15917de04a7299ff27e2a01b181f1f0c",
+      "size": 295,
+      "source_path": "outputs/paired_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/paired_queries/enron_paired_queries.manifest.json",
+      "sha256": "6d92953e3ab6152bc6fce10a92cbdecb44323bffb78332e03802599c9e39670e",
+      "size": 295,
+      "source_path": "outputs/paired_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/parsed_stance/edgar/qwen3.5-397b-a17b/edgar_parsed_stance.manifest.json",
+      "sha256": "d80315bfac91be27765cbca62bd1db5dc43635a0f5b8a33f2460097bc14a121a",
+      "size": 483,
+      "source_path": "outputs/parsed_stance/edgar/qwen3.5-397b-a17b/edgar_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/parsed_stance/edgar_parsed_stance.manifest.json",
+      "sha256": "ea083717fa14108659f5b13af9080ba6bfe2ac5f3c7ae7aca2191e54816bcd24",
+      "size": 148,
+      "source_path": "outputs/parsed_stance/edgar_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/parsed_stance/enron_parsed_stance.manifest.json",
+      "sha256": "c9a25f6f63745e48cc6cad89d247c7c684fb0b1578969ebfca6b91ceccd742c4",
+      "size": 148,
+      "source_path": "outputs/parsed_stance/enron_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/edgar/independent_unpaired_query/control_manifest.json",
+      "sha256": "a31bf5c3c7ed648464eb7643e99abd43c480d8411770e29685f3a1b8e5ab82ee",
+      "size": 1317,
+      "source_path": "outputs/query_controls/edgar/independent_unpaired_query/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/edgar/independent_unpaired_query/queries.manifest.json",
+      "sha256": "0efc63a04216a59f593c5298e47601673a6dcbb9ae498e0eff8894cb83ba912a",
+      "size": 438,
+      "source_path": "outputs/query_controls/edgar/independent_unpaired_query/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/edgar/no_stealth_filter/control_manifest.json",
+      "sha256": "1ae62b23d4f581945519921cb311e38c9c7e18f9bdd11c5c99816a7921e224d3",
+      "size": 961,
+      "source_path": "outputs/query_controls/edgar/no_stealth_filter/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/edgar/random_same_type_counterfactual/control_manifest.json",
+      "sha256": "5bcc26d5f6c7cf5b968e965c74b49c1071d0bc8b05d2d734435c8c93b0516242",
+      "size": 1577,
+      "source_path": "outputs/query_controls/edgar/random_same_type_counterfactual/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/edgar/random_same_type_counterfactual/queries.manifest.json",
+      "sha256": "6878edf15853ef13c40d1cb9ab3de362a22f240df52f8009788e543b208651b5",
+      "size": 448,
+      "source_path": "outputs/query_controls/edgar/random_same_type_counterfactual/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/enron/independent_unpaired_query/control_manifest.json",
+      "sha256": "1145ac32884aa8c428e61b4e0ed7c1038a316126a89e9a93e8dd9b166a9653b2",
+      "size": 1313,
+      "source_path": "outputs/query_controls/enron/independent_unpaired_query/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/enron/independent_unpaired_query/queries.manifest.json",
+      "sha256": "405a980d7d46564d4ee029c208228631482c5fedcb78a0c39499fe16f3c891c3",
+      "size": 434,
+      "source_path": "outputs/query_controls/enron/independent_unpaired_query/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/enron/no_stealth_filter/control_manifest.json",
+      "sha256": "b701ed4335dbe9982e5d8025e52232313bbd1cda216550f63fe5de3d257e93f7",
+      "size": 961,
+      "source_path": "outputs/query_controls/enron/no_stealth_filter/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/enron/random_same_type_counterfactual/control_manifest.json",
+      "sha256": "21e4d4e89be9d73c068c0cac88e33f188d7c6544081f29dde0562423245c60a5",
+      "size": 1331,
+      "source_path": "outputs/query_controls/enron/random_same_type_counterfactual/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/query_controls/enron/random_same_type_counterfactual/queries.manifest.json",
+      "sha256": "98419e4fc0456267c97e5aff53dde30f1ee8401bb639452c29bffaf31ad14524",
+      "size": 447,
+      "source_path": "outputs/query_controls/enron/random_same_type_counterfactual/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/rag_responses/edgar/qwen3.5-397b-a17b/edgar_rag_responses.manifest.json",
+      "sha256": "e9e8b0d1768ca835786a3ad9cef8b909745ffd027c288fbde9ea932926ee09da",
+      "size": 3411,
+      "source_path": "outputs/rag_responses/edgar/qwen3.5-397b-a17b/edgar_rag_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/rag_responses/enron_rag_responses.manifest.json",
+      "sha256": "2e2090187e406ced6e665fc57322f6ad8ae4e7b27c6b937f41ecfade8a9a9d18",
+      "size": 2111,
+      "source_path": "outputs/rag_responses/enron_rag_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/reports/edgar_final_report.json",
+      "sha256": "3b63083608d11c43024f89d92597fdfce574bf38817db04cc322f567043de8d0",
+      "size": 27051,
+      "source_path": "outputs/reports/edgar_final_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/reports/enron_final_report.json",
+      "sha256": "317cb4acfcb1ed0ea8d13a896523856973823a1de44b7a1b4aaa87a062922fd4",
+      "size": 39267,
+      "source_path": "outputs/reports/enron_final_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260617-070926/edgar_final_report_20260617-070926.json",
+      "sha256": "3b63083608d11c43024f89d92597fdfce574bf38817db04cc322f567043de8d0",
+      "size": 27051,
+      "source_path": "outputs/runs/edgar/20260617-070926/edgar_final_report_20260617-070926.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260617-070926/edgar_final_report_20260617-070926.md",
+      "sha256": "96c4ec93015596d4fd51308480f64af051d78498ad4915108015ef291f87110e",
+      "size": 767,
+      "source_path": "outputs/runs/edgar/20260617-070926/edgar_final_report_20260617-070926.md"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/baselines/edgar/edgar_baseline_comparison.manifest.json",
+      "sha256": "83fae1fd89e6dda2f54a225c4270b0554553adb3e7517df6cf0db48ebc1218ce",
+      "size": 809,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/baselines/edgar/edgar_baseline_comparison.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/facts/edgar_facts.manifest.json",
+      "sha256": "70919cab09a1bdc0f82c994e7e1cec602725c647caf352db1b17eddc900ff703",
+      "size": 1226,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/facts/edgar_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/paired_claims/edgar_paired_claims.manifest.json",
+      "sha256": "8eda6918b991798ac9f6e2e11d9f6bd47679a1e2f0cdf3c714c9cc46bb791b57",
+      "size": 788,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/paired_claims/edgar_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/paired_queries/edgar_paired_queries.manifest.json",
+      "sha256": "05eb46c6b2d02f2052efb646c8af600ec6a3fa388de22482a6a89c3367a2914e",
+      "size": 295,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/paired_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/parsed_stance/edgar_parsed_stance.manifest.json",
+      "sha256": "ea083717fa14108659f5b13af9080ba6bfe2ac5f3c7ae7aca2191e54816bcd24",
+      "size": 148,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/parsed_stance/edgar_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/reports/edgar_final_report.json",
+      "sha256": "3b63083608d11c43024f89d92597fdfce574bf38817db04cc322f567043de8d0",
+      "size": 27051,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/reports/edgar_final_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/run_manifest.json",
+      "sha256": "c07f4125acae9f7b58013bc94ca7fb2d9041b2b577a75535cc2c2c8d281b2231",
+      "size": 735,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/run_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/scores/edgar_pcv_scores.manifest.json",
+      "sha256": "c60733b65fdce5ba09ab504a86b7d033a1dbf68b73443bd5bb1933d3af5a5790",
+      "size": 499,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/scores/edgar_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260707-205426_backfill/stealth_filtered_queries/edgar_paired_queries.manifest.json",
+      "sha256": "e760eb153e2cfde1409d790d73b6295323f3c1df62a2f1c9f4d351d7f8bd93aa",
+      "size": 414,
+      "source_path": "outputs/runs/edgar/20260707-205426_backfill/stealth_filtered_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260708-181353/edgar_final_report_20260708-181353.json",
+      "sha256": "3b63083608d11c43024f89d92597fdfce574bf38817db04cc322f567043de8d0",
+      "size": 27051,
+      "source_path": "outputs/runs/edgar/20260708-181353/edgar_final_report_20260708-181353.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/20260708-181353/edgar_final_report_20260708-181353.md",
+      "sha256": "96c4ec93015596d4fd51308480f64af051d78498ad4915108015ef291f87110e",
+      "size": 767,
+      "source_path": "outputs/runs/edgar/20260708-181353/edgar_final_report_20260708-181353.md"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/baselines/edgar_baseline_comparison.manifest.json",
+      "sha256": "dd9de21dee51f64724b5b09b4c5024410e179ea4d57786b4272d279bc1a75c36",
+      "size": 1139,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/baselines/edgar_baseline_comparison.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/facts/edgar_facts.manifest.json",
+      "sha256": "526da92de48302d98ea26a04bd0c4ebc865548f8cfecb1b039e392a27f23df6f",
+      "size": 1226,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/facts/edgar_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/mechanisms/edgar_mechanism_report.json",
+      "sha256": "3374baee9320ff591592d473282c86dfc1d9f00f8deedca0bc67346f2bcc93b9",
+      "size": 2888,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/mechanisms/edgar_mechanism_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/paired_claims/edgar_paired_claims.manifest.json",
+      "sha256": "6c50ba67cf47e40f6a88e021183491802c624d2f390653ad1ccb8e64262cec0e",
+      "size": 788,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/paired_claims/edgar_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/paired_queries/edgar_paired_queries.manifest.json",
+      "sha256": "98b58933463684c723384dba7fa2be6e15917de04a7299ff27e2a01b181f1f0c",
+      "size": 295,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/paired_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/parsed_stance/edgar_parsed_stance.manifest.json",
+      "sha256": "d80315bfac91be27765cbca62bd1db5dc43635a0f5b8a33f2460097bc14a121a",
+      "size": 483,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/parsed_stance/edgar_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/008_edgar_attack_benchmark.jsonl",
+      "sha256": "99ac81d42ba4583eff0f02608e56bbad2fe7fbfa1081f6e4d0e14d905df33a77",
+      "size": 3471540,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/008_edgar_attack_benchmark.jsonl"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/009_edgar_benchmark_manifest.json",
+      "sha256": "d4048c3e39a5a4594dea7d3cdeead9a561eb056ec16946ec09c785936758e66d",
+      "size": 2597,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/009_edgar_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/010_split_manifest.json",
+      "sha256": "b40d9a66b6ef7e7dcaf890c8579f49a34860f722928c5d0f8abe082d89cb90fe",
+      "size": 126107,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/010_split_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/014_index_manifest.json",
+      "sha256": "a4325628318aca7a06ea3b91276db56abd3c57b155ef68054e52ac4e114909cb",
+      "size": 2138,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/provenance/014_index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/independent_unpaired_query/control_manifest.json",
+      "sha256": "a31bf5c3c7ed648464eb7643e99abd43c480d8411770e29685f3a1b8e5ab82ee",
+      "size": 1317,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/independent_unpaired_query/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/independent_unpaired_query/queries.manifest.json",
+      "sha256": "0efc63a04216a59f593c5298e47601673a6dcbb9ae498e0eff8894cb83ba912a",
+      "size": 438,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/independent_unpaired_query/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/no_stealth_filter/control_manifest.json",
+      "sha256": "1ae62b23d4f581945519921cb311e38c9c7e18f9bdd11c5c99816a7921e224d3",
+      "size": 961,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/no_stealth_filter/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/random_same_type_counterfactual/control_manifest.json",
+      "sha256": "5bcc26d5f6c7cf5b968e965c74b49c1071d0bc8b05d2d734435c8c93b0516242",
+      "size": 1577,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/random_same_type_counterfactual/control_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/random_same_type_counterfactual/queries.manifest.json",
+      "sha256": "6878edf15853ef13c40d1cb9ab3de362a22f240df52f8009788e543b208651b5",
+      "size": 448,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/query_controls/edgar/random_same_type_counterfactual/queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/rag_responses/edgar_rag_responses.manifest.json",
+      "sha256": "e9e8b0d1768ca835786a3ad9cef8b909745ffd027c288fbde9ea932926ee09da",
+      "size": 3411,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/rag_responses/edgar_rag_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/run_manifest.json",
+      "sha256": "72500d3578a0f64b6526a29dd92354b34776037acd7ad43374a02bac5d67ab1a",
+      "size": 36133,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/run_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/scores/edgar_pcv_scores.manifest.json",
+      "sha256": "1d93030e18ea8ed12afe7b4ea6e22ea67bbc9063bfeea51bd52f3dd3005a2531",
+      "size": 1491,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/scores/edgar_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/stealth_filtered_queries/edgar_paired_queries.manifest.json",
+      "sha256": "e760eb153e2cfde1409d790d73b6295323f3c1df62a2f1c9f4d351d7f8bd93aa",
+      "size": 414,
+      "source_path": "outputs/runs/edgar/qwen3.5-397b-a17b/edgar-qwen-formal-seed42/stealth_filtered_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/unspecified/20260709-150745/facts/edgar_facts.manifest.json",
+      "sha256": "e5301455903a5dc5814f35946c0423493996aca07217a2541fc5539d4e26be9d",
+      "size": 1226,
+      "source_path": "outputs/runs/edgar/unspecified/20260709-150745/facts/edgar_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/unspecified/20260709-150745/paired_claims/edgar_paired_claims.manifest.json",
+      "sha256": "9e5c7bd67780fe439b47225ad11feabbba4b2a1fc298cbeaebefe8844b3a5d62",
+      "size": 788,
+      "source_path": "outputs/runs/edgar/unspecified/20260709-150745/paired_claims/edgar_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/unspecified/20260709-150745/paired_queries/edgar_paired_queries.manifest.json",
+      "sha256": "de6577e91bcd14974ec959379e71b2cccf651fb47202009a31f5fd54d463b50d",
+      "size": 295,
+      "source_path": "outputs/runs/edgar/unspecified/20260709-150745/paired_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/unspecified/20260709-150745/run_manifest.json",
+      "sha256": "29523fc7a7af6584ea3d0cbee0f80095f182977e2a4d5b696715f6014c8f784c",
+      "size": 1425,
+      "source_path": "outputs/runs/edgar/unspecified/20260709-150745/run_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/edgar/unspecified/20260709-150745/stealth_filtered_queries/edgar_paired_queries.manifest.json",
+      "sha256": "e760eb153e2cfde1409d790d73b6295323f3c1df62a2f1c9f4d351d7f8bd93aa",
+      "size": 414,
+      "source_path": "outputs/runs/edgar/unspecified/20260709-150745/stealth_filtered_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260605-140052/enron_final_report_20260605-140052.json",
+      "sha256": "317cb4acfcb1ed0ea8d13a896523856973823a1de44b7a1b4aaa87a062922fd4",
+      "size": 39267,
+      "source_path": "outputs/runs/enron/20260605-140052/enron_final_report_20260605-140052.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260605-140052/enron_final_report_20260605-140052.md",
+      "sha256": "d0a8186c81dd74d59957f32043f9e3f3df3dd3fc32b6eb63486d16221f404e34",
+      "size": 693,
+      "source_path": "outputs/runs/enron/20260605-140052/enron_final_report_20260605-140052.md"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/facts/enron_facts.manifest.json",
+      "sha256": "a1220a367c152b46ca467d681eb0ba56958716cec822d835f96a022a96153a2e",
+      "size": 1245,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/facts/enron_facts.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/llm_only_responses/enron_llm_only_responses.manifest.json",
+      "sha256": "2e2090187e406ced6e665fc57322f6ad8ae4e7b27c6b937f41ecfade8a9a9d18",
+      "size": 2111,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/llm_only_responses/enron_llm_only_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/paired_claims/enron_paired_claims.manifest.json",
+      "sha256": "04d2f69183830a3ca427aff16a9b34b447265963f3499bf098326293385c0a09",
+      "size": 771,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/paired_claims/enron_paired_claims.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/paired_queries/enron_paired_queries.manifest.json",
+      "sha256": "c2bfc076f2c19802fc358ad7318963aeab50b92742ac54ab1986cc7f392fd6ed",
+      "size": 295,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/paired_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/parsed_stance/enron_parsed_stance.manifest.json",
+      "sha256": "c9a25f6f63745e48cc6cad89d247c7c684fb0b1578969ebfca6b91ceccd742c4",
+      "size": 148,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/parsed_stance/enron_parsed_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/rag_responses/enron_rag_responses.manifest.json",
+      "sha256": "2e2090187e406ced6e665fc57322f6ad8ae4e7b27c6b937f41ecfade8a9a9d18",
+      "size": 2111,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/rag_responses/enron_rag_responses.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/reports/enron_final_report.json",
+      "sha256": "317cb4acfcb1ed0ea8d13a896523856973823a1de44b7a1b4aaa87a062922fd4",
+      "size": 39267,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/reports/enron_final_report.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/run_manifest.json",
+      "sha256": "bfa7a65c53004e776d3fa38f8c1c4e5824df41a68347fb168739cb2489b85f15",
+      "size": 687,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/run_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/scores/enron_pcv_scores.manifest.json",
+      "sha256": "d94b15ac13f7f8c79dea58b6587e41aaba69cb2f26dd4df5685e2a085f055ccc",
+      "size": 403,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/scores/enron_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/runs/enron/20260707-205434_backfill/stealth_filtered_queries/enron_paired_queries.manifest.json",
+      "sha256": "411d26e60430a2a363fac1141a7d6eb798589c8154c16303940cf04d720f7b37",
+      "size": 295,
+      "source_path": "outputs/runs/enron/20260707-205434_backfill/stealth_filtered_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/scores/edgar/qwen3.5-397b-a17b/edgar_pcv_scores.manifest.json",
+      "sha256": "1d93030e18ea8ed12afe7b4ea6e22ea67bbc9063bfeea51bd52f3dd3005a2531",
+      "size": 1491,
+      "source_path": "outputs/scores/edgar/qwen3.5-397b-a17b/edgar_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/scores/edgar_pcv_scores.manifest.json",
+      "sha256": "c60733b65fdce5ba09ab504a86b7d033a1dbf68b73443bd5bb1933d3af5a5790",
+      "size": 499,
+      "source_path": "outputs/scores/edgar_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/scores/enron_pcv_scores.manifest.json",
+      "sha256": "d94b15ac13f7f8c79dea58b6587e41aaba69cb2f26dd4df5685e2a085f055ccc",
+      "size": 403,
+      "source_path": "outputs/scores/enron_pcv_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_00_llm_unused.manifest.json",
+      "sha256": "d306a91dc30e0e87f0111a9e01774a3f599cdcb6a8fc29600774aaa78ed89bb1",
+      "size": 667,
+      "source_path": "outputs/shadow/enron/enron_shadow_00_llm_unused.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_00_rag.manifest.json",
+      "sha256": "d306a91dc30e0e87f0111a9e01774a3f599cdcb6a8fc29600774aaa78ed89bb1",
+      "size": 667,
+      "source_path": "outputs/shadow/enron/enron_shadow_00_rag.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_00_scores.manifest.json",
+      "sha256": "51fe2b72517dd266f18831d389413960fdae4417e93b2d743f44e48984ea2e65",
+      "size": 437,
+      "source_path": "outputs/shadow/enron/enron_shadow_00_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_00_stance.manifest.json",
+      "sha256": "f1a0f6d2a96e40b7ab63618a87616c96ce98f98f16e2441ea4e4230c3018dda6",
+      "size": 160,
+      "source_path": "outputs/shadow/enron/enron_shadow_00_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_01_llm_unused.manifest.json",
+      "sha256": "bae7ee11ae007edba3c4a480ea80b5e96c86e6b722e254dc89108674b9b34681",
+      "size": 667,
+      "source_path": "outputs/shadow/enron/enron_shadow_01_llm_unused.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_01_rag.manifest.json",
+      "sha256": "bae7ee11ae007edba3c4a480ea80b5e96c86e6b722e254dc89108674b9b34681",
+      "size": 667,
+      "source_path": "outputs/shadow/enron/enron_shadow_01_rag.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_01_scores.manifest.json",
+      "sha256": "2d0ef4020b4b0ecafcae0926fa636f3be7f0f6d57ae8e8f0b2d1521bdd86df86",
+      "size": 437,
+      "source_path": "outputs/shadow/enron/enron_shadow_01_scores.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_01_stance.manifest.json",
+      "sha256": "8a243d32f9f7a93fb6b644681e542f57e7731b2b552545c86499eea7237c976f",
+      "size": 160,
+      "source_path": "outputs/shadow/enron/enron_shadow_01_stance.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/shadow/enron/enron_shadow_manifest.json",
+      "sha256": "42745d4ca1cf8688fbb45ce82fc4c50c3552747ad4e6f92e712917dbca0a10d2",
+      "size": 1636,
+      "source_path": "outputs/shadow/enron/enron_shadow_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/stealth_filtered_queries/edgar_paired_queries.manifest.json",
+      "sha256": "e760eb153e2cfde1409d790d73b6295323f3c1df62a2f1c9f4d351d7f8bd93aa",
+      "size": 414,
+      "source_path": "outputs/stealth_filtered_queries/edgar_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/outputs/stealth_filtered_queries/enron_paired_queries.manifest.json",
+      "sha256": "4fa9b105a9f3b253114d6cae83b4ceb2ab14d8435cee595a7804f62a3305a6b6",
+      "size": 413,
+      "source_path": "outputs/stealth_filtered_queries/enron_paired_queries.manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/abandoned_retriever_20260730/abandonment_manifest.json",
+      "sha256": "8cd8fe44afd3b8a03a09ffbec1cd0a0ff14f1321ce852b18ff75969dec8d18bf",
+      "size": 1591,
+      "source_path": "legacy/abandoned_retriever_20260730/abandonment_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/abandoned_retriever_20260730/indexes/enron/dense/index_manifest.json",
+      "sha256": "fc6704e9a733bd8526944e385c9d3218c82de3ead0d504ad99242e82dd2053ac",
+      "size": 3144,
+      "source_path": "legacy/abandoned_retriever_20260730/indexes/enron/dense/index_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/pre_response_regroup_20260731/edgar/artifacts/v6_3/benchmarks/edgar_benchmark_manifest.json",
+      "sha256": "bf6cc8fcd07b0e44f6d02f0fe6205cbe28d54b5b6d7d8f893d9889f7402c751b",
+      "size": 6538,
+      "source_path": "legacy/pre_response_regroup_20260731/edgar/artifacts/v6_3/benchmarks/edgar_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/pre_response_regroup_20260731/edgar/artifacts/v6_3/splits/edgar/split_manifest.json",
+      "sha256": "3df77f04210165ed2ca2bd07b1bd8f59c2bcb2d98f48c91efd91d602f8d13eba",
+      "size": 6019311,
+      "source_path": "legacy/pre_response_regroup_20260731/edgar/artifacts/v6_3/splits/edgar/split_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/pre_response_regroup_20260731/enron/artifacts/v6_3/benchmarks/enron_benchmark_manifest.json",
+      "sha256": "097d3ad972d94c9a9e487bf1f70d17b3832f0daca38835c734dfc7d54c72a48d",
+      "size": 6546,
+      "source_path": "legacy/pre_response_regroup_20260731/enron/artifacts/v6_3/benchmarks/enron_benchmark_manifest.json"
+    },
+    {
+      "evidence_path": "evidence/legacy/pre_response_regroup_20260731/enron/artifacts/v6_3/splits/enron/split_manifest.json",
+      "sha256": "97095188d108e4132f196a321fb623e8173886188a4b1047aabab8b3a27a5a70",
+      "size": 488294,
+      "source_path": "legacy/pre_response_regroup_20260731/enron/artifacts/v6_3/splits/enron/split_manifest.json"
+    }
+  ],
+  "git": {
+    "commit": "4d51dd45b5008756b04f7f9a303d53a61ff39425",
+    "status_porcelain": "M .gitignore\n M README.md\n M configs/baseline_config.yaml\n M configs/canonical_suite_v20_llama.yaml\n M configs/experiment_plan_v20.yaml\n M configs/llm_profiles.yaml\n M configs/pcv_attack_config.yaml\n M configs/pcv_attack_v6_3.yaml\n M configs/rag_config.yaml\n M requirements.txt\n M scripts/08_generate_paired_queries.py\n M scripts/09_filter_stealth_queries.py\n M scripts/12_run_baselines.py\n M scripts/19_evaluate_retrieval_gate.py\n M scripts/26_validate_v20_preflight.py\n M scripts/rebuild_v6_3_attack_first_rc2.py\n M src/baselines/BASELINES.md\n M src/baselines/victim_harness.py\n M src/evaluation/metrics.py\n M src/llm/factory.py\n M src/llm/generator_registry.py\n M src/llm/response_validation.py\n M src/prepare/eligibility_scan.py\n M src/query_generation/stealth_filter.py\n M src/rag/runner.py\n M src/utils/run_context.py\n M tests/test_baseline_concurrency.py\n M tests/test_canonical_v19_matrix.py\n M tests/test_pcv_mia.py\n M tests/test_v20_remediation.py\n?? configs/baseline_config_v21.yaml\n?? configs/data_config_v21.yaml\n?? configs/experiment_plan_v21.yaml\n?? configs/generator_families_v21.yaml\n?? configs/query_rewrite_shadow.yaml\n?? configs/qwen3_4b_q4km_8k.Modelfile\n?? configs/rag_config_v21.yaml\n?? docs/\n?? legacy/provenance_v20_superseded_20260803/\n?? scripts/27_prepare_menta_inputs.py\n?? scripts/28_validate_query_rewrite_shadow.py\n?? scripts/29_prepare_ia_shadow_answers.py\n?? scripts/30_archive_v20_provenance.py\n?? scripts/download_frozen_menta_nli.py\n?? src/baselines/ia_shadow.py\n?? src/baselines/menta.py\n?? src/evaluation/query_rewrite_shadow.py\n?? src/llm/huggingface_local.py\n?? src/query_generation/diverse_slot_questions.py\n?? src/query_generation/lexical_overlap.py\n?? tests/test_diverse_slot_questions.py\n?? tests/test_menta.py\n?? tests/test_query_rewrite_shadow.py\n?? tests/test_v21_protocol.py"
+  },
+  "inventory_path": "inventory.jsonl",
+  "inventory_rows": 818,
+  "inventory_sha256": "377c25fc541fdb34a6120f24ae81e6bd1e7249278992854cbebdd784ceda221c",
+  "legacy_protocol_version": "pcv-mia-v20",
+  "protocol_version": "pcv-mia-v21",
+  "status": "provenance_complete_cleanup_not_yet_executed",
+  "stop_reason": "superseded_by_pcv_mia_v21_full_rescan_luna_queries_qwen_ia_shadow_gemma2_2b_primary",
+  "targets": [
+    {
+      "exists": true,
+      "file_count": 318,
+      "resolved_path": "D:\\MIA\\mia_model\\artifacts\\v6_3",
+      "target": "artifacts/v6_3",
+      "total_bytes": 1800783984
+    },
+    {
+      "exists": true,
+      "file_count": 106,
+      "resolved_path": "D:\\MIA\\mia_model\\artifacts\\v20",
+      "target": "artifacts/v20",
+      "total_bytes": 1385404884
+    },
+    {
+      "exists": true,
+      "file_count": 12,
+      "resolved_path": "D:\\MIA\\mia_model\\indexes",
+      "target": "indexes",
+      "total_bytes": 19303869
+    },
+    {
+      "exists": true,
+      "file_count": 355,
+      "resolved_path": "D:\\MIA\\mia_model\\outputs",
+      "target": "outputs",
+      "total_bytes": 486319366
+    },
+    {
+      "exists": true,
+      "file_count": 5,
+      "resolved_path": "D:\\MIA\\mia_model\\legacy\\abandoned_retriever_20260730",
+      "target": "legacy/abandoned_retriever_20260730",
+      "total_bytes": 12621815
+    },
+    {
+      "exists": true,
+      "file_count": 22,
+      "resolved_path": "D:\\MIA\\mia_model\\legacy\\pre_response_regroup_20260731",
+      "target": "legacy/pre_response_regroup_20260731",
+      "total_bytes": 432146833
+    }
+  ],
+  "total_bytes": 4136580751,
+  "total_files": 818
+}

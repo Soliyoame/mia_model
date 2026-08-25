@@ -1,0 +1,40 @@
+{
+  "dataset": "pubmed",
+  "source_path": "D:\\MIA\\mia_model\\artifacts\\v19\\audits\\claim_pair_ai_adjudication\\pubmed_claim_pair_ai_adjudication.jsonl",
+  "source_sha256": "91f3bba45f39ef85e1f4c069e89ba401e710ec63bfcad6820b00db6a7ab59f4c",
+  "model_lock_path": "D:\\MIA\\mia_model\\configs\\semantic_entity_models_v6_3.lock.yaml",
+  "model_lock_sha256": "9bce3d3dc0a2c21566a8cce93e07350d11b774c92d55d44d88099f5e1f1831b8",
+  "schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "supplement_path": "D:\\MIA\\mia_model\\configs\\semantic_v6_3_dev_supplement.yaml",
+  "supplement_sha256": "d3663907b7ecfe6d56b818e018bd313e102f1f80e880a42ca5c42bece76a0ae2",
+  "max_rows_per_dataset": null,
+  "supplement_only": false,
+  "runtime": {
+    "device": "cuda",
+    "spacy_device": "cpu",
+    "biomedical_device": "cuda",
+    "batch_size": 8,
+    "use_fp16": true
+  },
+  "protocol": "local_claim_pair_v6_3_precision_cascade",
+  "execution_mode": "precision_cascade",
+  "primary_model_role": "gliner2_large",
+  "created_at": "2026-07-25T03:31:14.809029+00:00",
+  "rows": 78,
+  "labels": {
+    "pass": 26,
+    "fail": 52
+  },
+  "entity_types": {
+    "LOCATION": 12,
+    "PRODUCT": 18,
+    "ORG": 11,
+    "PERSON": 13,
+    "PROJECT_NAME": 10,
+    "CONTRACT_TERM": 14
+  },
+  "api_calls_performed": 0,
+  "label_scope": "AI-assisted historical development labels; not a release audit and not a two-human blind annotation.",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\semantic_calibration_precision_cascade\\pubmed_raw_predictions.jsonl",
+  "output_sha256": "c70c0dc91ad46395ca53b8709ded8cd770baa1a184c19d07c34947b2ed567b25"
+}

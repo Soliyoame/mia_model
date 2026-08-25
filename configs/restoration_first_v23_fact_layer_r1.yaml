@@ -1,0 +1,19 @@
+protocol_version: pcv-mia-v23
+method_version: pcv-restoration-first-v23-fact-layer
+specification_version: pcv-restoration-first-v23-fact-layer-r1
+base_design_config: configs/restoration_first_v23.yaml
+artifact_root: artifacts/v23/selection/development_fact_layer
+development_source_count: 1000
+formal_fact_types: [CONTRACT_TERM, LOCATION, ORG, PERSON, PRODUCT]
+structured_diagnostic_types: [DATE, MONEY, PERCENT, NUMERIC_VALUE, IDENTIFIER, SECTION_ID]
+sentence_token_count: [8, 80]
+minimum_masked_content_tokens: 4
+require_complete_source_occurrence: true
+require_unique_original_recovery: true
+require_source_absent_counterfactual: true
+source_specific_anchor_role: diagnostic_only
+relation_cue_role: diagnostic_only
+required_pairs_per_source: 3
+maximum_pairs_per_original_entity: 2
+require_distinct_fact_signatures: true
+external_calls_performed: 0

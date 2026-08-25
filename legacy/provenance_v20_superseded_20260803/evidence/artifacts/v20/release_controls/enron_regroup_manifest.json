@@ -1,0 +1,186 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "enron",
+  "seed": 42,
+  "decisions": [
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00009679",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00009686"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "True_Non_Member": 1
+      },
+      "assigned_group": "True_Non_Member",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00034164",
+          "from": "True_Non_Member",
+          "to": "KB_Member"
+        }
+      ]
+    },
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00020228",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00020328"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "Reserve": 1
+      },
+      "assigned_group": "KB_Member",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00044189",
+          "from": "KB_Member",
+          "to": "Reserve"
+        }
+      ]
+    },
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00021282",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00031070"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "True_Non_Member": 1
+      },
+      "assigned_group": "KB_Member",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00038624",
+          "from": "KB_Member",
+          "to": "True_Non_Member"
+        }
+      ]
+    },
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033742",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033765",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033785"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "True_Non_Member": 2
+      },
+      "assigned_group": "KB_Member",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00012865",
+          "from": "KB_Member",
+          "to": "True_Non_Member"
+        },
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00044424",
+          "from": "KB_Member",
+          "to": "True_Non_Member"
+        }
+      ]
+    },
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050008",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050014"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "True_Non_Member": 1
+      },
+      "assigned_group": "True_Non_Member",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050993",
+          "from": "True_Non_Member",
+          "to": "KB_Member"
+        }
+      ]
+    },
+    {
+      "cluster": [
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00051540",
+        "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00051544"
+      ],
+      "original_groups": {
+        "KB_Member": 1,
+        "Reserve": 1
+      },
+      "assigned_group": "Reserve",
+      "singleton_swaps": [
+        {
+          "source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00049305",
+          "from": "Reserve",
+          "to": "KB_Member"
+        }
+      ]
+    }
+  ],
+  "changed_sources": {
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050014": {
+      "from": "KB_Member",
+      "to": "True_Non_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00051544": {
+      "from": "KB_Member",
+      "to": "Reserve"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00044189": {
+      "from": "KB_Member",
+      "to": "Reserve"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00009679": {
+      "from": "KB_Member",
+      "to": "True_Non_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00044424": {
+      "from": "KB_Member",
+      "to": "True_Non_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00012865": {
+      "from": "KB_Member",
+      "to": "True_Non_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00038624": {
+      "from": "KB_Member",
+      "to": "True_Non_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00021282": {
+      "from": "True_Non_Member",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00034164": {
+      "from": "True_Non_Member",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050993": {
+      "from": "True_Non_Member",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033765": {
+      "from": "True_Non_Member",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033785": {
+      "from": "True_Non_Member",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00049305": {
+      "from": "Reserve",
+      "to": "KB_Member"
+    },
+    "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00020328": {
+      "from": "Reserve",
+      "to": "KB_Member"
+    }
+  },
+  "final_source_counts": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "backup_root": "D:\\MIA\\mia_model\\legacy\\pre_response_regroup_20260731\\enron",
+  "api_calls_made": 0
+}

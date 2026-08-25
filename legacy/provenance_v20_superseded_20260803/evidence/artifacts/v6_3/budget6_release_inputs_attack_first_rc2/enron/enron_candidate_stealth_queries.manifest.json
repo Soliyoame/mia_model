@@ -1,0 +1,25 @@
+{
+  "dataset": "enron",
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "accepted": 7500,
+  "rejected": 0,
+  "accepted_pairs": 3750,
+  "rejected_pairs": 0,
+  "stealth_detection_rate": 0.0,
+  "pair_rejection_rate": 0.0,
+  "fixed_budget": {
+    "enabled": true,
+    "pairs_per_source": 3,
+    "queries_per_source": 6,
+    "eligible_sources": 1250,
+    "insufficient_sources": {},
+    "selected_pairs": 3750,
+    "query_text_uniqueness_enforced": true,
+    "duplicate_query_text_pairs": 0,
+    "fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61"
+  },
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_local_files_only": true,
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_candidate_stealth_queries.jsonl",
+  "output_hash": "a48a33ac6c600349ec5a2fb505bc160aebe7dc6da0ffd383abb08c9d74a68f84"
+}

@@ -1,0 +1,18 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "edgar",
+  "status": "read_only_ground_truth_source_store",
+  "group_counts": {
+    "KB_Member": 500,
+    "Reserve": 250,
+    "True_Non_Member": 500
+  },
+  "source_count": 1250,
+  "input_hashes": {
+    "KB_Member": "305997b00766c4f71d6570cac3d8600c3102c8e7122fa3617ebb55fd00340a5b",
+    "True_Non_Member": "33da7f15cc57c39aec50589e981bb57a58daf97c5184e62b14749d706285a4d1",
+    "Reserve": "2568689bc5fd99d5c9606d9a352f0d51f7b624e0e08bff01b560eca5786cdd32"
+  },
+  "source_keys_hash": "bd859976d9bce18c2d4ca287fccae135691ea180ce84d7d65d46c053ca8836dc",
+  "store_hash": "64d2944df802675723d7b6ccf4952abfc6d84037840de94f4cca75a46586b883"
+}

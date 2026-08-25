@@ -1,0 +1,393 @@
+{
+  "protocol": "v6_3_attack_first_rc2_existing_audit_replay",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "model_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "datasets": {
+    "edgar": {
+      "dataset": "edgar",
+      "input_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "audit_row_count": 100,
+      "attack_first_rejected_count": 17,
+      "attack_first_rejected_rate": 0.17,
+      "failure_counts_by_reason": {
+        "counterfactual_claim_obvious_fragment": 2,
+        "counterfactual_location_article_class_mismatch": 5,
+        "counterfactual_location_attack_subtype_mismatch": 10,
+        "counterfactual_product_attack_subtype_mismatch": 2,
+        "original_entity_obvious_generic": 5,
+        "true_claim_obvious_fragment": 2
+      },
+      "failures": [
+        {
+          "audit_id": "pair_eligibility_edgar_a96f78e56d3602b36eef8ac3_001983",
+          "entity_type": "LOCATION",
+          "original_entity": "United States of America",
+          "counterfactual_entity": "Dublin",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_article_class_mismatch",
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_552cfbefdafbcd4f4ba545a5_001919",
+          "entity_type": "LOCATION",
+          "original_entity": "British Columbia",
+          "counterfactual_entity": "Germany",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch",
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_53ad51984862c6290fb87150_002220",
+          "entity_type": "LOCATION",
+          "original_entity": "Europe",
+          "counterfactual_entity": "California",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_ffdd0d50567024a7451e6d9f_001861",
+          "entity_type": "LOCATION",
+          "original_entity": "United States of America",
+          "counterfactual_entity": "Dublin",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_article_class_mismatch",
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_1851c7b09fccfef6d058f9fb_002063",
+          "entity_type": "LOCATION",
+          "original_entity": "United States of America",
+          "counterfactual_entity": "Dublin",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_article_class_mismatch",
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_41ae816efa06979fac4a722f_001983",
+          "entity_type": "PRODUCT",
+          "original_entity": "Somatrogon",
+          "counterfactual_entity": "Lumen Toolkit",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_d5dcb1a6a390295559d689fa_001844",
+          "entity_type": "ORG",
+          "original_entity": "limited liability companies",
+          "counterfactual_entity": "Vanta Industries Ltd",
+          "attack_first_failure_reasons": [
+            "original_entity_obvious_generic"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_32ec41934ac07189422c2223_001866",
+          "entity_type": "PRODUCT",
+          "original_entity": "Water Services",
+          "counterfactual_entity": "Quanta Engine",
+          "attack_first_failure_reasons": [
+            "original_entity_obvious_generic"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_5bd4d975fe0294ccb8dada84_001769",
+          "entity_type": "ORG",
+          "original_entity": "Corporation",
+          "counterfactual_entity": "Northstar Logistics LLC",
+          "attack_first_failure_reasons": [
+            "original_entity_obvious_generic"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_8573cae62b47eb68a56ad3ce_001886",
+          "entity_type": "LOCATION",
+          "original_entity": "European Union",
+          "counterfactual_entity": "Dublin",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_article_class_mismatch",
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_1f48b43577ace0e4ab9a8360_001867",
+          "entity_type": "LOCATION",
+          "original_entity": "United States of America",
+          "counterfactual_entity": "Dublin",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_article_class_mismatch",
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_cd3bf6ee4506d7c2f80f38ef_002172",
+          "entity_type": "ORG",
+          "original_entity": "target company",
+          "counterfactual_entity": "Vanta Industries",
+          "attack_first_failure_reasons": [
+            "original_entity_obvious_generic"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_70e03f46ab62757d452ea291_000151",
+          "entity_type": "PRODUCT",
+          "original_entity": "Medicare Advantage",
+          "counterfactual_entity": "Nova Device",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_4fbfa2d12332065921b63576_001774",
+          "entity_type": "LOCATION",
+          "original_entity": "California",
+          "counterfactual_entity": "Tokyo",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_3465aa3d544daef062db0212_002053",
+          "entity_type": "LOCATION",
+          "original_entity": "California",
+          "counterfactual_entity": "Tokyo",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch",
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_55046c0995242d44d8f0f104_000144",
+          "entity_type": "LOCATION",
+          "original_entity": "Xuzhou City",
+          "counterfactual_entity": "Paris",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_edgar_11df3316605e2412073394f5_001968",
+          "entity_type": "ORG",
+          "original_entity": "commercial partners",
+          "counterfactual_entity": "Harborview Group",
+          "attack_first_failure_reasons": [
+            "original_entity_obvious_generic"
+          ]
+        }
+      ]
+    },
+    "enron": {
+      "dataset": "enron",
+      "input_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\enron_claim_pair_audit_annotator_a.jsonl",
+      "audit_row_count": 100,
+      "attack_first_rejected_count": 10,
+      "attack_first_rejected_rate": 0.1,
+      "failure_counts_by_reason": {
+        "counterfactual_claim_obvious_fragment": 4,
+        "counterfactual_location_attack_subtype_mismatch": 3,
+        "counterfactual_product_attack_subtype_mismatch": 4,
+        "true_claim_obvious_fragment": 4
+      },
+      "failures": [
+        {
+          "audit_id": "pair_eligibility_enron_5d39f681d72a291c62d74fa1_000489",
+          "entity_type": "LOCATION",
+          "original_entity": "Europe",
+          "counterfactual_entity": "California",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_4a1971e0e0934b2226d3d7e3_001794",
+          "entity_type": "ORG",
+          "original_entity": "Reuters Limited",
+          "counterfactual_entity": "Northstar Logistics LLC",
+          "attack_first_failure_reasons": [
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_b02f605eb2173f29fdf54fe3_000914",
+          "entity_type": "PRODUCT",
+          "original_entity": "Davis Color Stain",
+          "counterfactual_entity": "Nova Device",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_2269034226c3d1ab94cb283e_000890",
+          "entity_type": "PRODUCT",
+          "original_entity": "Compaq Presario 705US Notebook",
+          "counterfactual_entity": "Nova 3",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch",
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_f107cccf4318ccb5c3bf98c1_002624",
+          "entity_type": "LOCATION",
+          "original_entity": "Dubai",
+          "counterfactual_entity": "Paris",
+          "attack_first_failure_reasons": [
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_a6682d08a5f3550b01a07fe3_002475",
+          "entity_type": "LOCATION",
+          "original_entity": "Malaysia",
+          "counterfactual_entity": "California",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_d8de00c32fcf88f1e446bc9b_000513",
+          "entity_type": "LOCATION",
+          "original_entity": "Europe",
+          "counterfactual_entity": "California",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_841d9b12fa44e2641ed4d2bb_000800",
+          "entity_type": "PRODUCT",
+          "original_entity": "Foster",
+          "counterfactual_entity": "Nova Device",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_57139e925640d6de888528b0_001056",
+          "entity_type": "ORG",
+          "original_entity": "Reuters Limited",
+          "counterfactual_entity": "Northstar Logistics LLC",
+          "attack_first_failure_reasons": [
+            "true_claim_obvious_fragment",
+            "counterfactual_claim_obvious_fragment"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_enron_f1ee912ef107b9ea1729fb61_000514",
+          "entity_type": "PRODUCT",
+          "original_entity": "Leather Overnighter Bag",
+          "counterfactual_entity": "Vertex Console",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        }
+      ]
+    },
+    "pubmed": {
+      "dataset": "pubmed",
+      "input_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\pubmed_claim_pair_audit_annotator_a.jsonl",
+      "audit_row_count": 100,
+      "attack_first_rejected_count": 9,
+      "attack_first_rejected_rate": 0.09,
+      "failure_counts_by_reason": {
+        "counterfactual_indefinite_article_mismatch": 1,
+        "counterfactual_location_attack_subtype_mismatch": 6,
+        "counterfactual_product_attack_subtype_mismatch": 2
+      },
+      "failures": [
+        {
+          "audit_id": "pair_eligibility_pubmed_9f28577673444d1b3f33a4ce_001489",
+          "entity_type": "LOCATION",
+          "original_entity": "New York City",
+          "counterfactual_entity": "Singapore",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_6cb290605904517e4f41ace2_001689",
+          "entity_type": "PRODUCT",
+          "original_entity": "Windows 10 Professional",
+          "counterfactual_entity": "Nova 3",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_3ad4f9d098a4613ffa611da4_001581",
+          "entity_type": "LOCATION",
+          "original_entity": "Australia",
+          "counterfactual_entity": "Sydney",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_87dfe5482eb3102767bbdf77_001683",
+          "entity_type": "LOCATION",
+          "original_entity": "China",
+          "counterfactual_entity": "Paris",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_1a8850885c86f587c0c5765e_001550",
+          "entity_type": "LOCATION",
+          "original_entity": "China",
+          "counterfactual_entity": "Paris",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_66cfe8a8ca9ca02a215edb4f_001562",
+          "entity_type": "LOCATION",
+          "original_entity": "Korea",
+          "counterfactual_entity": "London",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_84e05388e3d07e8be49e4d22_001666",
+          "entity_type": "PRODUCT",
+          "original_entity": "Illumina Hiseq 4000",
+          "counterfactual_entity": "Beacon X2",
+          "attack_first_failure_reasons": [
+            "counterfactual_indefinite_article_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_4cc69cdf3b869eac80e0545c_001525",
+          "entity_type": "PRODUCT",
+          "original_entity": "SYBR Green I",
+          "counterfactual_entity": "Vertex Console",
+          "attack_first_failure_reasons": [
+            "counterfactual_product_attack_subtype_mismatch"
+          ]
+        },
+        {
+          "audit_id": "pair_eligibility_pubmed_9543606287cfc5ef28824a73_001700",
+          "entity_type": "LOCATION",
+          "original_entity": "Europe",
+          "counterfactual_entity": "California",
+          "attack_first_failure_reasons": [
+            "counterfactual_location_attack_subtype_mismatch"
+          ]
+        }
+      ]
+    }
+  }
+}

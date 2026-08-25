@@ -1,0 +1,15 @@
+{
+  "status": "cleanup_complete",
+  "completed_at": "2026-08-03T03:31:00+00:00",
+  "inventory_sha256": "377c25fc541fdb34a6120f24ae81e6bd1e7249278992854cbebdd784ceda221c",
+  "deleted_bytes_recorded": 4136580751,
+  "deleted_targets": [
+    "artifacts/v6_3",
+    "artifacts/v20",
+    "indexes",
+    "outputs",
+    "legacy/abandoned_retriever_20260730",
+    "legacy/pre_response_regroup_20260731"
+  ],
+  "recovery": "Large files were deleted after provenance verification. Recovery is limited to the retained inventory, hashes, row counts, and evidence copies."
+}

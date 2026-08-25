@@ -1,0 +1,25 @@
+{
+  "dataset": "enron",
+  "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+  "scan_plan_sha256": "27aee760f30395092fd8e864e8eb0db4580af3d12f0cd532c91da161f9af2bfe",
+  "scan_checkpoint_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_budget6_release_checkpoint.json",
+  "scan_checkpoint_sha256": "b891654ada758fb4468f6d3e343212206620cecd13a992cf71a020cd695b8114",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "semantic_resolver_protocol": "local_claim_pair_v6_3_precision_cascade",
+  "semantic_schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "gliner_inference_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "status": "complete",
+  "outputs": {
+    "query_eligibility": {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_query_eligible_sources.json",
+      "sha256": "1d25d00a858b633ad00992c46599ec5426e4fb73926054207dd1c8e7118e8f5c"
+    }
+  }
+}
