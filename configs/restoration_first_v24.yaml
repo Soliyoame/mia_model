@@ -1,0 +1,66 @@
+protocol_version: pcv-mia-v24
+method_version: pcv-query-local-counterfactual-reconstruction
+specification_version: pcv-restoration-first-v24-pre-split-eligibility-r1
+status: implementation_ready_offline_only
+selection_seed: 42
+
+source_pool:
+  manifest_template: artifacts/v22/source_pools/{dataset}/source_pool_manifest.json
+  order_template: artifacts/v22/source_pools/{dataset}/source_order.json
+  database_template: artifacts/v22/source_pools/{dataset}/source_pool.sqlite3
+  expected_source_counts:
+    edgar: 5210
+    enron: 35000
+    pubmed: 47950
+  membership_blind: true
+  require_manifest_and_order_hash: true
+
+candidate_fact_adapter:
+  kind: source_text_type_agnostic
+  require_source_grounded_true_claim: true
+  include_legacy_type_or_counterfactual_fields: false
+
+eligibility:
+  target_sources: 2250
+  minimum_pairs_per_source: 3
+  candidate_packages_per_fact: 3
+  true_grounding_threshold: 0.80
+  query_similarity_threshold: 0.80
+  ranking_tie_tolerance: 0.01
+  correction_eligibility_required: true
+  nli_contradiction_required: false
+
+split:
+  counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+
+formal:
+  queries_per_source: 6
+  victim_queries_per_dataset: 12000
+  reserve_in_main_victim_budget: false
+  fallback_pair_rate_maximum: 0.01
+
+stealth_diagnostics:
+  hard_gate: false
+  query_source_5gram_containment_warning: 0.35
+  longest_literal_copy_length_warning: 8
+  duplicate_query_rate_warning: 0.01
+  dominant_opening_4gram_rate_warning: 0.15
+
+coverage:
+  report_rejection_reason_distribution: true
+  report_screened_and_eligible_sources: true
+
+fallback:
+  template: "Is it correct that {PROPOSITION}?"
+  allowed_stage: pre_formal_freeze_only
+
+governance:
+  external_calls_performed: 0
+  membership_visible_during_screening: false
+  retriever_visible_during_screening: false
+  victim_visible_during_screening: false
+  auc_visible_during_screening: false
+  authorization_artifact_required: false
