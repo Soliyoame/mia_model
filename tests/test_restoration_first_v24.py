@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
+
 from src.prepare.restoration_first_v24 import (
+    SemanticSimilarityScorer,
     build_eligibility_manifest,
     build_split_manifest,
     deterministic_correction_eligibility_judge,
@@ -24,6 +27,26 @@ from src.prepare.restoration_first_v24 import (
     stealth_diagnostics,
 )
 from src.utils.hash import sha256_obj
+
+
+def _semantic_similarity(_left: str, _right: str) -> float:
+    """Deterministic semantic-score mock for offline protocol tests."""
+
+    return 0.95
+
+
+class _FakeEmbedder:
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self.vectors = vectors
+        self.calls: list[list[str]] = []
+        self.closed = False
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        self.calls.append(list(texts))
+        return np.asarray([self.vectors[text] for text in texts], dtype="float32")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _fact(claim: str, original: str = "Alice") -> dict[str, object]:
@@ -88,6 +111,7 @@ class V24EligibilityTests(unittest.TestCase):
             fact,
             fact["true_claim"],
             package,
+            similarity_fn=_semantic_similarity,
             eligibility_judge=lambda _payload: {
                 "correction_eligible": True,
                 "slot_determinacy": "strong",
@@ -118,7 +142,12 @@ class V24EligibilityTests(unittest.TestCase):
             "Is the company incorporated in Delaware?",
             "Is the company incorporated in Nevada?",
         )
-        result = evaluate_candidate(fact, "The company is incorporated in Delaware.", package)
+        result = evaluate_candidate(
+            fact,
+            "The company is incorporated in Delaware.",
+            package,
+            similarity_fn=_semantic_similarity,
+        )
         self.assertTrue(result["accepted"], result)
         self.assertEqual(result["pair"]["canonical_pair_nli_relation"], "neutral")
 
@@ -130,6 +159,81 @@ class V24EligibilityTests(unittest.TestCase):
                 "Nevada", "The company is incorporated in {ENTITY}.",
                 "Is the company incorporated in Delaware?", "Is the company incorporated in Nevada?"
             ))
+
+    def test_query_semantics_requires_explicit_semantic_scorer(self):
+        with self.assertRaisesRegex(RuntimeError, "semantic_similarity_required"):
+            validate_query_semantics(
+                true_claim="The company is incorporated in Delaware.",
+                original_entity="Delaware",
+                replacement_entity="Nevada",
+                canonical_true="The company is incorporated in Delaware.",
+                canonical_counterfactual="The company is incorporated in Nevada.",
+                q_plus="Is the company incorporated in Delaware?",
+                q_minus="Is the company incorporated in Nevada?",
+            )
+
+    def test_stealth_similarity_has_no_lexical_fallback(self):
+        with self.assertRaisesRegex(RuntimeError, "semantic_similarity_required"):
+            stealth_diagnostics(
+                source_text="The company is incorporated in Delaware.",
+                q_plus="Is the company incorporated in Delaware?",
+                q_minus="Is the company incorporated in Nevada?",
+                original_entity="Delaware",
+                replacement_entity="Nevada",
+            )
+
+    def test_semantic_similarity_scorer_uses_embedding_cosine(self):
+        embedder = _FakeEmbedder({
+            "left": [1.0, 0.0],
+            "right": [0.6, 0.8],
+        })
+        scorer = SemanticSimilarityScorer(
+            embedder=embedder,
+            model_name="BAAI/bge-base-en-v1.5",
+            revision="test-revision",
+            backend="auto",
+            local_files_only=True,
+        )
+        self.assertAlmostEqual(scorer("left", "right"), 0.6, places=6)
+        self.assertAlmostEqual(scorer("left", "right"), 0.6, places=6)
+        self.assertEqual(embedder.calls, [["left"], ["right"]])
+        scorer.close()
+        self.assertTrue(embedder.closed)
+
+    def test_semantic_similarity_identity_records_model_and_revision(self):
+        scorer = SemanticSimilarityScorer(
+            embedder=_FakeEmbedder({"left": [1.0], "right": [1.0]}),
+            model_name="BAAI/bge-base-en-v1.5",
+            revision="a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+            backend="sentence_transformers",
+            local_files_only=True,
+        )
+        self.assertEqual(
+            scorer.identity(),
+            {
+                "kind": "sentence_transformers_cosine",
+                "backend": "sentence_transformers",
+                "model": "BAAI/bge-base-en-v1.5",
+                "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+                "local_files_only": True,
+                "threshold": 0.80,
+            },
+        )
+
+    def test_semantic_similarity_scorer_rejects_invalid_embedding_shape(self):
+        class InvalidEmbedder:
+            def encode(self, _texts: list[str]) -> np.ndarray:
+                return np.asarray([1.0, 0.0], dtype="float32")
+
+        scorer = SemanticSimilarityScorer(
+            embedder=InvalidEmbedder(),
+            model_name="BAAI/bge-base-en-v1.5",
+            revision="test-revision",
+            backend="auto",
+            local_files_only=True,
+        )
+        with self.assertRaisesRegex(RuntimeError, "invalid_embedding_shape"):
+            scorer("left", "right")
 
     def test_ranking_uses_max_min_binding_score(self):
         base = {
@@ -254,6 +358,7 @@ class V24EligibilityTests(unittest.TestCase):
             target_sources=2250,
             minimum_pairs=1,
             facts=[fact_template],
+            similarity_fn=_semantic_similarity,
         )
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["eligible_source_count"], 2250)
@@ -266,6 +371,7 @@ class V24EligibilityTests(unittest.TestCase):
             candidate_provider=lambda _fact: [],
             target_sources=3,
             facts=[fact],
+            similarity_fn=_semantic_similarity,
         )
         self.assertEqual(result["status"], "insufficient_eligible_capacity")
         self.assertEqual(result["eligible_source_count"], 0)
@@ -274,10 +380,24 @@ class V24EligibilityTests(unittest.TestCase):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
         package = _package("Nevada", "The company is incorporated in {ENTITY}.", "Is the company incorporated in Delaware?", "Is the company incorporated in Nevada?")
         source = {"dataset": "edgar", "source_key": "s", "source_order_rank": "0", "full_text": "The company is incorporated in Delaware."}
-        first = scan_until_target([source], candidate_provider=lambda _fact: [package], target_sources=1, minimum_pairs=1, facts=[fact])
+        first = scan_until_target(
+            [source],
+            candidate_provider=lambda _fact: [package],
+            target_sources=1,
+            minimum_pairs=1,
+            facts=[fact],
+            similarity_fn=_semantic_similarity,
+        )
         altered = dict(fact, membership_label="KB_Member")
         with self.assertRaisesRegex(ValueError, "forbidden_input_field"):
-            scan_until_target([source], candidate_provider=lambda _fact: [package], target_sources=1, minimum_pairs=1, facts=[altered])
+            scan_until_target(
+                [source],
+                candidate_provider=lambda _fact: [package],
+                target_sources=1,
+                minimum_pairs=1,
+                facts=[altered],
+                similarity_fn=_semantic_similarity,
+            )
         self.assertEqual(first["eligible_source_count"], 1)
 
     def test_candidate_fact_contains_masked_claim_and_absolute_spans(self):
@@ -418,10 +538,20 @@ class V24EligibilityTests(unittest.TestCase):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
         valid = _package("Nevada", "The company is incorporated in {ENTITY}.", "Is the company incorporated in Delaware?", "Is the company incorporated in Nevada?")
         valid["retrieval_anchors"] = ["company"]
-        accepted = evaluate_candidate(fact, fact["true_claim"], valid)
+        accepted = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            valid,
+            similarity_fn=_semantic_similarity,
+        )
         self.assertTrue(accepted["accepted"])
         invalid = dict(valid, retrieval_anchors=["not in source"])
-        result = evaluate_candidate(fact, fact["true_claim"], invalid)
+        result = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            invalid,
+            similarity_fn=_semantic_similarity,
+        )
         self.assertTrue(result["accepted"], result)
         self.assertNotIn("retrieval_anchor_not_source_grounded", result["rejection_reasons"])
         self.assertIn(
@@ -438,11 +568,17 @@ class V24EligibilityTests(unittest.TestCase):
             "Is the company incorporated in Delaware?",
             "Is the company incorporated in Nevada?",
         )
-        clean = evaluate_candidate(fact, fact["true_claim"], package)
+        clean = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            similarity_fn=_semantic_similarity,
+        )
         noisy = evaluate_candidate(
             fact,
             fact["true_claim"],
             dict(package, retrieval_anchors=["not in source"]),
+            similarity_fn=_semantic_similarity,
         )
         self.assertTrue(clean["accepted"], clean)
         self.assertTrue(noisy["accepted"], noisy)
@@ -460,7 +596,12 @@ class V24EligibilityTests(unittest.TestCase):
             "Is the company incorporated in Nevada?",
         )
         package["retrieval_anchors"] = ["not in source"]
-        pair = evaluate_candidate(fact, fact["true_claim"], package)["pair"]
+        pair = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            similarity_fn=_semantic_similarity,
+        )["pair"]
         source = {
             "eligible": True,
             "dataset": "edgar",
@@ -503,7 +644,13 @@ class V24EligibilityTests(unittest.TestCase):
     def test_fallback_recomputes_query_manifest_hash(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
         package = _package("Nevada", "The company is incorporated in {ENTITY}.", "", "")
-        result = evaluate_candidate(fact, fact["true_claim"], package, allow_surface_fallback=True)
+        result = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            allow_surface_fallback=True,
+            similarity_fn=_semantic_similarity,
+        )
         pair = result["pair"]
         self.assertEqual(pair["query_manifest_hash"], _query_manifest_hash(pair))
 
@@ -643,7 +790,13 @@ class V24EligibilityTests(unittest.TestCase):
     def test_surface_failure_uses_same_reconstruction_fallback(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
         package = _package("Nevada", "The company is incorporated in {ENTITY}.", "", "")
-        result = evaluate_candidate(fact, fact["true_claim"], package, allow_surface_fallback=True)
+        result = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            allow_surface_fallback=True,
+            similarity_fn=_semantic_similarity,
+        )
         self.assertTrue(result["accepted"])
         self.assertEqual(result["pair"]["generation_mode"], "deterministic_fallback")
         self.assertEqual(result["pair"]["replacement_entity"], "Nevada")

@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.prepare.restoration_first_v24 import (  # noqa: E402
     build_luna_candidate_provider,
+    build_v24_semantic_similarity,
     enumerate_candidate_facts,
     iter_frozen_source_pool,
     load_v24_config,
@@ -125,43 +126,48 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
     if len(inputs) != expected:
         raise ValueError(f"v24_canary_input_count:{len(inputs)}:{expected}")
     sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs}, {str(row.get("source_key") or "") for row in inputs})
+    semantic_scorer = build_v24_semantic_similarity(root)
     provider = build_luna_candidate_provider(root)
     results: list[dict[str, object]] = []
-    for row in inputs:
-        try:
-            source = sources[str(row["source_key"])]
-            fact = _membership_blind_fact(row, source)
-            screened = screen_source(
-                source,
-                candidate_provider=provider,
-                facts=[fact],
-                minimum_pairs=1,
-                allow_surface_fallback=False,
-            )
-            selected = screened.get("selected_pairs") or []
-            results.append({
-                "canary_pair_index": row.get("canary_pair_index"),
-                "dataset": fact["dataset"],
-                "source_key": fact["source_key"],
-                "upstream_pair_id": fact["upstream_pair_id"],
-                "eligible": bool(screened.get("eligible")),
-                "selected_pair": selected[0] if selected else None,
-                "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
-            })
-        except Exception as exc:
-            # Preserve per-pair failure evidence before the aggregate canary
-            # status is decided.  Error text is intentionally secret-free.
-            results.append({
-                "canary_pair_index": row.get("canary_pair_index"),
-                "dataset": row.get("dataset"),
-                "source_key": row.get("source_key"),
-                "upstream_pair_id": row.get("pair_id"),
-                "eligible": False,
-                "selected_pair": None,
-                "rejection_reason_counts": {
-                    f"execution_error:{type(exc).__name__}:{exc}": 1,
-                },
-            })
+    try:
+        for row in inputs:
+            try:
+                source = sources[str(row["source_key"])]
+                fact = _membership_blind_fact(row, source)
+                screened = screen_source(
+                    source,
+                    candidate_provider=provider,
+                    facts=[fact],
+                    minimum_pairs=1,
+                    allow_surface_fallback=False,
+                    similarity_fn=semantic_scorer,
+                )
+                selected = screened.get("selected_pairs") or []
+                results.append({
+                    "canary_pair_index": row.get("canary_pair_index"),
+                    "dataset": fact["dataset"],
+                    "source_key": fact["source_key"],
+                    "upstream_pair_id": fact["upstream_pair_id"],
+                    "eligible": bool(screened.get("eligible")),
+                    "selected_pair": selected[0] if selected else None,
+                    "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
+                })
+            except Exception as exc:
+                # Preserve per-pair failure evidence before the aggregate canary
+                # status is decided.  Error text is intentionally secret-free.
+                results.append({
+                    "canary_pair_index": row.get("canary_pair_index"),
+                    "dataset": row.get("dataset"),
+                    "source_key": row.get("source_key"),
+                    "upstream_pair_id": row.get("pair_id"),
+                    "eligible": False,
+                    "selected_pair": None,
+                    "rejection_reason_counts": {
+                        f"execution_error:{type(exc).__name__}:{exc}": 1,
+                    },
+                })
+    finally:
+        semantic_scorer.close()
     passed = sum(bool(item["eligible"]) for item in results)
     output = root / output_dir
     write_jsonl(results, output / "canary_results.jsonl")
@@ -175,6 +181,7 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
         "config_sha256": sha256_obj(config),
         "input_sha256": sha256_file(root / input_path),
         "provider": provider.stats(),
+        "semantic_similarity": semantic_scorer.identity(),
         "result_sha256": sha256_file(output / "canary_results.jsonl"),
         "external_calls_performed": provider.physical_attempts,
         "retriever_calls_performed": 0,
@@ -197,16 +204,20 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
         selected_sources.append(source)
         if len(selected_sources) >= sample_sources:
             break
+    semantic_scorer = build_v24_semantic_similarity(root) if use_luna else None
     provider = build_luna_candidate_provider(root) if use_luna else None
     eligible_count = 0
     screened_count = 0
     candidate_count = 0
     if use_luna:
-        for source in selected_sources:
-            result = screen_source(source, candidate_provider=provider, minimum_pairs=3, allow_surface_fallback=False)
-            screened_count += 1
-            candidate_count += int(result.get("candidate_package_count", 0))
-            eligible_count += int(bool(result.get("eligible")))
+        try:
+            for source in selected_sources:
+                result = screen_source(source, candidate_provider=provider, minimum_pairs=3, allow_surface_fallback=False, similarity_fn=semantic_scorer)
+                screened_count += 1
+                candidate_count += int(result.get("candidate_package_count", 0))
+                eligible_count += int(bool(result.get("eligible")))
+        finally:
+            semantic_scorer.close()
     else:
         # Offline capacity sanity check: count source-grounded slots only.  It is
         # an estimate, never the exact eligibility scan and never a formal result.
@@ -228,6 +239,7 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
         "target_eligible_source_count": target,
         "capacity_status": "estimate_only" if not use_luna else ("sufficient_sample_signal" if rate > 0 else "no_eligible_sample"),
         "provider": provider.stats() if provider is not None else None,
+        "semantic_similarity": semantic_scorer.identity() if semantic_scorer is not None else None,
         "external_calls_performed": provider.physical_attempts if provider is not None else 0,
         "retriever_calls_performed": 0,
         "victim_calls_performed": 0,

@@ -10,6 +10,14 @@ llm:
   max_tokens: 2048
   retry_until_success: true
 
+semantic_similarity:
+  kind: sentence_transformers_cosine
+  model: BAAI/bge-base-en-v1.5
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  backend: auto
+  local_files_only: true
+  query_instruction: ""
+
 development:
   canary_input_path: artifacts/v23/development/query_quality_canary_r3_subject_presence_r2_attempt5/canary_inputs.jsonl
   canary_pair_count: 30

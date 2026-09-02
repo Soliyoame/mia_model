@@ -10,6 +10,7 @@ below.  Tests use deterministic mocks.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -102,6 +103,88 @@ class RoleJudge(Protocol):
 
 class EligibilityJudge(Protocol):
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+
+@dataclass
+class SemanticSimilarityScorer:
+    """Embedding-backed semantic scorer; lexical fallback is forbidden."""
+
+    embedder: Any
+    model_name: str
+    revision: str | None
+    backend: str
+    local_files_only: bool
+    threshold: float = 0.80
+    _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+
+    def __call__(self, left: str, right: str) -> float:
+        from ..rag.embeddings import cosine_similarity
+
+        score = cosine_similarity(self._encode(left), self._encode(right))
+        if not math.isfinite(score):
+            raise RuntimeError("v24_semantic_scorer_non_finite_score")
+        return score
+
+    def _encode(self, text: str) -> Any:
+        key = str(text)
+        if key not in self._cache:
+            vectors = self.embedder.encode([key])
+            if getattr(vectors, "ndim", None) != 2 or tuple(getattr(vectors, "shape", ()))[:1] != (1,):
+                raise RuntimeError("v24_semantic_scorer_invalid_embedding_shape")
+            self._cache[key] = vectors[0]
+        return self._cache[key]
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "kind": "sentence_transformers_cosine",
+            "backend": self.backend,
+            "model": self.model_name,
+            "revision": self.revision,
+            "local_files_only": self.local_files_only,
+            "threshold": self.threshold,
+        }
+
+    def close(self) -> None:
+        closer = getattr(self.embedder, "close", None)
+        if callable(closer):
+            closer()
+        self._cache.clear()
+
+
+def build_v24_semantic_similarity(project_root: str | Path = ".") -> SemanticSimilarityScorer:
+    """Build the configured real semantic scorer for v24 construction."""
+
+    config = load_v24_config(project_root)
+    semantic = config.get("semantic_similarity")
+    if not isinstance(semantic, Mapping):
+        raise RuntimeError("v24_semantic_similarity_config_missing")
+    backend = str(semantic.get("backend") or "").casefold()
+    model_name = str(semantic.get("model") or "").strip()
+    allowed_backends = {"auto", "sentence_transformers", "sentence-transformers", "sentence-transformer"}
+    if backend not in allowed_backends:
+        raise RuntimeError("v24_semantic_similarity_requires_real_embedding_backend")
+    if not model_name or model_name.casefold() in {"hash", "hashing"}:
+        raise RuntimeError("v24_semantic_similarity_model_invalid")
+    revision = str(semantic.get("revision")) if semantic.get("revision") else None
+    local_files_only = bool(semantic.get("local_files_only", True))
+    threshold = float(config.get("eligibility", {}).get("query_similarity_threshold", 0.80))
+    from ..rag.embeddings import build_embedding_model
+
+    embedder = build_embedding_model(
+        model_name,
+        backend=backend,
+        local_files_only=local_files_only,
+        revision=revision,
+        query_instruction=str(semantic.get("query_instruction") or ""),
+    )
+    return SemanticSimilarityScorer(
+        embedder=embedder,
+        model_name=model_name,
+        revision=revision,
+        backend=backend,
+        local_files_only=local_files_only,
+        threshold=threshold,
+    )
 
 
 def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
@@ -281,6 +364,13 @@ def load_v24_config(project_root: str | Path = ".") -> dict[str, Any]:
         raise RuntimeError("v24_nli_contradiction_gate_forbidden")
     if config.get("stealth_diagnostics", {}).get("hard_gate") is not False:
         raise RuntimeError("v24_stealth_diagnostics_must_not_be_hard_gate")
+    semantic = config.get("semantic_similarity")
+    allowed_backends = {"auto", "sentence_transformers", "sentence-transformers", "sentence-transformer"}
+    if not isinstance(semantic, Mapping) or str(semantic.get("backend") or "").casefold() not in allowed_backends:
+        raise RuntimeError("v24_semantic_similarity_config_invalid")
+    model_name = str(semantic.get("model") or "").strip().casefold()
+    if not model_name or model_name in {"hash", "hashing"}:
+        raise RuntimeError("v24_semantic_similarity_model_invalid")
     return dict(config)
 
 
@@ -453,14 +543,6 @@ def deterministic_correction_eligibility_judge(payload: Mapping[str, Any]) -> di
     }
 
 
-def _lexical_similarity(left: str, right: str) -> float:
-    a = set(content_tokens(left)) - QUESTION_FRAME_WORDS
-    b = set(content_tokens(right)) - QUESTION_FRAME_WORDS
-    if not a or not b:
-        return 0.0
-    return len(a & b) / max(1, len(a | b))
-
-
 def _token_ngrams(tokens: Sequence[str], size: int) -> set[tuple[str, ...]]:
     if size <= 0 or len(tokens) < size:
         return set()
@@ -503,10 +585,12 @@ def stealth_diagnostics(
     q_minus: str,
     original_entity: str,
     replacement_entity: str,
-    similarity_fn: Callable[[str, str], float] = _lexical_similarity,
+    similarity_fn: Callable[[str, str], float] | None = None,
 ) -> dict[str, float]:
     """Compute non-blocking stealth/diversity diagnostics for one pair."""
 
+    if similarity_fn is None:
+        raise RuntimeError("v24_semantic_similarity_required")
     masked_plus = _mask_entity_mentions(q_plus, original_entity)
     masked_minus = _mask_entity_mentions(q_minus, replacement_entity)
     plus_tokens = content_tokens(q_plus)
@@ -675,8 +759,10 @@ def validate_query_semantics(
     canonical_counterfactual: str,
     q_plus: str,
     q_minus: str,
-    similarity_fn: Callable[[str, str], float] = _lexical_similarity,
+    similarity_fn: Callable[[str, str], float] | None = None,
 ) -> tuple[list[str], dict[str, float]]:
+    if similarity_fn is None:
+        raise RuntimeError("v24_semantic_similarity_required")
     reasons: list[str] = []
     metrics = {
         "q_plus_similarity": similarity_fn(q_plus, canonical_true),
@@ -738,7 +824,7 @@ def evaluate_candidate(
     role_judge: RoleJudge | None = None,
     eligibility_judge: EligibilityJudge | None = None,
     grounding: Mapping[str, Any] | None = None,
-    similarity_fn: Callable[[str, str], float] = _lexical_similarity,
+    similarity_fn: Callable[[str, str], float] | None = None,
     allow_surface_fallback: bool = False,
     candidate_index: int = 0,
 ) -> dict[str, Any]:
@@ -987,8 +1073,11 @@ def screen_source(
     facts: Sequence[Mapping[str, Any]] | None = None,
     minimum_pairs: int = PAIRS_PER_SOURCE,
     allow_surface_fallback: bool = True,
+    similarity_fn: Callable[[str, str], float] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    if similarity_fn is None:
+        raise RuntimeError("v24_semantic_similarity_required")
     identity = _source_identity(source)
     source_facts = list(facts if facts is not None else enumerate_candidate_facts(source))
     selected: list[dict[str, Any]] = []
@@ -1007,6 +1096,7 @@ def screen_source(
                 package,
                 allow_surface_fallback=allow_surface_fallback,
                 candidate_index=index,
+                similarity_fn=similarity_fn,
                 **kwargs,
             )
             for index, package in enumerate(packages)
