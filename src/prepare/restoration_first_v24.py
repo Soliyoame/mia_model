@@ -14,6 +14,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..attack.entity_extractor import EntityExtractor
@@ -101,6 +102,128 @@ class RoleJudge(Protocol):
 
 class EligibilityJudge(Protocol):
     def __call__(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+
+def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
+    """Build the membership-blind Luna reconstruction prompt."""
+
+    _reject_forbidden(fact)
+    fields = {
+        "upstream_pair_id": str(fact.get("upstream_pair_id") or ""),
+        "true_claim": str(fact.get("true_claim") or ""),
+        "original_entity": str(fact.get("original_entity") or ""),
+        "slotted_true_claim": str(fact.get("slotted_true_claim") or ""),
+    }
+    return (
+        "You are a query-local counterfactual reconstruction model for a privacy "
+        "benchmark. Use only the supplied source-grounded proposition and entity slot.\n"
+        "Generate exactly three independent candidate packages. The replacement must "
+        "be contextually plausible in exactly the same grammatical and semantic role; "
+        "do not use entity type taxonomies and do not require classic NLI contradiction. "
+        "Keep one canonical proposition frame and change only {ENTITY}. Q+ verifies the "
+        "true proposition and Q- verifies the counterfactual proposition. Questions must "
+        "be natural self-contained polar questions with exactly one question mark. "
+        "Return JSON only with this shape:\n"
+        '{"candidates":[{"replacement_entity":"...",'
+        '"canonical_proposition_template":"...{ENTITY}...",'
+        '"q_plus_text":"...?","q_minus_text":"...?",'
+        '"retrieval_anchors":["..."],'
+        '"true_grounding":{"entailment_probability":0.95,"top_label":"entailment"},'
+        '"contextual_role_compatibility":{"compatible":true,"plausibility":"strong"},'
+        '"correction_eligibility":{"correction_eligible":true,'
+        '"slot_determinacy":"strong","open_world_ambiguity":"low",'
+        '"reason_code":"..."},"canonical_pair_nli_relation":"neutral"}]}\n\n'
+        f"Input:\n{canonical_json(fields)}"
+    )
+
+
+@dataclass
+class LunaCandidateProvider:
+    """Callable Luna adapter with secret-free transport accounting."""
+
+    client: Any
+    profile: Mapping[str, Any]
+    max_candidates: int = 3
+    logical_api_calls: int = 0
+    physical_attempts: int = 0
+    transport_retry_count: int = 0
+    provider_model_ids: set[str] = field(default_factory=set)
+    failures: list[str] = field(default_factory=list)
+
+    def __call__(self, fact: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
+        prompt = build_candidate_prompt(fact)
+        self.logical_api_calls += 1
+        try:
+            result = self.client.chat_with_metadata(
+                prompt,
+                temperature=0.0,
+                timeout=float(self.profile.get("timeout", 120.0)),
+                max_tokens=int(self.profile.get("max_tokens", 2048)),
+            )
+            raw = str(getattr(result, "content", result) or "")
+            retry_count = int(getattr(result, "retry_count", 0) or 0)
+            provider_model_id = getattr(result, "provider_model_id", None)
+            self.transport_retry_count += retry_count
+            self.physical_attempts += retry_count + 1
+            if provider_model_id:
+                self.provider_model_ids.add(str(provider_model_id))
+            from ..llm.openai_compatible import parse_json_object
+
+            payload = parse_json_object(raw)
+            candidates = payload.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                raise ValueError("v24_luna_candidates_missing")
+            if len(candidates) > self.max_candidates:
+                raise ValueError("v24_luna_candidate_count_exceeded")
+            normalized: list[dict[str, Any]] = []
+            for candidate in candidates:
+                if not isinstance(candidate, Mapping):
+                    raise ValueError("v24_luna_candidate_schema")
+                item = dict(candidate)
+                _reject_forbidden(item, path="luna_candidate")
+                item["provider_model_id"] = str(provider_model_id) if provider_model_id else None
+                item["transport_retry_count"] = retry_count
+                normalized.append(item)
+            return normalized
+        except Exception as exc:
+            self.failures.append(f"{type(exc).__name__}:{exc}")
+            raise
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "logical_api_calls": self.logical_api_calls,
+            "physical_attempts": self.physical_attempts,
+            "transport_retry_count": self.transport_retry_count,
+            "provider_model_ids": sorted(self.provider_model_ids),
+            "profile_name": self.profile.get("profile_name"),
+            "configured_model": self.profile.get("model"),
+            "failures": list(self.failures),
+        }
+
+
+def build_luna_candidate_provider(
+    project_root: str | Path = ".",
+    *,
+    profile_name: str | None = None,
+    client: Any | None = None,
+) -> LunaCandidateProvider:
+    """Construct the configured Luna provider without exposing credentials."""
+
+    config = load_v24_config(project_root)
+    if client is None:
+        from ..llm.factory import build_role_chat_client, load_llm_profiles
+
+        profiles = load_llm_profiles(config)
+        selected = profile_name or str(config.get("llm", {}).get("profile") or "luna_query_generator")
+        client, profile = build_role_chat_client(profiles, "sibling", profile_name=selected)
+    else:
+        profile = {
+            "profile_name": profile_name or "mock",
+            "model": str(config.get("llm", {}).get("model") or "mock"),
+            "timeout": config.get("llm", {}).get("timeout", 120),
+            "max_tokens": config.get("llm", {}).get("max_tokens", 2048),
+        }
+    return LunaCandidateProvider(client=client, profile=profile)
 
 
 def _norm(value: str) -> str:
@@ -494,26 +617,53 @@ def _temporal_markers(text: str) -> set[str]:
     } | set(NUMBER_RE.findall(text))
 
 
-def _anchor_reasons(
+def _anchor_diagnostics(
     source_text: str,
     q_plus: str,
     q_minus: str,
     anchors: Any,
-) -> list[str]:
+) -> dict[str, Any]:
+    """记录 retrieval anchor 质量，但不把它升级为科学拒绝理由。"""
+
     if anchors is None:
-        return []
-    if not isinstance(anchors, (list, tuple)) or len(anchors) > 3:
-        return ["retrieval_anchor_schema"]
-    if not anchors:
-        return []
+        return {
+            "provided": False,
+            "schema_valid": True,
+            "source_grounded": True,
+            "present_in_query": True,
+            "reasons": [],
+        }
     reasons: list[str] = []
+    if not isinstance(anchors, (list, tuple)) or len(anchors) > 3:
+        reasons.append("retrieval_anchor_schema")
+        return {
+            "provided": True,
+            "anchor_count": None,
+            "schema_valid": False,
+            "source_grounded": False,
+            "present_in_query": False,
+            "reasons": reasons,
+        }
+    source_grounded = True
+    present_in_query = True
     for anchor in anchors:
-        value = str(anchor or "").strip()
+        if not isinstance(anchor, str):
+            reasons.append("retrieval_anchor_schema")
+        value = anchor.strip() if isinstance(anchor, str) else str(anchor or "").strip()
         if not value or _boundary_count(source_text, value) < 1:
             reasons.append("retrieval_anchor_not_source_grounded")
+            source_grounded = False
         if _boundary_count(q_plus, value) < 1 and _boundary_count(q_minus, value) < 1:
             reasons.append("retrieval_anchor_not_in_query")
-    return reasons
+            present_in_query = False
+    return {
+        "provided": True,
+        "anchor_count": len(anchors),
+        "schema_valid": "retrieval_anchor_schema" not in reasons,
+        "source_grounded": source_grounded,
+        "present_in_query": present_in_query,
+        "reasons": sorted(set(reasons)),
+    }
 
 
 def validate_query_semantics(
@@ -585,8 +735,8 @@ def evaluate_candidate(
     source_text: str,
     package: Mapping[str, Any],
     *,
-    role_judge: RoleJudge = deterministic_role_judge,
-    eligibility_judge: EligibilityJudge = deterministic_correction_eligibility_judge,
+    role_judge: RoleJudge | None = None,
+    eligibility_judge: EligibilityJudge | None = None,
     grounding: Mapping[str, Any] | None = None,
     similarity_fn: Callable[[str, str], float] = _lexical_similarity,
     allow_surface_fallback: bool = False,
@@ -606,26 +756,42 @@ def evaluate_candidate(
         return {"accepted": False, "rejection_reasons": [str(error)], "fact": dict(fact)}
     if _boundary_count(source_text, replacement) > 0:
         reasons.append("source_absence")
-    role = dict(role_judge({
+    role_payload = {
         "true_claim": fact.get("true_claim"),
         "original_entity": original,
         "replacement_entity": replacement,
         "canonical_true": canonical_true,
         "canonical_counterfactual": canonical_counterfactual,
-    }))
+    }
+    if role_judge is not None:
+        role_result = role_judge(role_payload)
+    else:
+        package_role = package.get("contextual_role_compatibility")
+        role_result = package_role if isinstance(package_role, Mapping) else deterministic_role_judge(role_payload)
+    role = dict(role_result)
     if role.get("compatible") is not True or role.get("plausibility") not in {"strong", "acceptable"}:
         reasons.append("contextual_role_incompatible")
     grounding_value = dict(grounding or package.get("true_grounding") or {})
     entailment = float(grounding_value.get("entailment_probability", 0.0))
     if entailment < 0.80 or str(grounding_value.get("top_label", "")) != "entailment":
         reasons.append("true_grounding")
-    eligibility = dict(eligibility_judge({
+    eligibility_payload = {
         "true_claim": fact.get("true_claim"),
         "original_entity": original,
         "replacement_entity": replacement,
         "canonical_true": canonical_true,
         "canonical_counterfactual": canonical_counterfactual,
-    }))
+    }
+    if eligibility_judge is not None:
+        eligibility_result = eligibility_judge(eligibility_payload)
+    else:
+        package_eligibility = package.get("correction_eligibility")
+        eligibility_result = (
+            package_eligibility
+            if isinstance(package_eligibility, Mapping)
+            else deterministic_correction_eligibility_judge(eligibility_payload)
+        )
+    eligibility = dict(eligibility_result)
     slot_determinacy = str(eligibility.get("slot_determinacy") or "").casefold()
     open_world_ambiguity = str(eligibility.get("open_world_ambiguity") or "").casefold()
     if (
@@ -645,14 +811,13 @@ def evaluate_candidate(
         similarity_fn=similarity_fn,
     )
     reasons.extend(query_reasons)
-    reasons.extend(
-        _anchor_reasons(
-            source_text,
-            str(package.get("q_plus_text") or ""),
-            str(package.get("q_minus_text") or ""),
-            package.get("retrieval_anchors"),
-        )
+    anchor_diagnostics = _anchor_diagnostics(
+        source_text,
+        str(package.get("q_plus_text") or ""),
+        str(package.get("q_minus_text") or ""),
+        package.get("retrieval_anchors"),
     )
+    raw_anchors = package.get("retrieval_anchors")
     row = {
         "upstream_pair_id": str(fact.get("upstream_pair_id") or ""),
         "dataset": str(fact.get("dataset") or ""),
@@ -669,7 +834,8 @@ def evaluate_candidate(
         "canonical_counterfactual": canonical_counterfactual,
         "q_plus_text": str(package.get("q_plus_text") or ""),
         "q_minus_text": str(package.get("q_minus_text") or ""),
-        "retrieval_anchors": list(package.get("retrieval_anchors") or []),
+        "retrieval_anchors": raw_anchors if raw_anchors is not None else [],
+        "retrieval_anchor_diagnostics": anchor_diagnostics,
         "contextual_role_compatibility": role,
         "correction_eligibility": eligibility,
         "canonical_pair_nli_relation": package.get("canonical_pair_nli_relation", "diagnostic_unprovided"),
@@ -1393,6 +1559,7 @@ def build_query_manifest(eligible_manifest: Mapping[str, Any]) -> dict[str, Any]
                         "generation_mode": pair.get("generation_mode"),
                         "query_manifest_hash": pair.get("query_manifest_hash"),
                         "stealth_diagnostics": pair.get("stealth_diagnostics", {}),
+                        "retrieval_anchor_diagnostics": pair.get("retrieval_anchor_diagnostics", {}),
                     }
                 )
     manifest: dict[str, Any] = {

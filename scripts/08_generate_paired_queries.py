@@ -73,6 +73,7 @@ def _build_metadata_chat_client(profile: dict[str, Any]) -> OpenAICompatibleChat
         system_prompt=str(profile.get("system_prompt") or ""),
         timeout=float(profile.get("timeout", 120.0)),
         max_retries=int(profile.get("max_retries", 0)),
+        retry_until_success=bool(profile.get("retry_until_success", False)),
         retry_backoff_base=float(profile.get("retry_backoff_base", 2.0)),
         retry_backoff_max=float(profile.get("retry_backoff_max", 30.0)),
         extra_body=dict(extra_body),

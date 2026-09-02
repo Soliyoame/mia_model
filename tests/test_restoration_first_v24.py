@@ -414,15 +414,91 @@ class V24EligibilityTests(unittest.TestCase):
         )
         self.assertIn("q_plus_modality_drift", reasons)
 
-    def test_invalid_anchor_is_rejected_but_anchor_is_not_appended(self):
+    def test_invalid_anchor_is_diagnostic_only_and_anchor_is_not_appended(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
         valid = _package("Nevada", "The company is incorporated in {ENTITY}.", "Is the company incorporated in Delaware?", "Is the company incorporated in Nevada?")
         valid["retrieval_anchors"] = ["company"]
         accepted = evaluate_candidate(fact, fact["true_claim"], valid)
         self.assertTrue(accepted["accepted"])
         invalid = dict(valid, retrieval_anchors=["not in source"])
-        rejected = evaluate_candidate(fact, fact["true_claim"], invalid)
-        self.assertIn("retrieval_anchor_not_source_grounded", rejected["rejection_reasons"])
+        result = evaluate_candidate(fact, fact["true_claim"], invalid)
+        self.assertTrue(result["accepted"], result)
+        self.assertNotIn("retrieval_anchor_not_source_grounded", result["rejection_reasons"])
+        self.assertIn(
+            "retrieval_anchor_not_source_grounded",
+            result["pair"]["retrieval_anchor_diagnostics"]["reasons"],
+        )
+        self.assertEqual(result["pair"]["retrieval_anchors"], ["not in source"])
+
+    def test_anchor_diagnostics_do_not_change_candidate_ranking(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        package = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is the company incorporated in Delaware?",
+            "Is the company incorporated in Nevada?",
+        )
+        clean = evaluate_candidate(fact, fact["true_claim"], package)
+        noisy = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            dict(package, retrieval_anchors=["not in source"]),
+        )
+        self.assertTrue(clean["accepted"], clean)
+        self.assertTrue(noisy["accepted"], noisy)
+        self.assertEqual(
+            rank_candidates([clean, noisy])[0]["pair"]["pair_id"],
+            clean["pair"]["pair_id"],
+        )
+
+    def test_anchor_diagnostics_are_carried_to_query_manifest_without_budget_change(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        package = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is the company incorporated in Delaware?",
+            "Is the company incorporated in Nevada?",
+        )
+        package["retrieval_anchors"] = ["not in source"]
+        pair = evaluate_candidate(fact, fact["true_claim"], package)["pair"]
+        source = {
+            "eligible": True,
+            "dataset": "edgar",
+            "source_key": "s",
+            "source_order_rank": "0",
+            "source_hash": "a" * 64,
+            "normalized_text_hash": "b" * 64,
+            "selected_pairs": [dict(pair), dict(pair), dict(pair)],
+        }
+        for index, selected in enumerate(source["selected_pairs"]):
+            selected["pair_id"] = f"p-{index}"
+            selected["query_manifest_hash"] = _query_manifest_hash(selected)
+        scan = {
+            "status": "passed",
+            "screened_source_count": 1,
+            "eligible_source_count": 1,
+            "eligible_source_rate": 1.0,
+            "candidate_pair_count": 1,
+            "candidate_package_count": 3,
+            "contextual_role_pass_count": 3,
+            "correction_eligibility_pass_count": 3,
+            "rejection_reason_distribution": {},
+            "eligible_sources": [source],
+        }
+        manifest = build_eligibility_manifest(
+            scan,
+            dataset="edgar",
+            config={
+                "eligibility": {"target_sources": 1},
+                "formal": {"fallback_pair_rate_maximum": 0.5},
+            },
+            source_pool={"source_count": 1},
+        )
+        query_manifest = build_query_manifest(manifest)
+        self.assertEqual(query_manifest["query_count"], 6)
+        self.assertTrue(
+            all("retrieval_anchor_diagnostics" in row for row in query_manifest["rows"])
+        )
 
     def test_fallback_recomputes_query_manifest_hash(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")

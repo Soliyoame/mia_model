@@ -4,6 +4,18 @@ specification_version: pcv-restoration-first-v24-pre-split-eligibility-r1
 status: implementation_ready_offline_only
 selection_seed: 42
 
+llm:
+  profile: luna_query_generator
+  timeout: 120
+  max_tokens: 2048
+  retry_until_success: true
+
+development:
+  canary_input_path: artifacts/v23/development/query_quality_canary_r3_subject_presence_r2_attempt5/canary_inputs.jsonl
+  canary_pair_count: 30
+  allow_fallback: false
+  capacity_sample_sources: 30
+
 source_pool:
   manifest_template: artifacts/v22/source_pools/{dataset}/source_pool_manifest.json
   order_template: artifacts/v22/source_pools/{dataset}/source_order.json

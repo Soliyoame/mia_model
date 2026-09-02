@@ -25,6 +25,7 @@ sibling:
       temperature: 0
       max_tokens: 2048
       max_retries: 2
+      retry_until_success: true
       request_interval_seconds: 0
       requests_per_minute: 4
       stream: false

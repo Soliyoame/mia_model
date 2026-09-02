@@ -17,9 +17,11 @@ OpenAI-compatible endpoint 等服务。API key 通过环境变量读取，不写
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import random
 import re
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -81,6 +83,7 @@ class OpenAICompatibleChatClient:
     system_prompt: str = ""       # 系统提示词(设定模型角色/规则)，可空
     timeout: float = 60.0         # 单次请求超时秒数
     max_retries: int = 0          # 本层最多重试次数(默认 0=不重试)
+    retry_until_success: bool = False  # transport 错误是否持续重试直到成功
     retry_backoff_base: float = 2.0   # 重试退避基数
     retry_backoff_max: float = 30.0   # 重试退避上限秒数
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数(如 top_p)
@@ -287,8 +290,9 @@ class OpenAICompatibleChatClient:
     ) -> tuple[str, int]:
         """发送请求；对限流 / 5xx / 网络抖动做指数退避重试。
 
-        max_retries=0（默认）时行为与原来一致：失败立即抛错，由上层（如 rag.runner）
-        决定是否重试，避免双层重试相乘放大总时延。
+        max_retries=0 且 retry_until_success=False（默认）时行为与原来一致：失败立即抛错，
+        由上层（如 rag.runner）决定是否重试，避免双层重试相乘放大总时延。
+        retry_until_success=True 时，仅对可重试的 transport 错误持续指数退避重连，直到拿到响应。
 
         参数:
             request:         构造好的 urllib 请求对象。
@@ -296,11 +300,12 @@ class OpenAICompatibleChatClient:
         返回:
             服务器返回的原始正文字符串(utf-8 解码后)。
         异常:
-            RuntimeError: 重试用尽仍失败时抛出，并附带 HTTP 状态码或错误详情。
+            RuntimeError: 非可重试错误立即抛出；有限重试用尽仍失败时附带 HTTP 状态码或错误详情。
         """
-        # 总尝试次数 = 1 + max_retries(至少 1 次)。
+        # 有限模式总尝试次数 = 1 + max_retries；持续模式由 while True 重试直到拿到响应。
         attempts = max(0, int(self.max_retries))
-        for attempt in range(attempts + 1):
+        attempt = 0
+        while True:
             try:
                 if self.request_rate_limiter is not None:
                     self.request_rate_limiter.acquire()
@@ -311,18 +316,27 @@ class OpenAICompatibleChatClient:
                 # 服务器返回了错误状态码(如 429/500)。
                 detail = exc.read().decode("utf-8", errors="replace")
                 # 属于"可重试"状态码且还有重试机会，就退避后重试。
-                if exc.code in self._RETRYABLE_STATUS and attempt < attempts:
+                if exc.code in self._RETRYABLE_STATUS and (
+                    self.retry_until_success or attempt < attempts
+                ):
                     self._sleep_backoff(attempt)
+                    attempt += 1
                     continue
                 raise RuntimeError(f"OpenAI-compatible request failed: HTTP {exc.code}: {detail}") from exc
-            except urllib.error.URLError as exc:
-                # 网络层错误(连不上/超时等)，还有机会就重试。
-                if attempt < attempts:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                ssl.SSLError,
+                http.client.HTTPException,
+                OSError,
+            ) as exc:
+                # 网络层错误(连不上/超时等)，按配置重试；Luna query 可持续重试。
+                if self.retry_until_success or attempt < attempts:
                     self._sleep_backoff(attempt)
+                    attempt += 1
                     continue
                 raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
-        # 理论上不会走到这里(循环里要么 return 要么 raise)，兜底再抛一次。
-        raise RuntimeError("OpenAI-compatible request failed after retries.")
 
     def _stream_with_retries(
         self,
@@ -340,12 +354,13 @@ class OpenAICompatibleChatClient:
     ]:
         """发流式(SSE)请求,逐行解析 data: 块,累积并返回答案文本。
 
-        与 _urlopen_with_retries 同样的退避重试策略;区别是按 SSE 流式读取——服务端边
+        与 _urlopen_with_retries 同样的退避重试策略；区别是按 SSE 流式读取——服务端边
         生成边推送,连接持续有数据流,可避开网关"N 秒无完整响应"触发的 524 超时。
         只累积 choices[0].delta.content(答案);忽略 reasoning_content(思考过程,非答案)。
         """
         attempts = max(0, int(self.max_retries))
-        for attempt in range(attempts + 1):
+        attempt = 0
+        while True:
             try:
                 if self.request_rate_limiter is not None:
                     self.request_rate_limiter.acquire()
@@ -416,16 +431,26 @@ class OpenAICompatibleChatClient:
                 )
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
-                if exc.code in self._RETRYABLE_STATUS and attempt < attempts:
+                if exc.code in self._RETRYABLE_STATUS and (
+                    self.retry_until_success or attempt < attempts
+                ):
                     self._sleep_backoff(attempt)
+                    attempt += 1
                     continue
                 raise RuntimeError(f"OpenAI-compatible request failed: HTTP {exc.code}: {detail}") from exc
-            except urllib.error.URLError as exc:
-                if attempt < attempts:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ConnectionError,
+                ssl.SSLError,
+                http.client.HTTPException,
+                OSError,
+            ) as exc:
+                if self.retry_until_success or attempt < attempts:
                     self._sleep_backoff(attempt)
+                    attempt += 1
                     continue
                 raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
-        raise RuntimeError("OpenAI-compatible streaming request failed after retries.")
 
     def _sleep_backoff(self, attempt: int) -> None:
         """重试前睡眠一段时间(指数退避 + 随机抖动)。
@@ -439,7 +464,8 @@ class OpenAICompatibleChatClient:
         if base <= 0 or cap <= 0:
             return
         # 期望等待 = base * 2^attempt，并用 cap 封顶。
-        delay = min(cap, base * (2 ** attempt))
+        # 无限重试时 attempt 可能很大，限制指数计算避免构造超大整数；到此已达到封顶等待。
+        delay = min(cap, base * (2 ** min(max(0, int(attempt)), 30)))
         # Full jitter：避免并发调用方在同一时刻一起重试。
         time.sleep(random.uniform(0.0, delay))
 
