@@ -20,6 +20,7 @@ from src.prepare.restoration_first_v24 import (  # noqa: E402
     build_luna_candidate_provider,
     build_v24_semantic_similarity,
     enumerate_candidate_facts,
+    get_max_candidate_facts_per_source,
     iter_frozen_source_pool,
     load_v24_config,
     scan_until_target,
@@ -123,6 +124,8 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
     config = load_v24_config(root)
     inputs = _load_canary_inputs(root, input_path)
     expected = int(config.get("development", {}).get("canary_pair_count", 30))
+    correction_retries = int(config.get("eligibility", {}).get("semantic_correction_retries", 1))
+    fact_budget = get_max_candidate_facts_per_source(config)
     if len(inputs) != expected:
         raise ValueError(f"v24_canary_input_count:{len(inputs)}:{expected}")
     sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs}, {str(row.get("source_key") or "") for row in inputs})
@@ -141,6 +144,9 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
                     minimum_pairs=1,
                     allow_surface_fallback=False,
                     similarity_fn=semantic_scorer,
+                    semantic_correction_retries=correction_retries,
+                    include_candidate_evidence=True,
+                    max_candidate_facts_per_source=fact_budget,
                 )
                 selected = screened.get("selected_pairs") or []
                 results.append({
@@ -151,6 +157,7 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
                     "eligible": bool(screened.get("eligible")),
                     "selected_pair": selected[0] if selected else None,
                     "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
+                    "candidate_evidence": screened.get("candidate_evidence", []),
                 })
             except Exception as exc:
                 # Preserve per-pair failure evidence before the aggregate canary
@@ -162,6 +169,7 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
                     "upstream_pair_id": row.get("pair_id"),
                     "eligible": False,
                     "selected_pair": None,
+                    "candidate_evidence": [],
                     "rejection_reason_counts": {
                         f"execution_error:{type(exc).__name__}:{exc}": 1,
                     },
@@ -178,6 +186,8 @@ def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) ->
         "passed_pair_count": passed,
         "fallback_pair_count": 0,
         "fallback_allowed": False,
+        "semantic_correction_retries": correction_retries,
+        "max_candidate_facts_per_source": fact_budget,
         "config_sha256": sha256_obj(config),
         "input_sha256": sha256_file(root / input_path),
         "provider": provider.stats(),
@@ -198,6 +208,8 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
     if sample_sources <= 0:
         raise ValueError("v24_capacity_sample_invalid")
     config = load_v24_config(root)
+    correction_retries = int(config.get("eligibility", {}).get("semantic_correction_retries", 1))
+    fact_budget = get_max_candidate_facts_per_source(config)
     selected_sources: list[dict[str, object]] = []
     source_iter = iter_frozen_source_pool(root, dataset)
     for source in source_iter:
@@ -208,13 +220,33 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
     provider = build_luna_candidate_provider(root) if use_luna else None
     eligible_count = 0
     screened_count = 0
-    candidate_count = 0
+    candidate_fact_count = 0
+    processed_fact_count = 0
+    unprocessed_fact_count = 0
+    candidate_package_count = 0
+    early_stop_source_count = 0
+    diversity_counts = {"1": 0, "2": 0, "3": 0}
     if use_luna:
         try:
             for source in selected_sources:
-                result = screen_source(source, candidate_provider=provider, minimum_pairs=3, allow_surface_fallback=False, similarity_fn=semantic_scorer)
+                result = screen_source(
+                    source,
+                    candidate_provider=provider,
+                    minimum_pairs=3,
+                    allow_surface_fallback=False,
+                    similarity_fn=semantic_scorer,
+                    semantic_correction_retries=correction_retries,
+                    max_candidate_facts_per_source=fact_budget,
+                )
                 screened_count += 1
-                candidate_count += int(result.get("candidate_package_count", 0))
+                candidate_fact_count += int(result.get("candidate_fact_count", 0))
+                processed_fact_count += int(result.get("processed_fact_count", 0))
+                unprocessed_fact_count += int(result.get("unprocessed_fact_count", 0))
+                candidate_package_count += int(result.get("candidate_package_count", 0))
+                early_stop_source_count += int(bool(result.get("early_stop_triggered")))
+                diversity = str(int(result.get("original_entity_diversity", 0)))
+                if diversity in diversity_counts and result.get("eligible"):
+                    diversity_counts[diversity] += 1
                 eligible_count += int(bool(result.get("eligible")))
         finally:
             semantic_scorer.close()
@@ -224,8 +256,12 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
         for source in selected_sources:
             screened_count += 1
             fact_count = len(enumerate_candidate_facts(source))
-            candidate_count += fact_count
-            eligible_count += int(fact_count >= 3)
+            # 此分支不调用 provider/Luna；预算内容量估计必须与实际处理计数分开。
+            budgeted_fact_count = min(fact_count, fact_budget)
+            candidate_fact_count += fact_count
+            processed_fact_count += 0
+            unprocessed_fact_count += fact_count
+            eligible_count += int(budgeted_fact_count >= 3)
     rate = eligible_count / max(1, screened_count)
     target = int(config.get("eligibility", {}).get("target_sources", 2250))
     result = {
@@ -233,10 +269,22 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
         "dataset": dataset,
         "mode": "luna_sample" if use_luna else "offline_fact_capacity_estimate",
         "candidate_source_count": screened_count,
-        "candidate_fact_count": candidate_count,
+        "candidate_fact_count": candidate_fact_count,
+        "processed_fact_count": processed_fact_count,
+        "unprocessed_fact_count": unprocessed_fact_count,
+        "candidate_package_count": candidate_package_count,
         "observed_eligible_source_rate": rate,
         "projected_eligible_source_count": int(round(rate * int(config.get("source_pool", {}).get("expected_source_counts", {}).get(dataset, 0) or 0))),
         "target_eligible_source_count": target,
+        "max_candidate_facts_per_source": fact_budget,
+        "early_stop_source_count": early_stop_source_count,
+        "entity_diversity_1_source_count": diversity_counts["1"],
+        "entity_diversity_2_source_count": diversity_counts["2"],
+        "entity_diversity_3_source_count": diversity_counts["3"],
+        "mean_original_entity_diversity": (
+            sum(int(key) * value for key, value in diversity_counts.items())
+            / max(1, eligible_count)
+        ),
         "capacity_status": "estimate_only" if not use_luna else ("sufficient_sample_signal" if rate > 0 else "no_eligible_sample"),
         "provider": provider.stats() if provider is not None else None,
         "semantic_similarity": semantic_scorer.identity() if semantic_scorer is not None else None,

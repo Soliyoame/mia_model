@@ -33,6 +33,7 @@ CONFIG_PATH = Path("configs/restoration_first_v24.yaml")
 DATASET_ORDER = ("edgar", "enron", "pubmed")
 GROUP_COUNTS = {"KB_Member": 1000, "True_Non_Member": 1000, "Reserve": 250}
 PAIRS_PER_SOURCE = 3
+DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE = 8
 QUERY_POLARITIES = ("Q_plus", "Q_minus")
 FORBIDDEN_INPUT_KEYS = frozenset(
     {
@@ -58,14 +59,19 @@ UNRESOLVED_REFERENCE_RE = re.compile(
 )
 QUESTION_START_RE = re.compile(
     r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|will|would|should|"
-    r"may|might|is it correct that)\b",
+    r"may|might|must|shall|is it correct that)\b",
     re.IGNORECASE,
 )
 CAPITALIZED_PHRASE_RE = re.compile(
     r"(?<!\w)(?:[A-Z][A-Za-z0-9&.'/-]*)(?:\s+[A-Z][A-Za-z0-9&.'/-]*)*"
 )
 QUESTION_FRAME_WORDS = frozenset(
-    {"a", "an", "and", "are", "can", "correct", "did", "does", "do", "had", "has", "have", "is", "it", "may", "might", "should", "the", "was", "were", "will", "would"}
+    {
+        "a", "after", "an", "and", "are", "at", "before", "between", "can",
+        "correct", "could", "did", "does", "do", "during", "from", "had", "has",
+        "have", "in", "is", "it", "may", "might", "must", "on", "shall", "should",
+        "since", "the", "until", "was", "were", "will", "would",
+    }
 )
 ATTACK_EXPOSING_RE = re.compile(
     r"\b(?:membership|knowledge\s+base|hidden\s+context|retriever|system\s+prompt|"
@@ -81,13 +87,11 @@ DETERMINATE_CONTEXT_RE = re.compile(
 NEGATION_RE = re.compile(r"\b(?:no|not|never|neither|nor)\b|n't", re.IGNORECASE)
 MODALITY_RE = re.compile(r"\b(?:can|could|may|might|must|shall|should|will|would)\b", re.IGNORECASE)
 NUMBER_RE = re.compile(r"\b\d+(?:[./-]\d+)*\b")
-TEMPORAL_RE = re.compile(
-    r"\b(?:in|on|at|during|before|after|since|until|between|fiscal|quarter|year|month|january|"
+CITATION_RE = re.compile(r"\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]")
+TEMPORAL_MARKER_RE = re.compile(
+    r"\b(?:during|before|after|since|until|between|fiscal|quarter|year|month|week|day|january|"
     r"february|march|april|may|june|july|august|september|october|november|december)\b",
     re.IGNORECASE,
-)
-TEMPORAL_FUNCTION_WORDS = frozenset(
-    {"in", "on", "at", "during", "before", "after", "since", "until", "between", "fiscal", "quarter", "year", "month", "period"}
 )
 SCOPE_RE = re.compile(r"\b(?:only|all|each|any|every|exactly|at\s+least|at\s+most|sole)\b", re.IGNORECASE)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -206,6 +210,16 @@ def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
         "Keep one canonical proposition frame and change only {ENTITY}. Q+ verifies the "
         "true proposition and Q- verifies the counterfactual proposition. Questions must "
         "be natural self-contained polar questions with exactly one question mark. "
+        "The canonical template must contain exactly one literal {ENTITY} token; if the "
+        "original is repeated, rewrite the proposition equivalently so it appears in only "
+        "that slot. Preserve every factual number, date, temporal relation, negation, "
+        "scope qualifier, and semantic modal (can/could/may/might/must/shall/should/will/"
+        "would). Do not introduce or remove a modal merely to form a question. Start each "
+        "question with a polar auxiliary, mention its target entity exactly once, and never "
+        "use unresolved pronouns or deictic phrases such as this/that/these/those/he/she/"
+        "it/they; the fixed phrase 'Is it correct that' is the only permitted expletive. "
+        "Do not add factual entities. Return one to three retrieval anchors only; anchors "
+        "are diagnostics and must not be appended mechanically to a question. "
         "Return JSON only with this shape:\n"
         '{"candidates":[{"replacement_entity":"...",'
         '"canonical_proposition_template":"...{ENTITY}...",'
@@ -217,6 +231,52 @@ def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
         '"slot_determinacy":"strong","open_world_ambiguity":"low",'
         '"reason_code":"..."},"canonical_pair_nli_relation":"neutral"}]}\n\n'
         f"Input:\n{canonical_json(fields)}"
+    )
+
+
+def build_correction_prompt(
+    fact: Mapping[str, Any],
+    rejected_candidates: Sequence[Mapping[str, Any]],
+) -> str:
+    """Build the single preregistered semantic-correction retry prompt."""
+
+    _reject_forbidden(fact)
+    evidence: list[dict[str, Any]] = []
+    allowed_fields = (
+        "replacement_entity",
+        "canonical_proposition_template",
+        "q_plus_text",
+        "q_minus_text",
+    )
+    for item in rejected_candidates:
+        candidate = item.get("candidate")
+        if not isinstance(candidate, Mapping):
+            continue
+        evidence.append(
+            {
+                "candidate": {
+                    key: candidate.get(key)
+                    for key in allowed_fields
+                },
+                "rejection_reasons": sorted(
+                    str(reason) for reason in item.get("rejection_reasons", [])
+                ),
+            }
+        )
+    fields = {
+        "upstream_pair_id": str(fact.get("upstream_pair_id") or ""),
+        "true_claim": str(fact.get("true_claim") or ""),
+        "original_entity": str(fact.get("original_entity") or ""),
+        "slotted_true_claim": str(fact.get("slotted_true_claim") or ""),
+        "rejected_candidates": evidence,
+    }
+    return (
+        build_candidate_prompt(fact)
+        + "\n\nThis is the one allowed semantic correction retry. Correct every listed "
+        "validator failure without weakening or changing the source-grounded proposition. "
+        "Return three revised candidate packages in the exact same JSON schema. Do not "
+        "repeat a rejected surface form.\nCorrection input:\n"
+        + canonical_json(fields)
     )
 
 
@@ -234,7 +294,16 @@ class LunaCandidateProvider:
     failures: list[str] = field(default_factory=list)
 
     def __call__(self, fact: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
-        prompt = build_candidate_prompt(fact)
+        return self._request_candidates(build_candidate_prompt(fact))
+
+    def correct(
+        self,
+        fact: Mapping[str, Any],
+        rejected_candidates: Sequence[Mapping[str, Any]],
+    ) -> Sequence[Mapping[str, Any]]:
+        return self._request_candidates(build_correction_prompt(fact, rejected_candidates))
+
+    def _request_candidates(self, prompt: str) -> Sequence[Mapping[str, Any]]:
         self.logical_api_calls += 1
         try:
             result = self.client.chat_with_metadata(
@@ -371,7 +440,27 @@ def load_v24_config(project_root: str | Path = ".") -> dict[str, Any]:
     model_name = str(semantic.get("model") or "").strip().casefold()
     if not model_name or model_name in {"hash", "hashing"}:
         raise RuntimeError("v24_semantic_similarity_model_invalid")
+    if int(config.get("eligibility", {}).get("semantic_correction_retries", -1)) != 1:
+        raise RuntimeError("v24_semantic_correction_retry_must_equal_one")
+    if "max_candidate_facts_per_source" not in config.get("eligibility", {}):
+        raise RuntimeError("v24_max_candidate_facts_per_source_missing")
+    get_max_candidate_facts_per_source(config)
     return dict(config)
+
+
+def get_max_candidate_facts_per_source(config: Mapping[str, Any]) -> int:
+    """Return the single frozen source-local Luna processing budget."""
+
+    value = config.get("eligibility", {}).get(
+        "max_candidate_facts_per_source", DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE
+    )
+    try:
+        budget = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("v24_max_candidate_facts_per_source_invalid") from exc
+    if budget < PAIRS_PER_SOURCE:
+        raise RuntimeError("v24_max_candidate_facts_per_source_too_small")
+    return budget
 
 
 def _source_identity(source: Mapping[str, Any]) -> dict[str, str]:
@@ -687,18 +776,33 @@ def _semantic_features(text: str) -> dict[str, set[str]]:
     return {
         "negation": {value.casefold() for value in NEGATION_RE.findall(text)},
         "modality": {value.casefold() for value in MODALITY_RE.findall(text)},
-        "numeric": set(NUMBER_RE.findall(text)),
-        "temporal": {value.casefold() for value in TEMPORAL_RE.findall(text)},
+        "numeric": _numeric_markers(text),
+        "temporal": _temporal_markers(text),
         "scope": {value.casefold() for value in SCOPE_RE.findall(text)},
     }
 
 
+def _numeric_markers(text: str) -> set[str]:
+    """Return factual numbers while excluding bracketed bibliography citations."""
+
+    without_citations = CITATION_RE.sub(" ", text)
+    return set(NUMBER_RE.findall(without_citations))
+
+
 def _temporal_markers(text: str) -> set[str]:
-    return {
-        value.casefold()
-        for value in TEMPORAL_RE.findall(text)
-        if value.casefold() not in TEMPORAL_FUNCTION_WORDS
-    } | set(NUMBER_RE.findall(text))
+    """Return explicit temporal semantics without treating every preposition as time."""
+
+    without_citations = CITATION_RE.sub(" ", text)
+    markers = {value.casefold() for value in TEMPORAL_MARKER_RE.findall(without_citations)}
+    # ``may`` is both a modal and a month.  Count it as temporal only when the
+    # local context makes the month reading explicit (e.g. ``May 2024``).
+    if "may" in markers and not re.search(
+        r"\b(?:in|on|during)?\s*may\s+\d{2,4}\b|\b(?:in|on|during)\s+may\b",
+        without_citations,
+        flags=re.IGNORECASE,
+    ):
+        markers.remove("may")
+    return markers
 
 
 def _anchor_diagnostics(
@@ -796,17 +900,11 @@ def validate_query_semantics(
     for feature_name in ("negation", "modality", "numeric", "temporal", "scope"):
         canonical_features = _semantic_features(canonical_true)[feature_name]
         query_features = _semantic_features(q_plus)[feature_name]
-        if feature_name == "temporal":
-            if bool(canonical_features) != bool(query_features) or _temporal_markers(canonical_true) != _temporal_markers(q_plus):
-                reasons.append(f"q_plus_{feature_name}_drift")
-        elif canonical_features != query_features:
+        if canonical_features != query_features:
             reasons.append(f"q_plus_{feature_name}_drift")
         canonical_minus = _semantic_features(canonical_counterfactual)[feature_name]
         query_minus = _semantic_features(q_minus)[feature_name]
-        if feature_name == "temporal":
-            if bool(canonical_minus) != bool(query_minus) or _temporal_markers(canonical_counterfactual) != _temporal_markers(q_minus):
-                reasons.append(f"q_minus_{feature_name}_drift")
-        elif canonical_minus != query_minus:
+        if canonical_minus != query_minus:
             reasons.append(f"q_minus_{feature_name}_drift")
     allowed = {_norm(original_entity), _norm(replacement_entity)} | _question_entities(canonical_true) | _question_entities(canonical_counterfactual)
     for name, query in (("q_plus", q_plus), ("q_minus", q_minus)):
@@ -1074,20 +1172,55 @@ def screen_source(
     minimum_pairs: int = PAIRS_PER_SOURCE,
     allow_surface_fallback: bool = True,
     similarity_fn: Callable[[str, str], float] | None = None,
+    semantic_correction_retries: int = 1,
+    include_candidate_evidence: bool = False,
+    max_candidate_facts_per_source: int | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     if similarity_fn is None:
         raise RuntimeError("v24_semantic_similarity_required")
+    if semantic_correction_retries not in {0, 1}:
+        raise ValueError("v24_semantic_correction_retries_must_be_zero_or_one")
+    if minimum_pairs <= 0:
+        raise ValueError("v24_minimum_pairs_must_be_positive")
+    distinct_target = min(minimum_pairs, PAIRS_PER_SOURCE)
+    fact_budget = (
+        DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE
+        if max_candidate_facts_per_source is None
+        else int(max_candidate_facts_per_source)
+    )
+    if fact_budget <= 0:
+        raise ValueError("v24_max_candidate_facts_per_source_invalid")
     identity = _source_identity(source)
     source_facts = list(facts if facts is not None else enumerate_candidate_facts(source))
-    selected: list[dict[str, Any]] = []
+    source_facts.sort(
+        key=lambda row: (
+            int(row.get("fact_order", 0)),
+            int(row.get("chunk_rank", 0)),
+            int((row.get("proposition_span") or [0])[0]),
+            int((row.get("original_span") or [0])[0]),
+            str(row.get("upstream_pair_id") or ""),
+        )
+    )
+    candidate_fact_count = len(source_facts)
+    preferred_distinct_pairs: list[dict[str, Any]] = []
+    selected_original_entities: set[str] = set()
+    duplicate_entity_fallbacks: list[dict[str, Any]] = []
+    accepted_pair_ids: set[str] = set()
     rejection_counts: Counter[str] = Counter()
     candidate_package_count = 0
     contextual_role_pass_count = 0
     correction_eligibility_pass_count = 0
     query_feasible_pair_count = 0
-    for fact in source_facts:
+    candidate_evidence: list[dict[str, Any]] = []
+    processed_fact_count = 0
+    third_eligible_pair_fact_position: int | None = None
+    third_distinct_eligible_pair_fact_position: int | None = None
+    early_stop_triggered = False
+    for fact in source_facts[:fact_budget]:
+        processed_fact_count += 1
         packages = list(candidate_provider(fact))
+        initial_package_count = len(packages)
         candidate_package_count += len(packages)
         evaluated = [
             evaluate_candidate(
@@ -1101,6 +1234,67 @@ def screen_source(
             )
             for index, package in enumerate(packages)
         ]
+        if semantic_correction_retries == 1 and not any(
+            item.get("accepted") is True for item in evaluated
+        ):
+            corrector = getattr(candidate_provider, "correct", None)
+            if callable(corrector):
+                rejected = [
+                    {
+                        "candidate": dict(package),
+                        "rejection_reasons": list(item.get("rejection_reasons", [])),
+                    }
+                    for package, item in zip(packages, evaluated, strict=True)
+                ]
+                corrected_packages = list(corrector(fact, rejected))
+                correction_offset = len(packages)
+                candidate_package_count += len(corrected_packages)
+                corrected_evaluated = [
+                    evaluate_candidate(
+                        fact,
+                        str(source["full_text"]),
+                        package,
+                        allow_surface_fallback=allow_surface_fallback,
+                        candidate_index=correction_offset + index,
+                        similarity_fn=similarity_fn,
+                        **kwargs,
+                    )
+                    for index, package in enumerate(corrected_packages)
+                ]
+                packages.extend(corrected_packages)
+                evaluated.extend(corrected_evaluated)
+        if include_candidate_evidence:
+            for index, (package, item) in enumerate(
+                zip(packages, evaluated, strict=True)
+            ):
+                pair = item.get("pair")
+                candidate_evidence.append(
+                    {
+                        "upstream_pair_id": str(fact.get("upstream_pair_id") or ""),
+                        "candidate_index": index,
+                        "generation_attempt": (
+                            "initial"
+                            if index < initial_package_count
+                            else "semantic_correction"
+                        ),
+                        "candidate": {
+                            key: package.get(key)
+                            for key in (
+                                "replacement_entity",
+                                "canonical_proposition_template",
+                                "q_plus_text",
+                                "q_minus_text",
+                            )
+                        },
+                        "accepted": item.get("accepted") is True,
+                        "rejection_reasons": list(item.get("rejection_reasons", [])),
+                        "semantic_metrics": (
+                            dict(pair.get("semantic_metrics", {}))
+                            if isinstance(pair, Mapping)
+                            else {}
+                        ),
+                    }
+                )
         for item in evaluated:
             rejection_counts.update(item.get("rejection_reasons", []))
             pair = item.get("pair")
@@ -1130,39 +1324,60 @@ def screen_source(
         if not ranked:
             continue
         pair = dict(ranked[0]["pair"])
-        selected.append(pair)
-    deduped: dict[str, dict[str, Any]] = {str(row["pair_id"]): row for row in selected}
-    ordered = sorted(
-        deduped.values(),
-        key=lambda row: (
-            int(row.get("fact_order", 0)),
-            int(row.get("candidate_index", 0)),
-            str(row["pair_id"]),
-        ),
-    )
+        pair_id = str(pair.get("pair_id") or "")
+        if not pair_id or pair_id in accepted_pair_ids:
+            continue
+        accepted_pair_ids.add(pair_id)
+        if len(accepted_pair_ids) == PAIRS_PER_SOURCE:
+            third_eligible_pair_fact_position = processed_fact_count
+        original_key = _norm(str(pair.get("original_entity") or ""))
+        if original_key not in selected_original_entities:
+            selected_original_entities.add(original_key)
+            preferred_distinct_pairs.append(pair)
+            if len(preferred_distinct_pairs) == distinct_target:
+                if distinct_target == PAIRS_PER_SOURCE:
+                    third_distinct_eligible_pair_fact_position = processed_fact_count
+                early_stop_triggered = True
+                break
+        else:
+            duplicate_entity_fallbacks.append(pair)
+    ordered = preferred_distinct_pairs + duplicate_entity_fallbacks
+    ordered = ordered[:minimum_pairs]
     eligible = len(ordered) >= minimum_pairs
-    if eligible:
-        ordered = ordered[:minimum_pairs]
-    else:
+    if not eligible:
         rejection_counts["fewer_than_three_eligible_pairs"] += 1
+    entity_diversity = len(
+        {_norm(str(pair.get("original_entity") or "")) for pair in ordered}
+    )
     fallback_pair_count = sum(
         pair.get("generation_mode") == "deterministic_fallback" for pair in ordered
     )
-    return {
+    result = {
         **identity,
         "eligible": eligible,
         "selected_pairs": ordered,
-        # candidate_pair_count 统计生成包；fact slot 数量单独用于 coverage。
+        # candidate_pair_count 统计已处理 fact 生成包；fact 总数单独用于 coverage。
         "candidate_pair_count": candidate_package_count,
-        "candidate_fact_count": len(source_facts),
+        "candidate_fact_count": candidate_fact_count,
+        "processed_fact_count": processed_fact_count,
+        "unprocessed_fact_count": candidate_fact_count - processed_fact_count,
         "candidate_package_count": candidate_package_count,
-        "eligible_pair_count": len(deduped),
+        "eligible_pair_count": len(accepted_pair_ids),
         "contextual_role_pass_count": contextual_role_pass_count,
         "correction_eligibility_pass_count": correction_eligibility_pass_count,
         "query_feasible_pair_count": query_feasible_pair_count,
         "fallback_pair_count": fallback_pair_count,
+        "max_candidate_facts_per_source": fact_budget,
+        "early_stop_triggered": early_stop_triggered,
+        "third_eligible_pair_fact_position": third_eligible_pair_fact_position,
+        "third_distinct_eligible_pair_fact_position": third_distinct_eligible_pair_fact_position,
+        "original_entity_diversity": entity_diversity,
+        "repeated_original_entity_pair_count": max(0, len(ordered) - entity_diversity),
         "rejection_reason_counts": dict(sorted(rejection_counts.items())),
     }
+    if include_candidate_evidence:
+        result["candidate_evidence"] = candidate_evidence
+    return result
 
 
 def scan_until_target(
@@ -1171,31 +1386,50 @@ def scan_until_target(
     candidate_provider: CandidateProvider,
     target_sources: int = 2250,
     minimum_pairs: int = PAIRS_PER_SOURCE,
+    max_candidate_facts_per_source: int | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
+    fact_budget = (
+        DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE
+        if max_candidate_facts_per_source is None
+        else int(max_candidate_facts_per_source)
+    )
+    if fact_budget <= 0:
+        raise ValueError("v24_max_candidate_facts_per_source_invalid")
     eligible: list[dict[str, Any]] = []
     screened = 0
     totals: Counter[str] = Counter()
     rejection_reasons: Counter[str] = Counter()
+    diversity_counts: Counter[str] = Counter()
     for source in sources:
         screened += 1
-        result = screen_source(source, candidate_provider=candidate_provider, minimum_pairs=minimum_pairs, **kwargs)
+        result = screen_source(
+            source,
+            candidate_provider=candidate_provider,
+            minimum_pairs=minimum_pairs,
+            max_candidate_facts_per_source=fact_budget,
+            **kwargs,
+        )
         totals.update(
             {
                 "candidate_pair_count": int(result["candidate_pair_count"]),
                 "candidate_fact_count": int(result.get("candidate_fact_count", 0)),
+                "processed_fact_count": int(result.get("processed_fact_count", 0)),
+                "unprocessed_fact_count": int(result.get("unprocessed_fact_count", 0)),
                 "candidate_package_count": int(result.get("candidate_package_count", 0)),
                 "eligible_pair_count": int(result["eligible_pair_count"]),
                 "contextual_role_pass_count": int(result.get("contextual_role_pass_count", 0)),
                 "correction_eligibility_pass_count": int(result.get("correction_eligibility_pass_count", 0)),
                 "query_feasible_pair_count": int(result.get("query_feasible_pair_count", 0)),
                 "fallback_pair_count": int(result.get("fallback_pair_count", 0)),
+                "early_stop_source_count": int(bool(result.get("early_stop_triggered"))),
             }
         )
         rejection_reasons.update(result.get("rejection_reason_counts", {}))
         if result["eligible"]:
             result["selection_index"] = len(eligible)
             eligible.append(result)
+            diversity_counts[str(int(result.get("original_entity_diversity", 0)))] += 1
             if len(eligible) == target_sources:
                 break
     status = "passed" if len(eligible) == target_sources else "insufficient_eligible_capacity"
@@ -1208,12 +1442,23 @@ def scan_until_target(
         "eligible_sources": eligible,
         "candidate_pair_count": totals["candidate_pair_count"],
         "candidate_fact_count": totals["candidate_fact_count"],
+        "processed_fact_count": totals["processed_fact_count"],
+        "unprocessed_fact_count": totals["unprocessed_fact_count"],
         "eligible_pair_count": totals["eligible_pair_count"],
         "candidate_package_count": totals["candidate_package_count"],
         "contextual_role_pass_count": totals["contextual_role_pass_count"],
         "correction_eligibility_pass_count": totals["correction_eligibility_pass_count"],
         "query_feasible_pair_count": totals["query_feasible_pair_count"],
         "fallback_pair_count": totals["fallback_pair_count"],
+        "max_candidate_facts_per_source": fact_budget,
+        "early_stop_source_count": totals["early_stop_source_count"],
+        "entity_diversity_1_source_count": diversity_counts["1"],
+        "entity_diversity_2_source_count": diversity_counts["2"],
+        "entity_diversity_3_source_count": diversity_counts["3"],
+        "mean_original_entity_diversity": (
+            sum(int(key) * value for key, value in diversity_counts.items())
+            / max(1, len(eligible))
+        ),
         "rejection_reason_distribution": dict(sorted(rejection_reasons.items())),
     }
 
@@ -1317,6 +1562,8 @@ def validate_formal_integrity(
             raise ValueError(f"v24_formal_row_invalid:{index}")
         if len(row.get("selected_pairs", [])) != PAIRS_PER_SOURCE:
             raise ValueError("v24_formal_pair_count")
+        if int(row.get("max_candidate_facts_per_source", -1)) != DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE:
+            raise ValueError("v24_formal_fact_budget")
         if int(row.get("query_count", queries_per_source)) != queries_per_source:
             raise ValueError("v24_formal_query_budget")
         if not str(row.get("source_key") or "") or not str(row.get("source_order_rank") or ""):
@@ -1387,6 +1634,9 @@ def _integrity_row_hash(row: Mapping[str, Any]) -> str:
             "source_order_rank": row.get("source_order_rank"),
             "source_hash": row.get("source_hash"),
             "normalized_text_hash": row.get("normalized_text_hash"),
+            "max_candidate_facts_per_source": row.get(
+                "max_candidate_facts_per_source", DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE
+            ),
             "selected_pairs": pairs,
             "query_count": row.get("query_count", 6),
         }
@@ -1447,7 +1697,15 @@ def build_eligibility_manifest(
     target = int(config.get("eligibility", {}).get("target_sources", 2250))
     if len(sources) != target:
         raise ValueError("v24_eligibility_manifest_source_count")
+    fact_budget = get_max_candidate_facts_per_source(config)
+    scan_budget = int(scan_result.get("max_candidate_facts_per_source", fact_budget))
+    if scan_budget != fact_budget:
+        raise ValueError("v24_eligibility_scan_fact_budget_mismatch")
     for source in sources:
+        source_budget = int(source.get("max_candidate_facts_per_source", fact_budget))
+        if source_budget != fact_budget:
+            raise ValueError("v24_eligibility_source_fact_budget_mismatch")
+        source["max_candidate_facts_per_source"] = fact_budget
         source["query_count"] = PAIRS_PER_SOURCE * 2
         source["integrity_hash"] = _integrity_row_hash(source)
     fallback = validate_fallback_rate(
@@ -1469,9 +1727,12 @@ def build_eligibility_manifest(
         "target_source_count": target,
         "eligible_source_count": len(sources),
         "eligible_source_rate": float(scan_result.get("eligible_source_rate", 0.0)),
+        "max_candidate_facts_per_source": fact_budget,
         "candidate_pair_count": int(scan_result.get("candidate_pair_count", 0)),
         "candidate_package_count": contextual_denominator,
         "candidate_fact_count": int(scan_result.get("candidate_fact_count", 0)),
+        "processed_fact_count": int(scan_result.get("processed_fact_count", 0)),
+        "unprocessed_fact_count": int(scan_result.get("unprocessed_fact_count", 0)),
         "eligible_pair_count": int(scan_result.get("eligible_pair_count", 0)),
         "contextual_role_pass_count": role_pass,
         "contextual_role_pass_rate": role_pass / max(1, contextual_denominator),
@@ -1482,6 +1743,11 @@ def build_eligibility_manifest(
         "fallback_pair_count": fallback["fallback_pair_count"],
         "fallback_pair_rate": fallback["fallback_pair_rate"],
         "fallback_pair_rate_maximum": fallback["maximum"],
+        "early_stop_source_count": int(scan_result.get("early_stop_source_count", 0)),
+        "entity_diversity_1_source_count": int(scan_result.get("entity_diversity_1_source_count", 0)),
+        "entity_diversity_2_source_count": int(scan_result.get("entity_diversity_2_source_count", 0)),
+        "entity_diversity_3_source_count": int(scan_result.get("entity_diversity_3_source_count", 0)),
+        "mean_original_entity_diversity": float(scan_result.get("mean_original_entity_diversity", 0.0)),
         "rejection_reason_distribution": dict(scan_result.get("rejection_reason_distribution", {})),
         "stealth_diagnostics": aggregate_stealth_diagnostics(sources),
         "sources": sources,
@@ -1530,6 +1796,23 @@ def validate_eligibility_manifest(
         raise ValueError("v24_eligibility_manifest_final_source_count")
     if int(payload.get("final_selected_pair_count", -1)) != target * PAIRS_PER_SOURCE:
         raise ValueError("v24_eligibility_manifest_final_pair_count")
+    fact_budget = int(payload.get("max_candidate_facts_per_source", 0))
+    if fact_budget < PAIRS_PER_SOURCE:
+        raise ValueError("v24_eligibility_manifest_fact_budget")
+    if fact_budget != DEFAULT_MAX_CANDIDATE_FACTS_PER_SOURCE:
+        raise ValueError("v24_eligibility_manifest_fact_budget_not_frozen")
+    candidate_fact_count = int(payload.get("candidate_fact_count", 0))
+    processed_fact_count = int(payload.get("processed_fact_count", candidate_fact_count))
+    unprocessed_fact_count = int(
+        payload.get("unprocessed_fact_count", candidate_fact_count - processed_fact_count)
+    )
+    if (
+        candidate_fact_count < 0
+        or processed_fact_count < 0
+        or unprocessed_fact_count < 0
+        or candidate_fact_count != processed_fact_count + unprocessed_fact_count
+    ):
+        raise ValueError("v24_eligibility_manifest_fact_coverage")
     dataset = str(payload.get("dataset") or "")
     seen_sources: set[str] = set()
     seen_source_hashes: set[str] = set()
@@ -1549,6 +1832,25 @@ def validate_eligibility_manifest(
         seen_source_hashes.add(source_hash)
         if len(source.get("selected_pairs", [])) != PAIRS_PER_SOURCE:
             raise ValueError("v24_eligibility_manifest_pair_count")
+        if int(source.get("max_candidate_facts_per_source", -1)) != fact_budget:
+            raise ValueError("v24_eligibility_manifest_source_fact_budget")
+        source_candidate_count = int(source.get("candidate_fact_count", 0))
+        source_processed_count = int(
+            source.get("processed_fact_count", source_candidate_count)
+        )
+        source_unprocessed_count = int(
+            source.get(
+                "unprocessed_fact_count", source_candidate_count - source_processed_count
+            )
+        )
+        if (
+            source_candidate_count < 0
+            or source_processed_count < 0
+            or source_processed_count > fact_budget
+            or source_unprocessed_count < 0
+            or source_candidate_count != source_processed_count + source_unprocessed_count
+        ):
+            raise ValueError("v24_eligibility_manifest_source_fact_coverage")
         if int(source.get("query_count", -1)) != PAIRS_PER_SOURCE * 2:
             raise ValueError("v24_eligibility_manifest_query_budget")
         if source.get("integrity_hash") != _integrity_row_hash(source):
@@ -1783,10 +2085,16 @@ def scan_frozen_source_pool(
 ) -> dict[str, Any]:
     """Run the pre-split scanner against the actual membership-blind v22 pool."""
 
+    config = load_v24_config(project_root)
+    fact_budget = get_max_candidate_facts_per_source(config)
+    requested_budget = kwargs.pop("max_candidate_facts_per_source", fact_budget)
+    if int(requested_budget) != fact_budget:
+        raise ValueError("v24_frozen_scan_fact_budget_mismatch")
     return scan_until_target(
         iter_frozen_source_pool(project_root, dataset),
         candidate_provider=candidate_provider,
         target_sources=target_sources,
+        max_candidate_facts_per_source=fact_budget,
         **kwargs,
     )
 

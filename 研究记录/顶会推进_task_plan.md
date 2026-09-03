@@ -2614,3 +2614,313 @@ PubMed resume 修复（2026-08-05）：
 - [x] GPU/API/victim/Retriever/付费调用、membership、response、AUC、fresh reserve、packet rebuild、commit/push 均为 `0/false`。
 
 当前唯一下一步：等待用户单独授权 formal test 的首个 stage/dataset/budget；授权前不启动 formal scan、GPU、API、victim、Retriever、membership/split、response 或 AUC。
+
+### 2026-08-25：EDGAR formal source scan passed（正式实验首阶段）
+
+- [x] 首阶段授权冻结为 `formal_source_scan / edgar`：authorization=`737629ea...dea8`，source-read budget=`3710`，target=`2250` eligible source；仅允许本地 CUDA selector，API/victim/Retriever/external/membership/split/response/AUC 均为 false。
+- [x] 最终 formal runtime identity=`6c102137...372f8`，bundle=`7cd2bd45...69271`，freeze SHA-256=`3899e059...5e0b`，32-file closure；`validate-freeze` 与 authorization validator passed。
+- [x] EDGAR 扫描结果：`2327 viewed -> 2250 selected source -> 6750 selected pair`，每 source 恰好 3 pair，达到目标即停；manifest SHA-256=`96d2bff9...62c28`，selected sources SHA-256=`fcce9e7e...495f`，selected pairs SHA-256=`0e1382c6...4633`。
+- [x] budget charges=`2327`；ledger tip=`80d02112...9b56`，final anchor SHA-256=`05e882e4...96e4`，manifest/tip/anchor 精确一致；formal-source-scan validator passed，live status=`formal_source_scan_edgar_passed_awaiting_next_authorization`。
+- [x] 两次异常终端退出均只产生 stale lock；核实锁 PID 不存在后移除精确临时锁并从 checkpoint 续跑，正式预算、ledger、anchor、source result 与历史 artifact 全部保留。
+- [x] `formal_test_started=true`、`gpu_used=true`；API/victim/Retriever/external calls=`0`。Enron、PubMed、split、membership、response 与 AUC 均未启动。
+- [ ] Enron formal source scan 未授权；PubMed、source-exclusive split 与全部下游继续 blocked。
+
+当前唯一下一步：停止并等待用户单独授权 Enron `formal_source_scan` 的 dataset/budget/GPU 边界；授权前不启动任何下一正式执行单元。
+
+### 2026-08-25：Enron/PubMed formal scan successor frozen，Enron authorization passed
+
+- [x] 用户授权按 `Enron -> PubMed` 完成剩余 formal source scan；仅本地 CUDA selector，split/membership/API/victim/Retriever/response/AUC/external 均未授权。
+- [x] 新建最小 r2 successor，hash-bind/carry forward r1 EDGAR passed artifact；r1 freeze/代码/正式 artifact 保持不变，Fact Layer r1、selection r2、模型锁、阈值、排序与目标数不变。
+- [x] r2 identity=`5ce4e736...095bd`，bundle=`921beffe...dda4f`，freeze SHA-256=`a26f114a...01ae3`，41-file closure；r2 validator 与原 r1 validator 均 passed。
+- [x] Enron authorization=`fb0f6f94...52a89` passed，budget=`32750`、target=`2250`、prior tip=`80d02112...9b56`；GPU=true，API/victim/Retriever/external=false。
+- [x] PubMed budget 冻结为 `46450`；authorization 必须等 Enron passed/final tip 后由串行 runner 生成，禁止提前生成。
+- [x] r2 unittest `8/8`、r1 unittest `14/14`、AST/CLI/freeze/auth/diff-check passed；扩大回归 `72 passed / 39 skipped / 1` 个既有过期状态断言失败；`ruff` 未安装且未安装新依赖。
+- [x] 尚未读取 Enron/PubMed source、未启动 GPU、未修改 ledger；所有外部调用为 `0`。
+- [ ] Enron/PubMed formal source scan 尚未执行；source-exclusive split 与全部下游继续 blocked。
+
+当前唯一下一步：用户本人运行 `run-remaining-formal-source-scans` 长命令；Enron 与 PubMed 均 passed 后停止，等待 split 的独立授权。
+
+### 2026-08-27：Luna query transport retry policy 更新（待 successor freeze）
+
+- [x] 已按用户要求为 Luna query-generation 增加 `retry_until_success`：连接超时、网络抖动与既有可重试 HTTP 状态持续指数退避重连，直到拿到可用响应。
+- [x] 仅 Luna profile 默认打开；victim/RAG 与普通 sibling 保持原有有限重试边界。语义/schema/NLI/多样性失败仍按原 correction retry 与 fail-closed 处理。
+- [x] 离线重试测试、query/LLM 相关回归、内存 AST 和 `git diff --check` 已通过；本轮 API/external calls=`0`。
+- [ ] v23 旧 runtime freeze 仍声明 query 每条一次 transport attempt；正式 Luna stage 前需用 successor identity/freeze 显式纳入持续 transport 重连规则，不能原位伪装为旧 freeze。
+
+当前 formal source scan 的执行顺序和授权边界不变；Luna query stage 仍须 successor freeze 与单独授权。
+
+### 2026-08-27：v23 Luna query-generation runner（代码已接入，未执行）
+
+- [x] 已实现独立 v23 query runner 与 CLI：`src/prepare/restoration_first_v23_query_generation.py`、`scripts/48_run_v23_luna_query_generation.py`。
+- [x] 已覆盖 release hash/status 校验、Reserve query 排除、frozen true/counterfactual claim 的 Q+/Q- 映射、严格 query validator、失败 cell/attempt 审计和 query plan manifest。
+- [x] 已完成离线定向回归：query runner 4 项、既有 query/LLM/v20 相关回归合计 `57/57 OK`；未连接 API、未读取 victim/Retriever/response/AUC。
+- [ ] r2 formal runtime freeze 不包含本次 query runner 与持续 transport retry 改动；正式 Luna 前仍需 successor query/runtime identity/freeze 及 `luna_query_generation` 每 dataset 单独授权。
+
+当前唯一下一步：完成 Enron/PubMed formal source scan 并通过后，再进行 split → Reserve shadow gate → release finalize；只有 release passed 且 query successor freeze/auth passed，才可进入 Luna query-generation。runner 代码实现本身不启动任何外部调用。
+
+### 2026-08-31：v23 r2 三数据集 formal source scan 齐备
+
+- [x] r2 freeze 复验通过：identity=`5ce4e736...095bd`，bundle=`921beffe...dda4f`，freeze SHA-256=`a26f114a...01ae3`；r1 EDGAR passed artifact 保持绑定并 carry forward。
+- [x] Enron authorization=`fb0f6f94...52a89` 完成：`15371 viewed -> 2250 selected source -> 6750 selected pair`；manifest=`cf41fa15...065`，selected sources=`05de81c7...bda4`，selected pairs=`7d7321e7...fb22`，final ledger tip=`02e9edd7...e17c`，anchor=`b8ce765c...f983`。
+- [x] PubMed authorization=`64fe2dbc...2452` 完成：`2394 viewed -> 2250 selected source -> 6750 selected pair`；manifest=`9a490931...e9c3e`，selected sources=`bcacace0...7e09`，selected pairs=`b5940227...bbb9`，final ledger tip=`dfbb9254...4754`，anchor=`9f345df1...aff1`。
+- [x] freeze、两份 authorization 与两套 formal-source-scan validator 全部 `passed`；live status=`formal_source_scans_all_datasets_passed_awaiting_split_authorization`。
+- [x] EDGAR/Enron/PubMed 各选出 `2250` source、各生成 `6750` pair；本阶段 API/victim/Retriever/external calls=`0`，未读取 membership、response、Retriever output 或 AUC。
+- [ ] source-exclusive split 尚未授权或启动；Reserve shadow、release finalize、正式 Luna query-generation 与后续 victim/Retriever 阶段继续 blocked。
+
+当前唯一下一步：停止并等待用户单独授权 v23 source-exclusive split；在此之前不运行任何后续正式执行单元。
+
+### 2026-08-31：v23 source-exclusive split 已冻结并通过
+
+- [x] 已获用户单独授权，仅运行 source-exclusive split；保持 r2 三数据集 formal scan passed 输入及其 manifest/source/tip/anchor hash，不读取 source content、membership、response、Retriever 或 AUC。
+- [x] 新增 successor split freeze（保留旧 r1 freeze，不覆盖）：`configs/restoration_first_v23_split_runtime_r1_patch1.freeze.json`；identity=`ac8ca724...a4ed`，bundle=`6b22303e...b984`，freeze SHA-256=`c79a38a8...c7bf`，28-file closure。首次实现缺口（freeze 摘要缺少 `code_commit`）已以新身份修复并重新验证。
+- [x] 已生成并验证三份 dataset-scoped `source_exclusive_split` authorization：EDGAR=`68fd42d4...12472`、Enron=`303c390f...06855`、PubMed=`481590ab...7806d1`；预算均为 0，GPU/API/victim/Retriever/external 全部关闭。
+- [x] 固定 seed=42、dataset order=`edgar -> enron -> pubmed` 的三套 split 均 passed：每 dataset `2250` source，`KB_Member=1000`、`True_Non_Member=1000`、`Reserve=250`；三套 manifest/rows hash 已写入 notes，跨 dataset source-exclusive 零重叠验证通过。
+- [x] `5/5` 定向 unittest、`validate-freeze`、授权 validator、split runner/validator、status 与 `git diff --check` 通过；live status=`source_exclusive_split_all_datasets_passed_awaiting_shadow_authorization`，所有 API/victim/Retriever/external 计数为 0，未使用 GPU。
+- [ ] Reserve shadow gate、release finalize、Luna query/API、victim、Retriever、response 与 AUC 尚未授权或启动。
+
+当前唯一下一步：停止并等待用户单独授权 `Reserve-only shadow gate`；授权前不得创建 shadow index 或启动任何 downstream formal stage。
+
+### 2026-08-31：Reserve-only shadow gate runtime implementation/freeze 完成
+
+- [x] 已实现并测试 `src/prepare/restoration_first_v23_shadow_runtime.py` 与 `scripts/50_run_v23_reserve_shadow.py`；新增 `configs/restoration_first_v23_shadow_runtime_r1.yaml` 和 `tests/test_restoration_first_v23_shadow_runtime.py`。
+- [x] 已生成/验证 `configs/restoration_first_v23_shadow_runtime_r1.freeze.json`：shadow identity=`959f3591...bebf82`，bundle=`df3bf7cc...faf4c5e8`，freeze SHA-256=`4157289491...74b82fb`，20-file closure；重复 freeze 幂等通过。
+- [x] contract/gates：Reserve-only 250 source；每 source 3 pair、Q+/Q- 6 query；每 dataset/backend budget 1500、top-k 5；dense/BM25/hybrid 分离；shadow index 仅 `artifacts/v23/shadow_indexes/`；主 `indexes/`、membership、victim、API、external calls 全部 fail-closed。
+- [x] 离线定向 unittest=`9/9 OK`，内存 AST、CLI help、freeze validator、status、Unicode path existence、`git diff --check` 均通过；runtime 不读取 source content 以外的受限输入，不产生 Retriever/API/victim 调用。
+- [ ] 尚未运行 `prepare-shadow-authorizations`、`run-shadow-gate` 或 `validate-shadow-gate`；未构建 shadow index，未启动 GPU/Retriever 长任务。
+
+当前唯一下一步：用户单独授权实际 Retriever 后，由用户逐 dataset/backend 执行 Reserve-only shadow gate，并在每个 cell 完成后独立验证；9 个 cell 全部 passed 前不得进入 release finalize 或下游 API/victim/formal 主 index。
+
+### 2026-08-31：shadow runtime r1 -> r2 successor 修复授权准备错误
+
+- [x] r1 `validate-freeze` passed，但 `prepare-shadow-authorizations` 暴露 split-manifest helper API 错误；失败发生在 authorization 落盘前，未产生 partial authorization、budget、shadow index 或 Retriever/GPU 调用。
+- [x] 新增 `configs/restoration_first_v23_shadow_runtime_r2.yaml`、`configs/restoration_first_v23_shadow_runtime_r2.freeze.json` 与 `src/prepare/restoration_first_v23_shadow_runtime_r2.py`；`scripts/50_run_v23_reserve_shadow.py` 已切换到 r2 successor，旧 r1 freeze 保留且不覆盖。
+- [x] r2 freeze validator passed：identity=`153515b4...953c9`，bundle=`ae9f781e...036acf`，freeze SHA-256=`8f67dada...c1fc8a`，22-file closure。
+- [x] 修复版 `prepare-shadow-authorizations` passed，9 个 dataset/backend authorization 已生成并验证；每 cell `budget_limit=1500`，API/victim/external=false，shadow budget journal=`0`。
+- [ ] 9 个 `validate-shadow-authorization`、9 个 `run-shadow-gate` 与 9 个 `validate-shadow-gate` 尚未执行；shadow index、retrieval rows 与 gate manifest 尚未生成。
+
+当前唯一下一步：用户按 dataset/backend 顺序逐 cell 执行已生成 authorization 绑定的长时间 Retriever 命令；每个 cell 完成后立即验证，全部 passed 后才可进入 release finalize。
+
+### 2026-08-31：authorization 批量验证的 PowerShell 编码问题已澄清
+
+- [x] 默认 `Get-Content` 在 Windows PowerShell 中未按 UTF-8 解码授权 JSON，导致 `ConvertFrom-Json` 对包含中文授权记录的文件报告 syntax error；未修改或删除任何授权文件。
+- [x] Python UTF-8 读取并公开 validator 复核 r2 的 9 个 authorization，`validated_count=9`，全部 `passed`。
+- [ ] 实际 `run-shadow-gate` 仍未启动；shadow index、retrieval rows、budget journal 和 gate manifest 仍待用户逐 cell 长任务产生。
+
+当前唯一下一步：PowerShell 批量验证使用 `Get-Content -Encoding UTF8 -Raw`，然后按 `edgar -> enron -> pubmed`、`dense -> bm25 -> hybrid` 顺序逐 cell 运行和验证。
+
+### 2026-08-31：Reserve-only shadow gate r3 successor（当前）
+
+- [x] r2 `edgar/dense` 运行在 split rows helper API 处 fail-closed；未到 shadow index、Reserve source、Retriever/GPU 或 budget journal。空 partial 目录和 r2 authorization/freeze 保留为 superseded/failed evidence。
+- [x] r3 wrapper/config 已接入 CLI，修复 `_assert_exact_fields` 与 `validate_split_rows` 的实际模块路径；不改变 v23 shadow scientific contract 或历史 artifact。
+- [x] r3 freeze validator passed：identity=`b74ae66698f99ad31daee59fed8b72f899e8be365760fc2d1def0f208ba92992`，bundle=`38604d9664ce8e6625a7967bd37f875b6c84073e6dc747fb32ac485ca072e98a`，freeze SHA-256=`50d103fa895f95860cec9ba84aaa1d5180a2a6bb4d52799f4b42b86f4eda3771`；定向 unittest=`9/9 OK`。
+- [ ] r3 authorization 尚未生成；r2 的 9 个 authorization 不得继续使用。
+
+当前唯一下一步：执行 `prepare-shadow-authorizations` 生成 r3 9 个授权，使用 UTF-8 读取并逐个 `validate-shadow-authorization`；授权全部通过后由用户按 `edgar -> enron -> pubmed`、`dense -> bm25 -> hybrid` 顺序逐 cell 运行并验证。期间 API/victim/external calls 保持禁止，未完成全部 9 cell 前不得 release finalize。
+
+### 2026-08-31：r3 authorization 已生成并验证（当前）
+
+- [x] r3 9 个 dataset/backend authorization 已生成，均绑定 identity=`b74ae66698f99ad31daee59fed8b72f899e8be365760fc2d1def0f208ba92992`、budget=`1500`、Retriever/GPU allowed、API/victim/external=false。
+- [x] Python UTF-8 独立 validator `9/9 passed`，授权记录精确匹配用户文本；`status` 显示 9 个 cell authorized、未完成，所有调用计数为 0。
+- [ ] 尚未执行任何 `run-shadow-gate` 或 `validate-shadow-gate`；shadow index、retrieval rows、budget journal、gate manifest 均未生成。
+
+当前唯一下一步：主人运行首个 `edgar/dense` 长命令并在返回后立即验证；通过后按固定 dataset/backend 顺序逐 cell 串行执行。长任务中断或报错时先运行 `status`，保留 partial artifact，不使用 r2 authorization 或盲目重跑。
+
+### 2026-08-31：r3 `edgar/dense` query-plan 前置失败（当前）
+
+- [x] r3 freeze/auth 校验通过，但运行入口向 `_run_one_shadow_cell` 传入 freeze 摘要，导致 `_load_pairs` 缺少 `pair_bindings`；失败在 Retriever/GPU 前，未生成 shadow index、retrieval rows 或 budget journal。
+- [x] r4 草稿已撤回；没有新 protocol、freeze 或 authorization。进程内兼容探针确认完整 freeze manifest 可读取，EDGAR pair count=`6750`。
+- [ ] 尚未完成永久 CLI 修复；当前 r3 freeze 保持不变，不能直接修改 hashed runtime 文件。
+
+当前唯一下一步：优先采用不新增文件的进程内兼容入口完成 diagnostic-only shadow gate；只有明确要求永久 CLI 修复时，才重新评估 pre-run re-freeze 与授权影响。
+
+### 2026-08-31：EDGAR/dense 已通过（当前）
+
+- [x] EDGAR/dense run 与独立 validate 均 `passed`；1500 logical calls、7500 retrieval rows，manifest/index/rows/query-plan hash 已记录。
+- [x] status：EDGAR/dense `completed=true`；其余 8 个 cell `completed=false`；API/victim/external calls=`0`。
+- [ ] 尚未运行 EDGAR/bm25、EDGAR/hybrid、Enron 三 backend、PubMed 三 backend。
+
+当前唯一下一步：使用进程内完整-freeze 兼容入口运行 `edgar/bm25`，返回后立即验证；按 dataset/backend 固定顺序推进，失败先查 status，不盲目重跑。
+
+### 2026-08-31：Reserve-only shadow gate 全部 9 个 cell passed
+
+- [x] 完成并验证 `edgar/enron/pubmed × dense/bm25/hybrid` 全部 9 个 cell；每 cell `1500` logical Retriever calls、`7500` rows，合计 `13500` Retriever calls。
+- [x] 全局 status=`reserve_shadow_gate_all_cells_passed`；r3 identity=`b74ae66698f99ad31daee59fed8b72f899e8be365760fc2d1def0f208ba92992`，bundle=`38604d9664ce8e6625a7967bd37f875b6c84073e6dc747fb32ac485ca072e98a`，freeze SHA-256=`50d103fa895f95860cec9ba84aaa1d5180a2a6bb4d52799f4b42b86f4eda3771`。
+- [x] 9 个 gate manifest hash 已写入 notes；shadow index 仅位于 `artifacts/v23/shadow_indexes/`，主 index 未写入；API/victim/external=`0`，membership/source-content flags=`false`。
+- [x] r1/r2 前置失败与 r3 兼容运行证据保留；未创建新的 successor、freeze 或 authorization，未改变 v23 scientific contract。
+- [x] Reserve-only shadow gate 已完成；9 个 cell 均通过独立 validator。
+- [ ] release finalize、Luna/API、victim、正式主 index、response、AUC 尚未授权或启动。
+
+当前唯一下一步：停止并等待主人单独明确授权 release finalize。授权前不得执行任何 release 或下游外部/正式评估阶段；如需复核 shadow cell，继续使用已验证的进程内完整-freeze 兼容入口。
+
+### 2026-08-31：v23 release finalize 已通过
+
+- [x] 用户明确授权 v23 release finalize；只执行本地离线 artifact 聚合，不启动 Luna/API、victim、正式主 index、Retriever 或正式评估。
+- [x] release protocol/runtime identity=`5ce4e736...095bd`，runtime bundle=`921beffe...dda4f`；release manifest=`artifacts/v23/release/5ce4e736aac3fd9127b33d89b9b3533d5155502d375ac44548f17142ad0095bd/release_manifest.json`。
+- [x] release manifest SHA-256=`e998c602823a7e5bc2d695d04dc25f16da33fe603d38aa67ef436e720965333a`；rows SHA-256=`f370bf9bef5ab40591e3ac8828623eab64909378d560029c9a50cf1169c5ba77`；rows=`20250`，三 dataset、三组 source-exclusive split、每 source 三 pair。
+- [x] `finalize-release`、`validate-release`、`status` 均 passed；release 新增 API/victim/Retriever/external calls=`0`，既有 shadow 累计 Retriever calls=`13500`，主 `indexes/` 未写入，membership/response/AUC 未读取。
+- [ ] Luna query-generation、API/victim、正式主 index、response、AUC 与正式评估仍未启动。
+
+当前唯一下一步：停止在 release finalize passed 边界，等待主人单独授权 query-generation successor freeze/auth；未获后续授权前不运行 Luna/API、victim、主 index、response 或 AUC。
+
+### 2026-09-01：v23 query-generation successor freeze/auth 已完成
+
+- [x] query successor freeze passed：identity=`691ce230...4753`，bundle=`86b19fa8...323fa`，freeze SHA-256=`3ada84d7...6684`，18-file closure；绑定 release manifest=`e998c602...333a`。
+- [x] 冻结 Luna endpoint/model/version、Prompt 与 decoding/retry/rate-limit 参数；不包含 API key。每 dataset 固定 `6000` pair、`12000` Q+/Q- logical query cells，Reserve=`0`，transport retry 不改变科研 query budget。
+- [x] 最终 authorization passed：EDGAR=`e863dc0f...4251`、Enron=`c211e654...f4f1`、PubMed=`13711364...4170`；每份 budget=`12000 logical_query_cells`，API/external=true，victim/Retriever/GPU=false。
+- [x] preflight 发现并在首次 API 调用前修复 dataset 输出目录隔离；旧 identity=`430ac62a...3cbc9` 与旧授权保留为 superseded evidence，调用数为 0。最终输出路径为 `<query_contract_id>/<dataset>/`。
+- [x] freeze/auth/input validators、定向 `9/9`、扩大回归 `23/23`、AST、diff-check 均通过；status=`query_runtime_frozen_all_datasets_authorized`，API/victim/Retriever/external calls=`0`。
+- [ ] 三数据集正式 Luna query-generation 尚未运行；主 index、victim、Retriever、response、AUC 与评估未授权。
+
+当前唯一下一步：主人串行运行 `edgar -> enron -> pubmed` 三个 query-generation 长任务，每个完成后检查产物再继续；本授权不包含 victim、主 index、Retriever 或评估。
+
+### 2026-09-01：query-quality development canary 前置阻断（superseding）
+
+- [x] 收到 development-only canary 明确授权：最多 `60` 次 Luna API 调用，只使用 development pilot pairs，不读 formal membership/victim/Retriever/response/AUC，不启动正式 query-generation。
+- [x] 新增与正式 query freeze closure 隔离的 52 号 development canary；没有新增 config/freeze/authorization/ledger，没有修改当前 frozen Prompt、validator、48 号 runner 或正式 release。
+- [x] 固定抽样为三数据集 × 五类实体 × 每类 2 pair × Q+/Q-=`60` cell；单次物理尝试、零 retry、checkpoint/resume 与 60-call 硬上限已由 mock 回归覆盖。
+- [x] preview 在 API 前得到 `development_input_contract_failed`：样本 `12/60` cell 为 `relation_cue_missing`；全量 development 汇总为 `3774/12378` cell 不兼容，EDGAR=`1967/5814`、Enron=`372/888`、PubMed=`1435/5676`。
+- [x] 根因确认是 Fact Layer r1 将 relation cue 改为 diagnostic-only，而 design-r6/query runtime 仍将其作为 query self-containment 硬门禁；selection r2 未补回。该冲突位于 Luna 调用之前，不能归因于模型输出质量。
+- [x] 定向测试 `13/13 OK`；preview/API/victim/Retriever/external calls=`0`，未生成正式 query rows，现有 freeze/auth 未覆盖或删除。
+- [ ] 禁止执行当前三条正式 48 号 `run` 命令；禁止重抽 canary 规避失败、跳过正式 pair、release 后删行或原地放宽 validator。
+
+当前唯一下一步：等待主人单独授权 successor 科学协议修复。推荐从 development 恢复 selector 与 query self-containment 的一致门禁并重跑 canary；该变更影响 selector/source eligibility 或 Query construction，需从最早受影响阶段以新版本重跑，当前 v23 release/freeze/auth 保留为 blocked 历史证据。
+
+### 2026-09-01：query-quality canary status 哈希稳定性修复
+
+- [x] 修复 52 号 canary 的只读 `status` 路径：已有 summary 时不再调用会写盘的 preview 初始化，避免 `created_at` 导致 summary 哈希漂移。
+- [x] 变更仅限 `src/prepare/restoration_first_v23_query_quality_canary.py` 与既有 query-generation 测试；不改变实验语义，不需要重跑 query canary、freeze/auth 或正式协议，也不创建 successor 版本。
+- [x] 定向 unittest=`13/13 OK`、AST=`3/3 OK`、连续 status 哈希稳定；summary SHA-256=`14a0caf04655e5e5672c4ae246fa87519c774a21cb9be255077958f1c643a96e`。
+- [ ] 当前唯一科研下一步不变：等待主人单独授权 successor 科学协议修复；在此之前禁止正式 48 号 Luna query-generation。
+
+### 2026-09-01：query-quality canary successor probe 离线阶段完成
+
+- [x] selection r3 恢复 frozen relation-cue gate；EDGAR/PubMed capacity passed，Enron 保留 `failed_capacity_shortfall`，未放宽门禁或修改旧 artifact。
+- [x] development canary r3 + `subject_presence_r2` preview：`0/11352` input-contract failures，`30` pairs、`60` cells，`api_call_slots_consumed=0`；新增 probe 只处理自然问句倒装、冠词/尾标点 surface 变体，正式 validator 与正式 query runtime 未改。
+- [x] 真实 canary 的首个失败 checkpoint 原样保留（`1` API call，`automatic_validation_failed`），不得重试；新的 r2 输出目录独立且尚未调用 API。
+- [x] 定向 unittest=`23/23`（selection `7/7` + query-generation `16/16`），内存 AST 编译与 diff-check 通过。
+- [x] 最新 r2 preview summary SHA-256=`f536d909...f55c6e`；只读 status 前后字节与 hash 稳定。
+- [x] 新 r2 canary 第 1 次物理调用为 transport failure：`Remote end closed connection without response`，无 response/query 质量证据；旧 checkpoint=`automatic_validation_failed`、已消耗 `1/60`，禁止原地重试。
+- [x] 独立 attempt2 的第 1 次物理调用收到 HTTP 404 `model_not_found`：远端账号组不支持冻结模型 `gpt-5.6-luna`；无 response/query 质量证据，attempt2=`automatic_validation_failed`、已消耗 `1/60`。不得继续用同一模型重试，也不得未经授权切换模型/endpoint。
+- [x] 只读 `/v1/models` 诊断返回 HTTP 200 和 58 个模型 ID，其中包含 `gpt-5.6-luna`；故模型在服务目录存在，但当前 API key 所属账号组没有 completion entitlement。未产生 query response，不改变 canary 预算/身份。
+- [x] 更换 key 后复核：新进程从 `.env` 加载的新 key 指纹与文件值一致，`/v1/models`=`200`，但 Luna 最小 completion 仍=`404 model_not_found`；key 有效但账号组仍未开通该模型 completion 权限。未切换模型/endpoint，未启动新 canary。
+- [x] 主人用 OpenAI SDK 直接硬编码另一把 key 成功调用 `gpt-5.6-luna`，说明 endpoint/model 本身可用；此前 404 仅适用于项目进程实际加载的 `.env` key，不能外推为服务端无 Luna 权限。先对齐项目使用的 key，再做 smoke/canary；不记录或复用聊天中暴露的 secret。
+- [x] 更新 `.env` 并清除 PowerShell 旧环境覆盖后，项目 client smoke=`passed`，provider model id=`gpt-5.6-luna`，内容=`OK`；该调用不属于 canary query，不写 query artifact。已提醒撤销聊天中暴露的旧 key。
+- [x] 新授权 attempt3 已完成离线 preview：独立输出目录，`60` cells、`0/11352` 输入失败、API 调用=`0`，状态=`prepared_awaiting_execution`。
+- [x] 新独立 attempt4 已完成离线 preview：目录=`artifacts/v23/development/query_quality_canary_r3_subject_presence_r2_attempt4/`，`60` cells、`0/11352` 输入失败、API 调用=`0`，状态=`prepared_awaiting_execution`；未复用 attempt1/2/3 checkpoint。
+- [x] attempt3 第 1 个物理调用收到 provider HTTP 500 `get_channel_failed`（`auto` 分组无 gpt-5.6-luna 可用渠道），无 query response；状态=`automatic_validation_failed`、已消耗 `1/60`，禁止原地重试。该失败属于 provider 路由可用性，不是 validator 或 query 质量结论。
+- [x] 环境/调用方式对照已通过：当前 `.env` 同 key/model 下，OpenAI SDK 与仓库 OpenAI-compatible client（使用 canary 的 `top_p/n/seed/max_tokens`）均返回 `gpt-5.6-luna`/`OK`。故 attempt3 500 是 provider 瞬时渠道故障，不是 env 或客户端封装错误；诊断调用不写 canary artifact。
+- [ ] 尚未运行新的 API canary、正式 query-generation、victim、主 index、Retriever 或评估。
+
+当前唯一下一步：等待主人明确授权一个使用全新输出目录的 development-only canary attempt；本次 authorization 已消耗 1 个 transport-failed call，不能默认再增加 60-call 配额。新 attempt 运行后先执行 `status`，再根据 `awaiting_quality_review` 或 `automatic_validation_failed` 决定是否继续。未通过 canary 前不得启动正式 48 号 query-generation。
+
+### 2026-09-01：query-quality canary transport retry 修复（当前）
+
+- [x] 修复 52 号 canary：同一 logical query cell 对可识别的 provider/network transport failure 最多额外重试 2 次；底层 client 仍保持 `max_retries=0`，避免隐藏重试和预算不透明。
+- [x] 每次物理调用都写入 `canary_attempts.jsonl` 并带 `call_ordinal`、`retry_ordinal`；最终结果区分 logical cell 与 physical attempt，物理上限为 `180`，logical cell 仍固定 `60`。
+- [x] 语义/schema/subject validator 失败、HTTP 404 和模型身份错误不重试；旧失败 attempt 不复用、不覆盖。
+- [x] 定向 unittest=`17/17 OK`、AST 与 `git diff --check` 通过；未产生新的 API、victim、Retriever、response 或 AUC 调用。
+- [ ] 尚未获得新 attempt 的 `180` 次物理 API 授权；当前仍禁止正式 48 号 query-generation。
+
+当前唯一下一步：主人单独授权新的 development-only canary attempt（最多 `180` 次物理调用）后，使用全新输出目录运行；返回后先执行 `status`，再进行人工质量复核。
+
+- [x] attempt5 preview/status passed；目录=`artifacts/v23/development/query_quality_canary_r3_subject_presence_r2_attempt5/`，API/victim/Retriever/external calls=`0`，正式 query-generation 仍未启动。
+
+### 2026-09-01：query-quality canary transport retry policy superseded
+
+- [x] transport/network failure 改为持续重试直到成功或用户手动终止；不再设置 `2` 次或 `180` 次的 canary transport/API 上限。60 个 logical query cells、Prompt、model、validator 与 development-only 边界不变。
+- [x] attempt5 允许从已有纯 transport failure 结果追加恢复；旧 attempts/results 只追加不覆盖，语义失败不会被重试。
+- [x] 定向 unittest=`18/18 OK`、AST 与 `git diff --check` 通过；attempt5 summary 已离线刷新为 `transport_failure_awaiting_resume`，未增加 API 调用。
+- [ ] 尚未执行 attempt5 续跑；主人需确认持续重试的运行授权与手动停止边界。
+
+当前唯一下一步：主人确认后，在 attempt5 同一输出目录运行续跑命令；网络故障将持续重试，成功后再进入人工 query 质量复核。
+
+### 2026-09-01：attempt5 终态分类修复（当前）
+
+- [x] attempt5 的第 3 个 cell 在 `16` 次 transport failure 后获得模型 response，但 `those awards` 触发 `query_unresolved_reference`；这是语义 validator 终态，不是网络失败。
+- [x] 52 号 canary 的 resume 判定已改为检查最后一次 `failure_reason`；不再由历史 `transport_failure_reasons` 将语义失败误标为 `transport_failure_awaiting_resume`。仅改现有 canary 模块与既有测试，不影响论文实验语义、不需要新协议或重跑 formal 阶段。
+- [x] 定向 unittest=`19/19 OK`、AST 和 `git diff --check` 通过；无新的 API 或其他外部调用。
+- [ ] 当前唯一下一步：主人用同一 attempt5 `run` 命令刷新 summary；它会在建 client 前终止并写出 `automatic_validation_failed`，不调用 API、不改 attempts/results。随后人工决定是否调整 development-only 的 prompt/validator 后另开独立 attempt；正式 48 号 query-generation 继续禁止。
+
+### 2026-09-02：v24 Pre-Split Eligibility 实现状态
+
+- [x] v24 单一 config、离线 reconstruction/eligibility 实现、普通 CLI 与 unittest 已加入；核心边界为 v22 membership-blind source pool，未触碰 v23 frozen 文件或 artifact。
+- [x] pre-formal 顺序已实现为 source-order 扫描、candidate-fact adapter、contextual role、correction eligibility、query feasibility、固定三 pair，再 split；scanner 达到 exactly 2250 即停止，容量不足 fail closed。
+- [x] deterministic 1000/1000/250 split、eligible-source/split manifest hash、coverage/rejection reason/fallback 统计和 formal source/pair/query integrity re-check 已实现；fallback 仅修复 surface naturalization，不替换 source/pair/replacement。
+- [x] 定向 v24 unittest=`29/29 OK`，AST/CLI/hash-order 检查通过；API、Retriever、victim、GPU、正式 index、response、AUC 调用=`0`。
+- [ ] 下一步：先单独授权并运行 development/capacity canary；canary 通过前不得启动 v24 正式 query-generation 或下游评估。
+
+### 2026-09-02：v24 离线完整性校验补强
+
+- [x] split 构造先验证 eligible manifest；严格校验 3 pairs/source、6 queries/source、pair/query manifest hash、source integrity hash、dataset 和 manifest linkage。
+- [x] 修正 surface fallback 后 query hash 重算，并将 fallback 统计限制为最终固定三对；offline role proxy 显式标记 `proxy_only`，不升级为正式 entity taxonomy。
+- [x] 定向 v24 unittest=`29/29 OK`；ruff、AST parse、`git diff --check` 通过；无 API/Retriever/victim/GPU/正式 index/response/AUC 调用。
+- [x] 全量 unittest 结果：`597` tests，`556 passed / 39 skipped / 1 failure / 1 error`；两项均为已有 v23 ledger/fresh-audit 测试失败，v24 未触碰相关代码、artifact 或状态。
+- [ ] 当前唯一下一步仍是主人单独授权 development/capacity canary；不得在此之前执行真实 Luna、Retriever、victim 或正式评估。
+
+### 2026-09-02：v24 retrieval anchor 门禁语义修正
+
+- [x] 修复 `_anchor_reasons()` 直接进入 v24 `rejection_reasons` 的实现错误；anchor schema/source grounding/query presence 降为 `retrieval_anchor_diagnostics`，不影响科学 hard gates、candidate ranking、PVS 或 query budget。
+- [x] 增加回归覆盖：无效 anchor 仍可接受但诊断被记录；anchor 不改变 ranking；query manifest 携带诊断且仍保持 6 queries/source。定向 v24 unittest=`39/39 OK`。
+- [x] 三数据集 offline capacity estimate：EDGAR `30/30` source signal、Enron `28/30`、PubMed `30/30`；均未调用真实 API/Retriever/victim，membership=`false`。
+- [x] 全量 unittest=`605`，`1 failure / 8 errors / 39 skipped`；失败仍为既有 v23 runtime/fresh-audit 工作区漂移，不能归因于 v24。
+- [ ] 新的真实 Luna canary 尚未执行；上次 30-cell canary 的调用额度已用尽，必须获得新的明确 API 授权后才可重跑。
+
+### 2026-09-02：v24 Luna development canary attempt r2
+
+- [x] 新独立输出目录 `artifacts/v24/development/query_quality_canary_r2/` 已完成 30-cell 运行；`gpt-5.6-luna` 响应有效，`56` 次物理调用含 `26` 次 transport retry。
+- [x] 失败证据已保留：`passed_pair_count=13/30`，失败集中于 semantic/reverse binding、unresolved reference、numeric/temporal/modality drift；anchor diagnostics 未作为拒绝理由。
+- [x] API 之外的边界保持：membership、Retriever、victim、AUC、GPU、主 index 和正式 query-generation 调用均为 `0`。
+- [ ] 当前状态：`v24_canary_hard_gate_failed`。在修复并提交新的 generator/config 前，禁止 capacity/formal 下游；不得删除失败 pair、换 source 或降低 eligibility/query hard gates。
+
+### 2026-09-02：v24 semantic similarity 修复与新 canary
+
+- [x] 将 Q+/Q-/reverse 的 `0.80` hard gate 从 lexical Jaccard 切换为冻结的 `BAAI/bge-base-en-v1.5` embedding cosine；未显式提供 scorer 时 fail closed，不允许 hashing/lexical fallback。
+- [x] v24 config 固定 model revision=`a5beb1e3e68b9ab74eb54cfd186867f64f240e1a`、`local_files_only=true`；canary summary 记录 semantic scorer identity。
+- [x] 定向 unittest=`44/44 OK`、AST 与 diff check 通过；本地 BGE/CUDA smoke cosine=`0.8950162529945374`，hard gate 与 entity-masked semantic diagnostic 均无 lexical fallback。
+- [x] 新独立 canary `query_quality_canary_r3_semantic_attempt2` 完成：`18/30`，30 logical / 50 physical API calls，20 transport retries，Retriever/victim/membership/AUC=`0/false`；失败 artifact 原样保留。
+- [ ] 当前唯一下一步：先修复或重新界定 temporal/modality/unresolved-reference 等剩余结构 validator 与自然问句 realization 的契约，再开新的 development-only canary；在 30/30 前不运行 capacity/formal 下游。
+
+### 2026-09-02：v24 query 结构门禁修复（当前）
+
+- [x] 修复 temporal 误报：普通 `in/on/at` 不再构成 temporal marker；显式前后/期间关系、月份和 year/week/day 语义仍受 hard gate 保护。
+- [x] 修复 citation 误报：`[5]`、`[16]` 等方括号文献编号不进入 factual numeric marker；真实数字省略仍 hard fail。
+- [x] 补齐合法 polar auxiliary 和句首功能词识别，避免 `could/must/shall` 及 `In December` 被错误判作 non-polar/new factual entity。
+- [x] 在现有生成路径加入一次固定 semantic correction retry，并保存 initial/correction candidate 级拒绝证据；禁止第三次生成、换 fact/source 或读取下游信号。
+- [x] 定向 unittest=`54/54 OK`；config validation、AST、diff check 通过；API/Retriever/victim/GPU/formal calls=`0`。
+- [x] 全量 unittest=`620`：`572 passed / 39 skipped / 1 failure / 8 errors`；失败均为既有 v23 query-runtime/fresh-audit/ledger 状态漂移，本次 v24 定向回归无失败。
+- [ ] 当前唯一下一步：主人单独授权新的 v24 development-only canary attempt 后，使用新独立输出目录运行并检查 `30/30`；通过前不运行 capacity/formal 下游。
+
+### 2026-09-03：v24 attempt4 transport 终态与重试修复（当前）
+
+- [x] attempt4 独立目录完成 30 logical cells，`27/30` 通过；3 个 PubMed cell 均为错误响应体 `IncompleteRead`，不是 query semantic/structure rejection。
+- [x] attempt4 provider model=`gpt-5.6-luna`，记录 physical attempts=`132`、transport retries=`102`；membership/Retriever/victim/AUC/GPU/formal=`0`，失败 artifact 保留。
+- [x] 修复 `OpenAICompatibleChatClient` 的 HTTPError detail read：截断错误体现在 retryable status 下继续进入持续重连；非流式和流式路径均覆盖，避免网络问题错误落为 canary terminal failure。
+- [x] 新增两条 `IncompleteRead` retry mock，定向 unittest=`56/56 OK`，AST 和 diff check 通过；未启动新的 API attempt。
+- [ ] 当前唯一下一步：主人单独确认新的独立 v24 canary attempt 后再运行修复后的版本；通过 `30/30` 前不得进入 capacity/formal 下游。
+
+### 2026-09-03：v24 development canary semantic attempt5（通过）
+
+- [x] 新独立输出目录 `artifacts/v24/development/query_quality_canary_r3_semantic_attempt5/` 完成 30-cell 运行，`passed_pair_count=30/30`，`fallback_pair_count=0`，未覆盖既有失败 attempt。
+- [x] provider model=`gpt-5.6-luna`；逻辑 API 调用=`32`，物理尝试=`71`，transport retry=`39`；持续重连修复在本 attempt 中生效。
+- [x] semantic scorer identity=`BAAI/bge-base-en-v1.5@a5beb1e3e68b9ab74eb54cfd186867f64f240e1a`，本地文件模式，threshold=`0.80`；summary/result hash 已记录。
+- [x] membership、Retriever、victim、AUC、GPU、主 index 和正式 query-generation 均未读取或调用。
+- [x] v24 query-quality canary 阶段完成，可进入离线 capacity sanity check；capacity 运行及所有 Retriever/victim/formal 下游必须等待单独授权。
+
+### 2026-09-03：v24 source-level pair selection refinement
+
+- [x] `eligibility.max_candidate_facts_per_source=8` 已加入现有 v24 config，定位为统一 frozen source-local Luna processing budget；raw fact 中出现 3 个不同实体的统计不再被表述为 3 个 eligible pair 的证明。
+- [x] `screen_source()` 按 frozen fact order 最多处理 8 个 facts；3 个 distinct、完整 hard-gate accepted pairs 后 early stop；实体重复时保留 duplicate fallback，不升级为 eligibility gate。
+- [x] coverage 字段口径固定为：`candidate_fact_count`=完整枚举总 facts，`processed_fact_count`=实际 provider/Luna processing，`candidate_package_count`=已处理 facts packages，`unprocessed_fact_count`=差值。
+- [x] scan、capacity、manifest 记录统一 budget、processed/unprocessed、early-stop 与 diversity diagnostics；formal capacity/pre-split eligibility 不得越过 budget=8 处理后续 fact。
+- [x] 新增 source-level selection mock tests；v24 定向 unittest=`53/53 OK`，无 v23 frozen 文件改动、无 API/Retriever/victim/GPU/formal 调用。
+- [x] 追加验证：v24 + sibling retry 定向 unittest=`63/63 OK`；全量 unittest=`629`（`581 passed / 39 skipped / 1 failure / 8 errors`），失败属于既有 v23 query-runtime/fresh-audit/ledger 状态漂移。
+- [ ] 下一步仍为单独授权后的 v24 capacity sanity check；capacity 必须使用同一 budget=8 和完整 frozen hard gates，未通过前不启动 Retriever/victim/formal。
+
+### 2026-09-03：v24 source-level pair selection refinement 定义校正（superseding）
+
+- [x] 将 `max_candidate_facts_per_source=8` 定义为 frozen source-local processing budget；“前 7 个 raw facts 出现 3 个不同实体”仅为保守的 development 经验依据，不再被当作 3 个 scientific-valid eligible pairs 的证明。
+- [x] 固定 coverage 字段：`candidate_fact_count`=完整枚举总数，`processed_fact_count`=实际 provider/Luna processing，`candidate_package_count`=已处理 facts 返回 packages（含一次 retry），`unprocessed_fact_count`=两者差值。
+- [x] capacity、pre-split eligibility 与 freeze 前 validation 共享 budget=8；禁止第 9 个 fact 隐式补救；manifest validator 拒绝非冻结预算；third-pair 位置只在完成全部 scientific hard gates 后记录，early-stop 定义仍以达到 distinct target 为准。
+- [x] 保持 entity diversity 为 selection preference + diagnostic，未改变 hard gates、candidate ranking、PVS、split、query budget、governance 或 v23 frozen artifacts。
+- [x] 定向 v24 unittest=`56/56 OK`；未执行 API、Retriever、victim、GPU 或 formal 运行。
+- [x] 修正 offline `estimate_only` coverage 口径：无 provider/Luna 调用时 `processed_fact_count=0`，完整 candidate facts 计入 `unprocessed_fact_count`；预算内数量只用于 estimate-only eligibility signal。

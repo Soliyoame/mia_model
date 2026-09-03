@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from src.prepare.restoration_first_v24 import (
     SemanticSimilarityScorer,
+    build_candidate_prompt,
+    build_correction_prompt,
     build_eligibility_manifest,
     build_split_manifest,
     deterministic_correction_eligibility_judge,
@@ -13,7 +16,10 @@ from src.prepare.restoration_first_v24 import (
     deterministic_split,
     evaluate_candidate,
     fallback_queries,
+    get_max_candidate_facts_per_source,
+    scan_frozen_source_pool,
     scan_until_target,
+    screen_source,
     load_v24_config,
     rank_candidates,
     validate_formal_integrity,
@@ -74,10 +80,71 @@ def _package(replacement: str, template: str, q_plus: str, q_minus: str, *, nli:
     }
 
 
+def _selection_fact(index: int, original: str) -> dict[str, object]:
+    claim = f"The record identifies {original} as the designated representative."
+    fact = _fact(claim, original)
+    fact.update({
+        "upstream_pair_id": f"selection-fact-{index}",
+        "fact_order": index,
+    })
+    return fact
+
+
+def _selection_source(facts: list[dict[str, object]], source_key: str = "selection-source") -> dict[str, object]:
+    return {
+        "dataset": "edgar",
+        "source_key": source_key,
+        "source_order_rank": "0",
+        "full_text": " ".join(str(fact["true_claim"]) for fact in facts),
+    }
+
+
+def _selection_package(fact: dict[str, object], index: int) -> dict[str, object]:
+    original = str(fact["original_entity"])
+    replacement = f"Alternative{index}"
+    template = "The record identifies {ENTITY} as the designated representative."
+    return _package(
+        replacement,
+        template,
+        f"Does the record identify {original} as the designated representative?",
+        f"Does the record identify {replacement} as the designated representative?",
+    )
+
+
 class V24EligibilityTests(unittest.TestCase):
     def test_config_removes_nli_contradiction_gate(self):
-        self.assertFalse(load_v24_config()["eligibility"]["nli_contradiction_required"])
-        self.assertFalse(load_v24_config()["stealth_diagnostics"]["hard_gate"])
+        config = load_v24_config()
+        self.assertFalse(config["eligibility"]["nli_contradiction_required"])
+        self.assertFalse(config["stealth_diagnostics"]["hard_gate"])
+        self.assertEqual(config["eligibility"]["semantic_correction_retries"], 1)
+
+    def test_candidate_prompt_states_structural_query_constraints(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        fact["slotted_true_claim"] = "The company is incorporated in {ENTITY}."
+        prompt = build_candidate_prompt(fact)
+        self.assertIn("exactly one literal {ENTITY} token", prompt)
+        self.assertIn("Preserve every factual number", prompt)
+        self.assertIn("Do not introduce or remove a modal", prompt)
+        self.assertIn("never use unresolved pronouns", prompt)
+
+    def test_correction_prompt_contains_only_fixed_feedback_contract(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        fact["slotted_true_claim"] = "The company is incorporated in {ENTITY}."
+        prompt = build_correction_prompt(
+            fact,
+            [{
+                "candidate": _package(
+                    "Nevada",
+                    "The company is incorporated in {ENTITY}.",
+                    "Is it incorporated in Delaware?",
+                    "Is it incorporated in Nevada?",
+                ),
+                "rejection_reasons": ["q_plus_unresolved_reference"],
+            }],
+        )
+        self.assertIn("one allowed semantic correction retry", prompt)
+        self.assertIn("q_plus_unresolved_reference", prompt)
+        self.assertNotIn("membership_label", prompt)
 
     def test_open_world_attendance_rejected(self):
         payload = {
@@ -438,6 +505,7 @@ class V24EligibilityTests(unittest.TestCase):
             "source_order_rank": "0",
             "source_hash": "a" * 64,
             "normalized_text_hash": "b" * 64,
+            "max_candidate_facts_per_source": 8,
             "selected_pairs": pairs,
             "query_count": 6,
         }]
@@ -533,6 +601,233 @@ class V24EligibilityTests(unittest.TestCase):
             similarity_fn=lambda _a, _b: 0.95,
         )
         self.assertIn("q_plus_modality_drift", reasons)
+
+    def test_non_temporal_preposition_rewrite_does_not_trigger_temporal_drift(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="The device operates in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="The device operates in Delaware.",
+            canonical_counterfactual="The device operates in Nevada.",
+            q_plus="Does the device operate within Delaware?",
+            q_minus="Does the device operate within Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertNotIn("q_plus_temporal_drift", reasons)
+        self.assertNotIn("q_minus_temporal_drift", reasons)
+
+    def test_explicit_temporal_relation_change_remains_a_hard_failure(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="Before 2024, the company operated in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="Before 2024, the company operated in Delaware.",
+            canonical_counterfactual="Before 2024, the company operated in Nevada.",
+            q_plus="After 2024, did the company operate in Delaware?",
+            q_minus="Before 2024, did the company operate in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertIn("q_plus_temporal_drift", reasons)
+        self.assertNotIn("q_minus_temporal_drift", reasons)
+
+    def test_bibliography_citation_is_not_a_factual_numeric_marker(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="Twitter updates [5] identified Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="Twitter updates [5] identified Delaware.",
+            canonical_counterfactual="Twitter updates [5] identified Nevada.",
+            q_plus="Did Twitter updates identify Delaware?",
+            q_minus="Did Twitter updates identify Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertNotIn("q_plus_numeric_drift", reasons)
+        self.assertNotIn("q_minus_numeric_drift", reasons)
+
+    def test_factual_number_omission_remains_a_hard_failure(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="The GC group was assessed at 6 weeks in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="The GC group was assessed at 6 weeks in Delaware.",
+            canonical_counterfactual="The GC group was assessed at 6 weeks in Nevada.",
+            q_plus="Was the GC group assessed in Delaware?",
+            q_minus="Was the GC group assessed in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertIn("q_plus_numeric_drift", reasons)
+        self.assertIn("q_minus_numeric_drift", reasons)
+
+    def test_modal_auxiliaries_are_valid_polar_question_starts(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="Enron shall file notice in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="Enron shall file notice in Delaware.",
+            canonical_counterfactual="Enron shall file notice in Nevada.",
+            q_plus="Shall Enron file notice in Delaware?",
+            q_minus="Shall Enron file notice in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertNotIn("q_plus_not_polar_question", reasons)
+        self.assertNotIn("q_minus_not_polar_question", reasons)
+        self.assertNotIn("q_plus_new_factual_entity", reasons)
+        self.assertNotIn("q_minus_new_factual_entity", reasons)
+
+    def test_semantic_correction_retry_runs_once_and_preserves_evidence(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        source = {
+            "dataset": "edgar",
+            "source_key": "source-1",
+            "source_order_rank": "0",
+            "full_text": fact["true_claim"],
+        }
+        initial = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is it incorporated in Delaware?",
+            "Is it incorporated in Nevada?",
+        )
+        corrected = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is the company incorporated in Delaware?",
+            "Is the company incorporated in Nevada?",
+        )
+
+        class Provider:
+            def __init__(self) -> None:
+                self.initial_calls = 0
+                self.correction_calls = 0
+
+            def __call__(self, _fact: object) -> list[dict[str, object]]:
+                self.initial_calls += 1
+                return [initial]
+
+            def correct(
+                self,
+                _fact: object,
+                rejected: object,
+            ) -> list[dict[str, object]]:
+                self.correction_calls += 1
+                self.assert_rejected = rejected
+                return [corrected]
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=[fact],
+            minimum_pairs=1,
+            allow_surface_fallback=False,
+            similarity_fn=_semantic_similarity,
+            semantic_correction_retries=1,
+            include_candidate_evidence=True,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(provider.initial_calls, 1)
+        self.assertEqual(provider.correction_calls, 1)
+        self.assertEqual(result["candidate_package_count"], 2)
+        self.assertEqual(
+            [item["generation_attempt"] for item in result["candidate_evidence"]],
+            ["initial", "semantic_correction"],
+        )
+        self.assertIn(
+            "q_plus_unresolved_reference",
+            result["candidate_evidence"][0]["rejection_reasons"],
+        )
+        self.assertTrue(result["candidate_evidence"][1]["accepted"])
+
+    def test_initial_success_skips_semantic_correction(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        source = {
+            "dataset": "edgar",
+            "source_key": "source-1",
+            "source_order_rank": "0",
+            "full_text": fact["true_claim"],
+        }
+        valid = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is the company incorporated in Delaware?",
+            "Is the company incorporated in Nevada?",
+        )
+
+        class Provider:
+            def __init__(self) -> None:
+                self.correction_calls = 0
+
+            def __call__(self, _fact: object) -> list[dict[str, object]]:
+                return [valid]
+
+            def correct(
+                self,
+                _fact: object,
+                _rejected: object,
+            ) -> list[dict[str, object]]:
+                self.correction_calls += 1
+                return []
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=[fact],
+            minimum_pairs=1,
+            similarity_fn=_semantic_similarity,
+            semantic_correction_retries=1,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(provider.correction_calls, 0)
+
+    def test_failed_semantic_correction_does_not_retry_again(self):
+        fact = _fact("The company is incorporated in Delaware.", "Delaware")
+        source = {
+            "dataset": "edgar",
+            "source_key": "source-1",
+            "source_order_rank": "0",
+            "full_text": fact["true_claim"],
+        }
+        invalid = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is it incorporated in Delaware?",
+            "Is it incorporated in Nevada?",
+        )
+
+        class Provider:
+            def __init__(self) -> None:
+                self.initial_calls = 0
+                self.correction_calls = 0
+
+            def __call__(self, _fact: object) -> list[dict[str, object]]:
+                self.initial_calls += 1
+                return [invalid]
+
+            def correct(
+                self,
+                _fact: object,
+                _rejected: object,
+            ) -> list[dict[str, object]]:
+                self.correction_calls += 1
+                return [invalid]
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=[fact],
+            minimum_pairs=1,
+            allow_surface_fallback=False,
+            similarity_fn=_semantic_similarity,
+            semantic_correction_retries=1,
+            include_candidate_evidence=True,
+        )
+        self.assertFalse(result["eligible"])
+        self.assertEqual(provider.initial_calls, 1)
+        self.assertEqual(provider.correction_calls, 1)
+        self.assertEqual(len(result["candidate_evidence"]), 2)
+        self.assertFalse(any(item["accepted"] for item in result["candidate_evidence"]))
 
     def test_invalid_anchor_is_diagnostic_only_and_anchor_is_not_appended(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
@@ -709,7 +1004,7 @@ class V24EligibilityTests(unittest.TestCase):
             "source_order_rank": "0",
             "source_hash": "a" * 64,
             "normalized_text_hash": "b" * 64,
-            "selected_pairs": [],
+            "selected_pairs": [{"pair_id": f"p-{index}"} for index in range(3)],
         }
         pairs = []
         for i in range(3):
@@ -800,6 +1095,289 @@ class V24EligibilityTests(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertEqual(result["pair"]["generation_mode"], "deterministic_fallback")
         self.assertEqual(result["pair"]["replacement_entity"], "Nevada")
+
+    def test_source_early_stop_uses_completed_distinct_eligible_pairs(self):
+        originals = ["Microsoft", "Microsoft", "GitHub", "Delaware"] + [f"Entity{i}" for i in range(16)]
+        facts = [_selection_fact(index, original) for index, original in enumerate(originals)]
+        source = _selection_source(facts)
+
+        class Provider:
+            def __init__(self) -> None:
+                self.calls: list[int] = []
+
+            def __call__(self, fact: object) -> list[dict[str, object]]:
+                row = dict(fact)  # type: ignore[arg-type]
+                index = int(row["fact_order"])
+                self.calls.append(index)
+                return [_selection_package(row, index)]
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=facts,
+            similarity_fn=_semantic_similarity,
+            max_candidate_facts_per_source=8,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(provider.calls, [0, 1, 2, 3])
+        self.assertEqual(result["candidate_fact_count"], 20)
+        self.assertEqual(result["processed_fact_count"], 4)
+        self.assertEqual(result["unprocessed_fact_count"], 16)
+        self.assertEqual(result["candidate_package_count"], 4)
+        self.assertTrue(result["early_stop_triggered"])
+        self.assertEqual(result["third_eligible_pair_fact_position"], 3)
+        self.assertEqual(result["third_distinct_eligible_pair_fact_position"], 4)
+        self.assertEqual(result["original_entity_diversity"], 3)
+        self.assertEqual(result["repeated_original_entity_pair_count"], 0)
+        self.assertEqual(
+            [pair["original_entity"] for pair in result["selected_pairs"]],
+            ["Microsoft", "GitHub", "Delaware"],
+        )
+
+    def test_source_continues_after_only_two_eligible_pairs(self):
+        originals = ["Microsoft", "GitHub", "Entity2", "Entity3", "Delaware", "Entity5"]
+        facts = [_selection_fact(index, original) for index, original in enumerate(originals)]
+        source = _selection_source(facts, source_key="two-then-three")
+
+        class Provider:
+            def __init__(self) -> None:
+                self.calls: list[int] = []
+
+            def __call__(self, fact: object) -> list[dict[str, object]]:
+                row = dict(fact)  # type: ignore[arg-type]
+                index = int(row["fact_order"])
+                self.calls.append(index)
+                return [_selection_package(row, index)] if index in {0, 1, 4} else []
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=facts,
+            similarity_fn=_semantic_similarity,
+            max_candidate_facts_per_source=8,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(provider.calls, [0, 1, 2, 3, 4])
+        self.assertEqual(result["processed_fact_count"], 5)
+        self.assertEqual(result["unprocessed_fact_count"], 1)
+
+    def test_source_budget_caps_duplicate_entity_search_and_fallback(self):
+        facts = [_selection_fact(index, "Microsoft") for index in range(10)]
+        source = _selection_source(facts, source_key="duplicate-budget")
+
+        class Provider:
+            def __init__(self) -> None:
+                self.calls: list[int] = []
+
+            def __call__(self, fact: object) -> list[dict[str, object]]:
+                row = dict(fact)  # type: ignore[arg-type]
+                index = int(row["fact_order"])
+                self.calls.append(index)
+                return [_selection_package(row, index)]
+
+        provider = Provider()
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=facts,
+            similarity_fn=_semantic_similarity,
+            max_candidate_facts_per_source=8,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(provider.calls, list(range(8)))
+        self.assertEqual(result["candidate_fact_count"], 10)
+        self.assertEqual(result["processed_fact_count"], 8)
+        self.assertEqual(result["unprocessed_fact_count"], 2)
+        self.assertFalse(result["early_stop_triggered"])
+        self.assertEqual(result["original_entity_diversity"], 1)
+        self.assertEqual(result["repeated_original_entity_pair_count"], 2)
+
+    def test_source_diversity_does_not_change_scientific_pair_validity(self):
+        facts = [_selection_fact(index, "Microsoft") for index in range(3)]
+        source = _selection_source(facts, source_key="same-entity")
+        result = screen_source(
+            source,
+            candidate_provider=lambda fact: [_selection_package(dict(fact), int(fact["fact_order"]))],
+            facts=facts,
+            similarity_fn=_semantic_similarity,
+            max_candidate_facts_per_source=8,
+        )
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(len(result["selected_pairs"]), 3)
+        self.assertEqual(result["original_entity_diversity"], 1)
+
+    def test_source_selection_is_deterministic(self):
+        facts = [_selection_fact(index, original) for index, original in enumerate(["Microsoft", "Microsoft", "GitHub", "Delaware"])]
+        source = _selection_source(facts, source_key="deterministic")
+
+        def run() -> dict[str, object]:
+            return screen_source(
+                source,
+                candidate_provider=lambda fact: [_selection_package(dict(fact), int(fact["fact_order"]))],
+                facts=facts,
+                similarity_fn=_semantic_similarity,
+                max_candidate_facts_per_source=8,
+            )
+
+        first = run()
+        second = run()
+        self.assertEqual(
+            [pair["pair_id"] for pair in first["selected_pairs"]],
+            [pair["pair_id"] for pair in second["selected_pairs"]],
+        )
+
+    def test_configured_fact_budget_is_eight(self):
+        self.assertEqual(get_max_candidate_facts_per_source(load_v24_config()), 8)
+
+    def test_formal_integrity_rejects_fact_budget_drift(self):
+        row = {
+            "dataset": "edgar",
+            "source_key": "budget-drift",
+            "source_order_rank": "0",
+            "source_hash": "a" * 64,
+            "normalized_text_hash": "b" * 64,
+            "max_candidate_facts_per_source": 9,
+            "query_count": 6,
+            "selected_pairs": [{"pair_id": f"p-{index}"} for index in range(3)],
+        }
+        with self.assertRaisesRegex(ValueError, "formal_pair_count|formal_fact_budget"):
+            validate_formal_integrity([row], expected_source_count=1)
+
+    def test_eligibility_manifest_rejects_non_frozen_fact_budget(self):
+        source = {
+            "eligible": True,
+            "dataset": "edgar",
+            "source_key": "s-budget",
+            "source_order_rank": "0",
+            "source_hash": "a" * 64,
+            "normalized_text_hash": "b" * 64,
+            "selected_pairs": [{"pair_id": f"p-{i}"} for i in range(3)],
+        }
+        scan = {
+            "status": "passed",
+            "screened_source_count": 1,
+            "eligible_source_count": 1,
+            "eligible_source_rate": 1.0,
+            "candidate_pair_count": 3,
+            "candidate_package_count": 3,
+            "candidate_fact_count": 3,
+            "processed_fact_count": 3,
+            "unprocessed_fact_count": 0,
+            "contextual_role_pass_count": 3,
+            "correction_eligibility_pass_count": 3,
+            "rejection_reason_distribution": {},
+            "eligible_sources": [source],
+            "max_candidate_facts_per_source": 9,
+        }
+        config = {
+            "eligibility": {
+                "target_sources": 1,
+                "max_candidate_facts_per_source": 9,
+            },
+            "formal": {"fallback_pair_rate_maximum": 0.5},
+        }
+        manifest = build_eligibility_manifest(
+            scan,
+            dataset="edgar",
+            config=config,
+            source_pool={"source_count": 1},
+        )
+        with self.assertRaisesRegex(ValueError, "fact_budget_not_frozen"):
+            validate_eligibility_manifest(manifest)
+
+    def test_frozen_scan_rejects_budget_override_before_source_read(self):
+        config = {"eligibility": {"max_candidate_facts_per_source": 8}}
+        with patch(
+            "src.prepare.restoration_first_v24.load_v24_config",
+            return_value=config,
+        ), patch(
+            "src.prepare.restoration_first_v24.iter_frozen_source_pool",
+            side_effect=AssertionError("source_pool_must_not_be_read"),
+        ):
+            with self.assertRaisesRegex(ValueError, "frozen_scan_fact_budget_mismatch"):
+                scan_frozen_source_pool(
+                    ".",
+                    "edgar",
+                    candidate_provider=lambda _fact: [],
+                    max_candidate_facts_per_source=9,
+                )
+
+    def test_scan_reports_entity_diversity_and_processing_coverage(self):
+        source_rows = [
+            {"dataset": "edgar", "source_key": f"scan-{index}", "source_order_rank": str(index)}
+            for index in range(3)
+        ]
+        fake_results = [
+            {
+                "eligible": True,
+                "candidate_pair_count": 3,
+                "candidate_fact_count": 10,
+                "processed_fact_count": 3,
+                "unprocessed_fact_count": 7,
+                "candidate_package_count": 9,
+                "eligible_pair_count": 3,
+                "contextual_role_pass_count": 3,
+                "correction_eligibility_pass_count": 3,
+                "query_feasible_pair_count": 3,
+                "fallback_pair_count": 0,
+                "early_stop_triggered": True,
+                "original_entity_diversity": 1,
+                "rejection_reason_counts": {},
+            },
+            {
+                "eligible": True,
+                "candidate_pair_count": 3,
+                "candidate_fact_count": 10,
+                "processed_fact_count": 4,
+                "unprocessed_fact_count": 6,
+                "candidate_package_count": 12,
+                "eligible_pair_count": 3,
+                "contextual_role_pass_count": 3,
+                "correction_eligibility_pass_count": 3,
+                "query_feasible_pair_count": 3,
+                "fallback_pair_count": 1,
+                "early_stop_triggered": False,
+                "original_entity_diversity": 2,
+                "rejection_reason_counts": {},
+            },
+            {
+                "eligible": True,
+                "candidate_pair_count": 3,
+                "candidate_fact_count": 10,
+                "processed_fact_count": 4,
+                "unprocessed_fact_count": 6,
+                "candidate_package_count": 12,
+                "eligible_pair_count": 3,
+                "contextual_role_pass_count": 3,
+                "correction_eligibility_pass_count": 3,
+                "query_feasible_pair_count": 3,
+                "fallback_pair_count": 0,
+                "early_stop_triggered": True,
+                "original_entity_diversity": 3,
+                "rejection_reason_counts": {},
+            },
+        ]
+        with patch(
+            "src.prepare.restoration_first_v24.screen_source",
+            side_effect=fake_results,
+        ) as mocked:
+            result = scan_until_target(
+                source_rows,
+                candidate_provider=lambda _fact: [],
+                target_sources=3,
+                max_candidate_facts_per_source=8,
+            )
+        self.assertEqual(mocked.call_count, 3)
+        self.assertEqual(result["candidate_fact_count"], 30)
+        self.assertEqual(result["processed_fact_count"], 11)
+        self.assertEqual(result["unprocessed_fact_count"], 19)
+        self.assertEqual(result["early_stop_source_count"], 2)
+        self.assertEqual(result["entity_diversity_1_source_count"], 1)
+        self.assertEqual(result["entity_diversity_2_source_count"], 1)
+        self.assertEqual(result["entity_diversity_3_source_count"], 1)
+        self.assertEqual(result["mean_original_entity_diversity"], 2.0)
 
 
 if __name__ == "__main__":
