@@ -268,6 +268,11 @@ def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
         "never invent an identity. Do not merge a heading with a sentence, emit a fragment, "
         "put a bibliography citation inside the target entity slot, coordinate incompatible "
         "question auxiliaries, or append a reportative tail such as 'VentureWire has learned'. "
+        "When a proposition contains multiple modal clauses, prefer the fixed frame 'Is it "
+        "correct that <proposition>?' and keep every source modal inside that proposition; "
+        "never front one auxiliary and then coordinate a second auxiliary (for example, "
+        "never write 'Will ... and should ...' or 'Do ... or are ...'). Do not drop or "
+        "invent a modal while making the surface natural. "
         "After 'Is it correct that', lowercase an initial preposition such as in/on/during, "
         "or prefer a direct polar-auxiliary question. "
         "Do not add factual entities. Return one to three retrieval anchors only; anchors "
@@ -326,7 +331,11 @@ def build_correction_prompt(
         build_candidate_prompt(fact)
         + "\n\nThis is the one allowed semantic correction retry. Correct every listed "
         "validator failure without weakening or changing the source-grounded proposition. "
-        "Return three revised candidate packages in the exact same JSON schema. Do not "
+        "For modal-coordination or natural-question failures, rewrite the whole question "
+        "with the fixed 'Is it correct that <proposition>?' frame while retaining every "
+        "modal word inside the proposition; never repeat forms such as 'Will ... and should '"
+        "or 'Do ... or are ...'. Return three revised candidate packages in the exact same "
+        "JSON schema. Do not "
         "repeat a rejected surface form.\nCorrection input:\n"
         + canonical_json(fields)
     )

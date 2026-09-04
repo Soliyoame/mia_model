@@ -2959,3 +2959,13 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 需要新的独立 development-only canary attempt，重新生成 30 pairs / 60 queries，并执行 Assistant-only query-quality review；通过前不得进入 capacity sample 或任何下游正式阶段。
 
 当前唯一下一步：运行离线验证后，由主人单独授权新的 v24 development-only canary attempt；attempt5 失败 evidence 保持为历史证据，不原地重试或改标通过。
+
+### 2026-09-04：v24 development canary attempt6 结构门禁失败（当前）
+
+- [x] 新独立目录 `artifacts/v24/development/query_quality_canary_r3_structural_attempt6/` 完成 30 个 logical cells，自动 hard gates 通过 `26/30`，`fallback_pair_count=0`，终态=`failed_hard_gates`；失败 artifact 原样保留。
+- [x] attempt6 使用 `gpt-5.6-luna`，logical API calls=`32`、physical attempts=`79`、transport retries=`47`；网络持续重连有效。未读取 membership，Retriever/victim/AUC/GPU/formal 调用均为 `0`。
+- [x] 四个失败项已定位：Enron index `4` 的多 modal 协调不自然，Enron index `5` 的残缺时间事实，PubMed index `1` 的标题-句子粘连，PubMed index `9` 的 bibliography citation 实体槽。已在既有 v24 prompt 与 correction retry 中补充多 modal 固定 frame 约束；定向 unittest=`68/68 OK`，AST/diff check 通过。
+- [x] attempt6 hashes：summary=`7b81d4b93f15657d9f87778ed4bab1e419b5465b6fbb7c512535f22603482192`，results=`29b3b610c49fd75a3cee1c50e9d7912174bc5e7506768978a683534020e02563`。NLI neutral/contradiction diagnostic 口径未变。
+- [ ] 新 canary 尚未获授权；在新的独立 attempt 达到自动 `30/30` 且完成 Assistant-only `60/60` query-quality review 前，不得运行 EDGAR capacity sample、完整 eligibility scan、membership split、Retriever、victim 或 formal evaluation。
+
+当前唯一下一步：先提交现有 prompt/test 修复并等待主人单独授权新的 development-only Luna canary；不得复用 attempt6 输出目录，也不得以失败样本替换或降低 hard gates。

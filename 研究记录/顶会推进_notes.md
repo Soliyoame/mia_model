@@ -3393,3 +3393,13 @@
 - [x] 未调用真实 API、Retriever、victim、GPU、membership、AUC 或正式实验；attempt5 失败 evidence 与 hash 原样保留。
 
 当前唯一下一步：在独立的新 v24 development-only canary attempt 上重新生成并执行 Assistant-only query-quality review；新 attempt 达到既定质量条件前，继续禁止 capacity、Retriever、victim 与 formal evaluation。
+
+### 2026-09-04：v24 development canary attempt6 结构门禁失败记录（superseding）
+
+- [x] 新独立输出目录 `artifacts/v24/development/query_quality_canary_r3_structural_attempt6/` 已完成 30 个 logical cells；`passed_pair_count=26/30`、`fallback_pair_count=0`，状态为 `failed_hard_gates`。原始 `canary_results.jsonl` 与 `canary_summary.json` 保留，不覆盖此前 attempt。
+- [x] provider model=`gpt-5.6-luna`；logical API calls=`32`，physical attempts=`79`，transport retries=`47`。持续重连链路生效；失败不是 transport 终态。Retriever、victim、membership、AUC、GPU、formal 调用均为 `0`。
+- [x] 失败 pair 为 Enron index `4`、`5`，PubMed index `1`、`9`。对应既有结构问题分别是 modal coordination（生成 `Will ... and should ...` 类不自然问句）、不完整时间残句、标题与句子粘连、实体槽包含 bibliography citation；没有放宽任何 scientific hard gate。
+- [x] attempt6 summary hash=`7b81d4b93f15657d9f87778ed4bab1e419b5465b6fbb7c512535f22603482192`，results hash=`29b3b610c49fd75a3cee1c50e9d7912174bc5e7506768978a683534020e02563`。`canonical_pair_nli_relation=neutral` 仍可通过，NLI contradiction 不是门禁。
+- [x] 已在现有 `src/prepare/restoration_first_v24.py` 增补多 modal 问句约束及 semantic correction retry 的同等约束，并在现有 v24 unittest 增加 prompt 回归断言；未新增 scientific gate、successor protocol、governance、ledger、authorization 或 identity 机制。
+- [x] 定向 v24 unittest=`68/68 OK`；内存 AST parse 与 `git diff --check` 通过。普通 `py_compile` 仅受 Windows `__pycache__` 权限影响，不能据此判代码失败。
+- [ ] attempt6 未通过 30/30，因此不能进入 capacity sample；attempt5 的 Assistant-only review 失败证据和 attempt6 失败证据均不得改标为通过。新的真实 Luna attempt 需要主人单独明确授权，并使用新的独立输出目录；在新 attempt 自动 hard gates 与 Assistant-only query review 达标前，继续禁止 capacity、Retriever、victim 和 formal evaluation。
