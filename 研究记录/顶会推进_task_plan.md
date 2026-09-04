@@ -2924,3 +2924,38 @@ PubMed resume 修复（2026-08-05）：
 - [x] 保持 entity diversity 为 selection preference + diagnostic，未改变 hard gates、candidate ranking、PVS、split、query budget、governance 或 v23 frozen artifacts。
 - [x] 定向 v24 unittest=`56/56 OK`；未执行 API、Retriever、victim、GPU 或 formal 运行。
 - [x] 修正 offline `estimate_only` coverage 口径：无 provider/Luna 调用时 `processed_fact_count=0`，完整 candidate facts 计入 `unprocessed_fact_count`；预算内数量只用于 estimate-only eligibility signal。
+
+### 2026-09-04：v24 capacity estimate 口径与断点续跑修复（当前）
+
+- [x] 三数据集 30-source offline raw-fact estimate 已完成：EDGAR `30/30`、Enron `28/30`、PubMed `30/30` 满足“前 8 个 facts 至少有 3 个 raw candidate facts”；Luna/API、Retriever、victim、membership、AUC=`0`。
+- [x] 将上述结果限定为必要条件 diagnostic。旧 r1 JSON 中的 `observed_eligible_source_rate` / `projected_eligible_source_count` 命名已 superseded，禁止作为 full-gate eligibility 或 2250 capacity 证据。
+- [x] offline 新输出只填 raw-fact feasibility 字段，正式 eligibility 观察/投影字段为 `null`；Luna sample 才允许填 `observed_eligible_source_count/rate` 与 projection。
+- [x] `run-capacity-check --output-dir <attempt>` 已接线；offline/Luna 文件分离，默认不覆盖已有 attempt。Luna 模式按 source 追加 checkpoint，`--resume` 只续跑同 config、同 source prefix、同 budget=8 的未完成 source，完成 summary 复用前复核 checkpoint hash。
+- [x] 保持 transport failure 持续重连；终端显示逐 source progress。没有改变 hard gates、candidate ranking、PVS、split、query budget、membership-blind boundary 或 v23 frozen 文件。
+- [x] v24 定向 unittest=`59/59 OK`，AST 和 diff check 通过；ruff 在当前 Conda 环境不可用，未安装新依赖。修复过程未执行真实 API、GPU、Retriever、victim 或 formal 实验。
+- [ ] attempt5 仍只有自动门禁 `30/30` 证据；完成并记录 60/60 人工 query-quality review 后，才进入真实 capacity sample。
+- [ ] 真实 Luna capacity sample 顺序：先 EDGAR 30 source（新独立 output dir、显式 API 授权），解释后再分别决定 Enron/PubMed。sample 不替代完整 deterministic scan。
+
+当前唯一下一步：完成人工检查或由主人确认已有 60/60 review 记录；之后单独授权 EDGAR capacity sample。当前禁止完整 pre-split scan、membership split、Retriever、victim 和 formal evaluation。
+
+### 2026-09-04：v24 attempt5 Assistant-only query-quality review（当前）
+
+- [x] 主人将 pending 的人工 query review 改为 Assistant-only；审核口径固定为 `assistant_only_query_quality_review`，禁止称为人工审核、独立盲审、人类标注或一致性证据。
+- [x] 已逐条审核 attempt5 的 60 条 query：通过 `27/60`、失败 `33/60`，完整通过 pair=`13/30`；EDGAR/Enron/PubMed 分别为 `4/20`、`8/20`、`15/20` query 通过。
+- [x] 失败维度：semantic fidelity=`4`、naturalness=`12`、self-containedness=`29`、stealth=`0`、entity binding=`0`、polar question=`2`。逐条 reason 已写入 attempt5 普通诊断 artifact；未因复制率或 anchor warning 拒绝 query。
+- [x] `assistant_query_quality_review.jsonl` SHA-256=`76b1a5d6538edf5e66e379073d4de313938d8faf65eac6fe4c04b452f2fcf54e`；review summary 状态=`failed_assistant_query_quality_review`、`human_review_performed=false`、`capacity_sample_allowed=false`。
+- [x] 审核过程外部 API、Retriever、victim、GPU、membership、AUC 调用均为 `0`；没有修改 v23 frozen 文件，也没有新增 protocol、governance、ledger、authorization 或 identity 机制。
+- [ ] 当前 attempt5 不满足 60/60 query-quality 条件，真实 Luna capacity sample 继续禁止。
+
+当前唯一下一步：在现有 v24 内最小修复 proposition 完整性以及 query 的 unresolved-reference/naturalness 覆盖，另开 development-only canary attempt；只有自动 hard gates 与 Assistant-only `60/60` 同时通过后，才可单独授权 EDGAR 30-source Luna capacity sample。
+
+### 2026-09-04：v24 attempt5 query 结构门禁覆盖修复（superseding）
+
+- [x] 完成既有 self-contained/natural-polar gate 的最小实现补齐：Prompt 约束、fact quality、canonical proposition quality、query surface validation 均在现有 `src/prepare/restoration_first_v24.py` 内完成；未新增 scientific gate 或 successor protocol。
+- [x] provider 前拒绝高置信残句/标题粘连/引文实体槽，避免无效 fact 消耗 Luna processing；query validator 覆盖 first-person/document-bound reference、局部未解析 `the Company/the following/the period`、`herein`、错误 modal/do coordination、reportative tail 与 `Is it correct that In/...`。
+- [x] 局部定义的引号第一人称别名、普通小写 `the company`、已解析 `their` 保持兼容；first-person claim 机械改成裸 `the company` 仍拒绝，显式 `the reporting company` 可通过。
+- [x] 定向 unittest=`67/67 OK`；attempt5 旧 Assistant-only 失败条目只读 replay 捕获=`33/33`，未改写 attempt5 artifact；1 个含 bibliography citation 的旧通过 query 仍按 fact-quality 规则拒绝。
+- [x] AST parse 与 `git diff --check` 通过；本次没有 API、Retriever、victim、GPU、membership、AUC 或 formal 调用，v23 frozen 文件未触碰。
+- [ ] 需要新的独立 development-only canary attempt，重新生成 30 pairs / 60 queries，并执行 Assistant-only query-quality review；通过前不得进入 capacity sample 或任何下游正式阶段。
+
+当前唯一下一步：运行离线验证后，由主人单独授权新的 v24 development-only canary attempt；attempt5 失败 evidence 保持为历史证据，不原地重试或改标通过。

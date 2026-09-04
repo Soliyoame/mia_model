@@ -3357,3 +3357,39 @@
 - [x] entity diversity 仍然只是 source-level selection preference 与 diagnostic；不改变 pair validity、source eligibility threshold、membership split、PVS 或 query budget。未新增 scientific hard gate、successor protocol、governance、ledger、authorization 或 identity 机制。
 - [x] v24 定向 unittest=`56/56 OK`，包含 source-level budget、manifest/formal budget drift 拒绝和 source selection 回归；v23 frozen 文件与 artifact 未修改，API/Retriever/victim/GPU/formal 调用仍为 `0`。
 - [x] 修正 offline `estimate_only` coverage 口径：该分支不调用 candidate provider/Luna，因此 `processed_fact_count=0`、`unprocessed_fact_count=candidate_fact_count`；预算内可处理数量仅用于 raw-fact eligibility 估计，不冒充实际 Luna processing。
+
+### 2026-09-04：v24 capacity estimate 口径与断点续跑修复（superseding）
+
+- [x] 主人运行三数据集 30-source offline estimate：budget=8 下 raw-fact 必要条件为 EDGAR `30/30`、Enron `28/30`、PubMed `30/30`；provider/Luna、Retriever、victim、membership、AUC 调用均为 `0`。该结果只说明前 8 个 deterministic candidate facts 中是否至少存在 3 个 raw facts，不能证明通过完整 scientific hard gates 后存在 3 个 eligible pairs。
+- [x] 旧 `artifacts/v24/development/capacity_check_r1/{dataset}.json` 原样保留为历史 `estimate_only` 诊断；其中 `observed_eligible_source_rate` 与 `projected_eligible_source_count` 字段名会误导为正式 eligibility projection，现明确 superseded，不用于 capacity 决策或论文报告。
+- [x] 53 号 runner 的 offline 输出改为 `raw_fact_budget_feasible_source_count/rate` 与 `projected_raw_fact_budget_feasible_source_count`；`observed_eligible_source_count/rate` 和 `projected_eligible_source_count` 在未运行 Luna/full gates 时固定为 `null`，顶层 `status=completed` 只表示命令完成。
+- [x] capacity 的 `--output-dir` 现实际控制输出位置，并按 `offline_estimate` / `luna_sample` 使用不同文件名；已有 summary/checkpoint 默认拒绝覆盖，只有同一 frozen run fingerprint 的显式 `--resume` 可复用。
+- [x] Luna capacity sample 每完成一个 source 即追加 source-level JSONL checkpoint；resume 校验 dataset、config、budget=8、source 顺序与 source/hash，跳过已完成 source并累计 logical/physical/retry 计数。完成后 checkpoint hash 发生漂移则 fail closed。transport 层原有持续重连策略不变，没有新增 scientific gate、协议世代、authorization、ledger 或多层 identity。
+- [x] Luna sample 的 `capacity_status` 仅报告 `sample_projection_at_or_above_target` 或 `sample_projection_below_target`，仍是 development diagnostic，不替代相同 budget=8 的完整 deterministic source-pool scan。
+- [x] 新增 offline 口径、独立 attempt、隐式覆盖拒绝、中断/resume、累计调用计数与 checkpoint hash 漂移 mock 回归；v24 定向 unittest=`59/59 OK`，AST 与 `git diff --check` 通过。当前环境未安装 ruff；没有为此安装依赖。修复阶段 API/Retriever/victim/GPU/formal calls=`0`。
+- [ ] attempt5 的自动 hard-gate `30/30` 已通过，但方案要求的 60/60 人工 query-quality review 尚无可核验完成记录，不得把自动检查表述为人工复核。
+
+当前唯一下一步：先完成/确认 attempt5 的 60/60 人工 query-quality review；随后单独授权 EDGAR 30-source Luna capacity sample，并使用新的独立 `--output-dir`。EDGAR 完成并解释 sample signal 后再分别决定 Enron/PubMed；不得直接启动完整 pre-split scan、Retriever、victim 或 formal evaluation。
+
+### 2026-09-04：v24 attempt5 Assistant-only query-quality review（superseding）
+
+- [x] 按主人最新决定，将尚未执行的 60/60 人工 query-quality review 改为 `assistant_only_query_quality_review`；该变更只降低 review 证据等级，不改变已有 scientific hard gates、canary 输入、模型、Prompt、BGE scorer、pair selection、PVS、split 或 query budget。
+- [x] Assistant 对 attempt5 的 30 pairs / 60 条 Q+/Q- 逐条检查 semantic fidelity、naturalness、self-containedness、stealth、entity binding 和 polar-question validity；高 literal copying 与 anchor diagnostic 未作为拒绝依据。
+- [x] 实际结果为 `27/60` query 通过、`33/60` 失败，完整通过的 pair 为 `13/30`。分数据集 query 通过数为 EDGAR `4/20`、Enron `8/20`、PubMed `15/20`。
+- [x] 失败维度计数为 semantic fidelity=`4`、naturalness=`12`、self-containedness=`29`、stealth=`0`、entity binding=`0`、polar question=`2`；单条 query 可同时命中多个失败维度。主要问题是未解析的 `herein`、`the Company`、`we/our/I/my`、缺失列表/期限先行词、残句及错误问句协调。
+- [x] 逐条结果保存为 `assistant_query_quality_review.jsonl`，SHA-256=`76b1a5d6538edf5e66e379073d4de313938d8faf65eac6fe4c04b452f2fcf54e`；汇总状态=`failed_assistant_query_quality_review`。本审核没有调用外部 API、Retriever、victim、GPU、membership 或 AUC。
+- [x] 必须准确表述为 Assistant-only 开发审查：`human_review_performed=false`、`human_validation_claim_allowed=false`，不存在独立人工盲审、reviewer agreement 或 Cohen's kappa 证据。
+- [ ] attempt5 自动 hard gates 的 `30/30` 不能覆盖上述 Assistant 质量失败；在新的 development-only 修复和独立 canary attempt 达到 Assistant `60/60` 前，EDGAR/Enron/PubMed Luna capacity sample 均继续阻断。
+
+当前唯一下一步：最小修复 v24 candidate-fact/proposition 完整性与 query self-contained/naturalness validator，并在新的独立 development canary attempt 上重新生成和执行 Assistant-only 60-query review；不得把本次失败标签改为通过，也不得启动 capacity、Retriever、victim 或 formal evaluation。
+
+### 2026-09-04：v24 attempt5 query 结构门禁覆盖修复（superseding）
+
+- [x] 按 attempt5 Assistant-only review 暴露的既有 self-contained/natural-polar 失败，完成最小实现修复；没有新增 scientific hard gate、successor protocol、governance、ledger、authorization 或 identity 机制。
+- [x] `build_candidate_prompt()` 现在明确禁止未解析第一人称/文档指代（`we/our/I/my/herein/the Company/the following/句首 the period`）、标题与句子粘连、残句、实体槽引文、错误助动词协调和 reportative tail；要求使用 source-grounded role description，不能把 first-person 机械改成裸 `the company`。
+- [x] 增加 fact、canonical proposition 与 query surface 的质量检查，并接入现有 adapter/evaluate/query hard-gate 路径。无效 fact 在 provider/Luna 前拒绝，`processed_fact_count` 不增加；canonical/query 失败继续使用既有 semantic correction/fallback 分类。
+- [x] 规则避免误伤：局部已定义的引号别名（例如 `"we"`/`"our"`）允许通过；普通小写 `the company` 与局部已解析 `their` 继续通过。NLI neutral/contradiction diagnostic、BGE semantic scorer、PVS、split、query budget 与 v23 frozen 文件均未改变。
+- [x] v24 定向 unittest=`67/67 OK`；只读 replay 显示 attempt5 Assistant-only 的 `33` 条失败全部能被当前 fact/canonical/query gate 捕获。另有 `1` 个旧 query 虽被 Assistant 判通过，但其原始实体槽含 bibliography citation，按现有 fact-quality 规则仍应拒绝；该 replay 不替代新的 development canary。
+- [x] 未调用真实 API、Retriever、victim、GPU、membership、AUC 或正式实验；attempt5 失败 evidence 与 hash 原样保留。
+
+当前唯一下一步：在独立的新 v24 development-only canary attempt 上重新生成并执行 Assistant-only query-quality review；新 attempt 达到既定质量条件前，继续禁止 capacity、Retriever、victim 与 formal evaluation。

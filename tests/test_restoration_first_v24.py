@@ -30,6 +30,7 @@ from src.prepare.restoration_first_v24 import (
     validate_query_semantics,
     _query_manifest_hash,
     _integrity_row_hash,
+    _canonical_proposition_quality_reasons,
     stealth_diagnostics,
 )
 from src.utils.hash import sha256_obj
@@ -126,6 +127,9 @@ class V24EligibilityTests(unittest.TestCase):
         self.assertIn("Preserve every factual number", prompt)
         self.assertIn("Do not introduce or remove a modal", prompt)
         self.assertIn("never use unresolved pronouns", prompt)
+        self.assertIn("never substitute the bare phrase 'the company'", prompt)
+        self.assertIn("Do not merge a heading with a sentence", prompt)
+        self.assertIn("bibliography citation inside the target entity slot", prompt)
 
     def test_correction_prompt_contains_only_fixed_feedback_contract(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")
@@ -483,6 +487,61 @@ class V24EligibilityTests(unittest.TestCase):
         start, end = fact["original_span"]
         self.assertEqual(source["full_text"][start:end], "Delaware")
 
+    def test_adapter_rejects_heading_sentence_glue_and_citation_entity_slots(self):
+        from src.prepare.restoration_first_v24 import enumerate_candidate_facts
+
+        heading_glue = {
+            "dataset": "pubmed",
+            "source_key": "heading-glue",
+            "source_order_rank": "0",
+            "full_text": "Breed Some animals were assigned to Delaware.",
+        }
+        self.assertEqual(enumerate_candidate_facts(heading_glue), [])
+
+        citation_slot = {
+            "dataset": "pubmed",
+            "source_key": "citation-slot",
+            "source_order_rank": "1",
+            "full_text": (
+                "Bilateral plating corrected nonunion after HTO [ 16 ], whereas "
+                "mechanical stability was not investigated."
+            ),
+        }
+        facts = enumerate_candidate_facts(citation_slot)
+        self.assertFalse(any("[" in str(fact["original_entity"]) for fact in facts))
+
+    def test_invalid_fact_is_rejected_before_provider_processing(self):
+        claim = "Citizens unable to attend the Nov."
+        fact = _fact(claim, "Citizens")
+        source = {
+            "dataset": "enron",
+            "source_key": "fragment",
+            "source_order_rank": "0",
+            "full_text": claim,
+        }
+
+        def provider(_fact: object) -> list[dict[str, object]]:
+            raise AssertionError("invalid_fact_must_not_reach_provider")
+
+        result = screen_source(
+            source,
+            candidate_provider=provider,
+            facts=[fact],
+            minimum_pairs=1,
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["candidate_fact_count"], 1)
+        self.assertEqual(result["processed_fact_count"], 0)
+        self.assertEqual(result["unprocessed_fact_count"], 1)
+        self.assertEqual(result["candidate_package_count"], 0)
+        self.assertEqual(
+            result["rejection_reason_counts"][
+                "candidate_fact_incomplete_temporal_reference"
+            ],
+            1,
+        )
+
     def test_formal_integrity_rejects_pair_drift(self):
         pairs = []
         for index in range(3):
@@ -673,6 +732,193 @@ class V24EligibilityTests(unittest.TestCase):
         self.assertNotIn("q_minus_not_polar_question", reasons)
         self.assertNotIn("q_plus_new_factual_entity", reasons)
         self.assertNotIn("q_minus_new_factual_entity", reasons)
+
+    def test_query_rejects_first_person_and_document_bound_references(self):
+        cases = (
+            ("Is our office incorporated in Delaware?", "q_plus_unresolved_reference"),
+            ("Is the policy set forth herein for Delaware?", "q_plus_unresolved_reference"),
+            ("Does the Company operate in Delaware?", "q_plus_unresolved_reference"),
+            ("Do the following rules apply in Delaware?", "q_plus_unresolved_reference"),
+            ("Was the period extended in Delaware?", "q_plus_unresolved_reference"),
+        )
+        for q_plus, expected in cases:
+            with self.subTest(q_plus=q_plus):
+                reasons, _ = validate_query_semantics(
+                    true_claim="The organization operates in Delaware.",
+                    original_entity="Delaware",
+                    replacement_entity="Nevada",
+                    canonical_true="The organization operates in Delaware.",
+                    canonical_counterfactual="The organization operates in Nevada.",
+                    q_plus=q_plus,
+                    q_minus="Does the organization operate in Nevada?",
+                    similarity_fn=_semantic_similarity,
+                )
+                self.assertIn(expected, reasons)
+
+    def test_locally_resolved_their_and_plain_lowercase_company_remain_valid(self):
+        reasons, _ = validate_query_semantics(
+            true_claim="The companies recorded their results in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="The companies recorded their results in Delaware.",
+            canonical_counterfactual="The companies recorded their results in Nevada.",
+            q_plus="Did the companies record their results in Delaware?",
+            q_minus="Did the companies record their results in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertNotIn("q_plus_unresolved_reference", reasons)
+        self.assertNotIn("q_minus_unresolved_reference", reasons)
+
+        company_reasons, _ = validate_query_semantics(
+            true_claim="The company is incorporated in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="The company is incorporated in Delaware.",
+            canonical_counterfactual="The company is incorporated in Nevada.",
+            q_plus="Is the company incorporated in Delaware?",
+            q_minus="Is the company incorporated in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertNotIn("q_plus_unresolved_reference", company_reasons)
+        self.assertNotIn("q_minus_unresolved_reference", company_reasons)
+
+    def test_first_person_claim_requires_explicit_source_grounded_role(self):
+        fact = _fact("We are incorporated in Delaware.", "Delaware")
+        bare = _package(
+            "Nevada",
+            "The company is incorporated in {ENTITY}.",
+            "Is the company incorporated in Delaware?",
+            "Is the company incorporated in Nevada?",
+        )
+        rejected = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            bare,
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("canonical_unresolved_reference", rejected["rejection_reasons"])
+
+        explicit = _package(
+            "Nevada",
+            "The reporting company is incorporated in {ENTITY}.",
+            "Is the reporting company incorporated in Delaware?",
+            "Is the reporting company incorporated in Nevada?",
+        )
+        explicit["contextual_role_compatibility"] = {
+            "compatible": True,
+            "plausibility": "strong",
+        }
+        explicit["correction_eligibility"] = {
+            "correction_eligible": True,
+            "slot_determinacy": "strong",
+            "open_world_ambiguity": "low",
+        }
+        accepted = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            explicit,
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertTrue(accepted["accepted"], accepted)
+
+    def test_locally_defined_first_person_aliases_are_not_unresolved(self):
+        claim = (
+            'Vulcan Materials Company (the "Company," "we," "our"), a Delaware '
+            "corporation, supplies construction aggregates."
+        )
+        fact = _fact(claim, "Delaware")
+        package = _package(
+            "Nevada",
+            'Vulcan Materials Company (the "Company," "we," "our"), a {ENTITY} '
+            "corporation, supplies construction aggregates.",
+            "Is Vulcan Materials Company, a Delaware corporation, a supplier of "
+            "construction aggregates?",
+            "Is Vulcan Materials Company, a Nevada corporation, a supplier of "
+            "construction aggregates?",
+        )
+        package["contextual_role_compatibility"] = {
+            "compatible": True,
+            "plausibility": "strong",
+        }
+        package["correction_eligibility"] = {
+            "correction_eligible": True,
+            "slot_determinacy": "strong",
+            "open_world_ambiguity": "low",
+        }
+        result = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertTrue(result["accepted"], result)
+
+    def test_canonical_document_reference_is_reconstruction_failure(self):
+        fact = _fact("The shares are adjusted under the agreement in Delaware.", "Delaware")
+        package = _package(
+            "Nevada",
+            "The shares are adjusted as set forth herein in {ENTITY}.",
+            "Are the shares adjusted as set forth herein in Delaware?",
+            "Are the shares adjusted as set forth herein in Nevada?",
+        )
+        result = evaluate_candidate(
+            fact,
+            fact["true_claim"],
+            package,
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertFalse(result["accepted"])
+        self.assertIn("canonical_unresolved_reference", result["rejection_reasons"])
+
+    def test_canonical_reference_check_allows_local_aliases_and_complementizer(self):
+        locally_defined = (
+            'Vulcan Materials Company (the "Company," "we," "our") is incorporated '
+            "in Delaware."
+        )
+        self.assertEqual(
+            _canonical_proposition_quality_reasons(locally_defined, locally_defined),
+            [],
+        )
+        complementizer = "The record states that Alice is designated in Delaware."
+        self.assertNotIn(
+            "canonical_unresolved_reference",
+            _canonical_proposition_quality_reasons(complementizer, complementizer),
+        )
+
+    def test_query_rejects_observed_malformed_surface_patterns(self):
+        cases = (
+            "Will Alice work in Delaware and should be able to present?",
+            "Do investors disfavor Delaware or are unwilling to invest?",
+            "Did the company acquire Delaware, VentureWire has learned?",
+            "Is it correct that In December the company operated in Delaware?",
+            "Is it correct that citizens unable to attend the Nov.?",
+            "Did Breed Some animals originate in Delaware?",
+        )
+        for q_plus in cases:
+            with self.subTest(q_plus=q_plus):
+                reasons, _ = validate_query_semantics(
+                    true_claim="The company operated in Delaware.",
+                    original_entity="Delaware",
+                    replacement_entity="Nevada",
+                    canonical_true="The company operated in Delaware.",
+                    canonical_counterfactual="The company operated in Nevada.",
+                    q_plus=q_plus,
+                    q_minus="Did the company operate in Nevada?",
+                    similarity_fn=_semantic_similarity,
+                )
+                self.assertIn("q_plus_not_natural_question", reasons)
+        fragment_reasons, _ = validate_query_semantics(
+            true_claim="Citizens were unable to attend in Delaware.",
+            original_entity="Delaware",
+            replacement_entity="Nevada",
+            canonical_true="Citizens were unable to attend in Delaware.",
+            canonical_counterfactual="Citizens were unable to attend in Nevada.",
+            q_plus="Is it correct that citizens unable to attend the Nov.?",
+            q_minus="Were citizens unable to attend in Nevada?",
+            similarity_fn=_semantic_similarity,
+        )
+        self.assertIn("q_plus_not_polar_question", fragment_reasons)
 
     def test_semantic_correction_retry_runs_once_and_preserves_evidence(self):
         fact = _fact("The company is incorporated in Delaware.", "Delaware")

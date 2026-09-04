@@ -54,8 +54,51 @@ FORBIDDEN_INPUT_KEYS = frozenset(
 )
 UNRESOLVED_REFERENCE_RE = re.compile(
     r"\b(?:this|that|these|those|here|there|above|below|aforementioned|former|latter|"
-    r"he|she|it|they)\b",
+    r"he|she|it|they|we|us|our|ours|ourselves|i|me|my|mine|myself|"
+    r"theirs|themselves|herein|therein|thereof|thereafter)\b",
     re.IGNORECASE,
+)
+PROPOSITION_REFERENCE_RE = re.compile(
+    r"\b(?:above|below|aforementioned|former|latter|we|us|our|ours|ourselves|i|"
+    r"me|my|mine|myself|herein|therein|thereof|thereafter)\b",
+    re.IGNORECASE,
+)
+GENERIC_DOCUMENT_REFERENCE_RE = re.compile(
+    r"\b(?:[Tt]he\s+Company|[Tt]he\s+following)\b|^[Tt]he\s+period\b"
+)
+INCOMPLETE_TEMPORAL_REFERENCE_RE = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.\s*$",
+    re.IGNORECASE,
+)
+HEADING_SENTENCE_GLUE_RE = re.compile(
+    r"\b(?:Breed|Genes|Study|Methods|Results|Introduction|Discussion|Background)\s+"
+    r"(?:Some|The|A|An|This|These)\b"
+)
+UNDEFINED_ACRONYM_CITATION_RE = re.compile(r"\b([A-Z]{2,})\b\s*\[\s*\d")
+FIRST_PERSON_REFERENCE_RE = re.compile(
+    r"\b(?:we|us|our|ours|ourselves|i|me|my|mine|myself)\b", re.IGNORECASE
+)
+BARE_COMPANY_REFERENCE_RE = re.compile(r"\bthe\s+company\b", re.IGNORECASE)
+QUOTED_FIRST_PERSON_ALIAS_RE = re.compile(
+    r"[\"'\u2018\u2019\u201c\u201d]\s*(?:we|us|our|ours|i|me|my|mine)\s*,?\s*"
+    r"[\"'\u2018\u2019\u201c\u201d]",
+    re.IGNORECASE,
+)
+INVALID_MODAL_COORDINATION_RE = re.compile(
+    r"\b(?:will|would|shall|should|can|could|may|might|must)\s+[^?]*\band\s+"
+    r"(?:will|would|shall|should|can|could|may|might|must)\s+"
+    r"(?:be|have|has|do|does|receive|remain|continue|appear)\b",
+    re.IGNORECASE,
+)
+INVALID_DO_COORDINATION_RE = re.compile(
+    r"\bdo\s+[^?]*\bor\s+are\s+\w+", re.IGNORECASE
+)
+MALFORMED_REPORTATIVE_TAIL_RE = re.compile(
+    r",\s*[A-Z][^,?]{0,80}\b(?:has|have|had)\s+(?:learned|reported|found)\s*$",
+    re.IGNORECASE,
+)
+EMBEDDED_CLAUSE_CAPITALIZATION_RE = re.compile(
+    r"^Is\s+it\s+correct\s+that\s+(?:In|On|At|During|Before|After)\b"
 )
 QUESTION_START_RE = re.compile(
     r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|will|would|should|"
@@ -217,7 +260,16 @@ def build_candidate_prompt(fact: Mapping[str, Any]) -> str:
         "would). Do not introduce or remove a modal merely to form a question. Start each "
         "question with a polar auxiliary, mention its target entity exactly once, and never "
         "use unresolved pronouns or deictic phrases such as this/that/these/those/he/she/"
-        "it/they; the fixed phrase 'Is it correct that' is the only permitted expletive. "
+        "it/they/I/we/my/our or document-bound wording such as herein, the Company, the "
+        "following, or an antecedent-free the period; the fixed phrase 'Is it correct that' "
+        "is the only permitted expletive. When the input uses first-person or document-bound "
+        "references, replace them only with a source-grounded role description such as the "
+        "reporting company or the sender; never substitute the bare phrase 'the company' and "
+        "never invent an identity. Do not merge a heading with a sentence, emit a fragment, "
+        "put a bibliography citation inside the target entity slot, coordinate incompatible "
+        "question auxiliaries, or append a reportative tail such as 'VentureWire has learned'. "
+        "After 'Is it correct that', lowercase an initial preposition such as in/on/during, "
+        "or prefer a direct polar-auxiliary question. "
         "Do not add factual entities. Return one to three retrieval anchors only; anchors "
         "are diagnostics and must not be appended mechanically to a question. "
         "Return JSON only with this shape:\n"
@@ -408,6 +460,48 @@ def _candidate_spans(sentence: str, extractor: EntityExtractor) -> list[dict[str
     return candidates
 
 
+def _candidate_fact_quality_reasons(fact: Mapping[str, Any]) -> list[str]:
+    """检查 adapter 输入是否满足既有完整命题与合法实体槽要求。"""
+
+    claim = str(fact.get("true_claim") or "").strip()
+    original = str(fact.get("original_entity") or "").strip()
+    reasons: list[str] = []
+    if INCOMPLETE_TEMPORAL_REFERENCE_RE.search(claim):
+        reasons.append("candidate_fact_incomplete_temporal_reference")
+    if HEADING_SENTENCE_GLUE_RE.search(claim):
+        reasons.append("candidate_fact_heading_sentence_glue")
+    if CITATION_RE.search(original) or UNDEFINED_ACRONYM_CITATION_RE.search(original):
+        reasons.append("candidate_fact_entity_contains_citation")
+    return sorted(set(reasons))
+
+
+def _canonical_proposition_quality_reasons(
+    canonical: str,
+    true_claim: str,
+) -> list[str]:
+    """检查 canonical proposition 是否完整、自包含且没有文档外指代。"""
+
+    proposition = str(canonical or "").strip()
+    reference_text = QUOTED_FIRST_PERSON_ALIAS_RE.sub("", proposition)
+    reasons: list[str] = []
+    if PROPOSITION_REFERENCE_RE.search(reference_text):
+        reasons.append("canonical_unresolved_reference")
+    if GENERIC_DOCUMENT_REFERENCE_RE.search(proposition):
+        reasons.append("canonical_unresolved_reference")
+    if (
+        FIRST_PERSON_REFERENCE_RE.search(str(true_claim or ""))
+        and BARE_COMPANY_REFERENCE_RE.search(proposition)
+    ):
+        reasons.append("canonical_unresolved_reference")
+    if INCOMPLETE_TEMPORAL_REFERENCE_RE.search(proposition):
+        reasons.append("canonical_incomplete_temporal_reference")
+    if HEADING_SENTENCE_GLUE_RE.search(proposition):
+        reasons.append("canonical_heading_sentence_glue")
+    if not content_tokens(proposition):
+        reasons.append("canonical_incomplete_proposition")
+    return sorted(set(reasons))
+
+
 def _reject_forbidden(value: Any, *, path: str = "root") -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
@@ -487,6 +581,8 @@ def enumerate_candidate_facts(source: Mapping[str, Any]) -> list[dict[str, Any]]
     facts: list[dict[str, Any]] = []
     for chunk_rank, proposition in _iter_source_propositions(source):
         sentence = proposition["text"]
+        if _candidate_fact_quality_reasons({"true_claim": sentence}):
+            continue
         source_start = int(proposition.get("source_offset", 0)) + int(proposition["start"])
         if source_start < 0 or text[source_start:source_start + len(sentence)] != sentence:
             source_start = text.find(sentence)
@@ -522,6 +618,8 @@ def enumerate_candidate_facts(source: Mapping[str, Any]) -> list[dict[str, Any]]
                 "chunk_rank": chunk_rank,
                 "fact_order": len(facts),
             }
+            if _candidate_fact_quality_reasons(fact):
+                continue
             facts.append(fact)
     facts.sort(
         key=lambda row: (
@@ -765,6 +863,59 @@ def _has_unresolved_reference(query: str) -> bool:
     return UNRESOLVED_REFERENCE_RE.search(normalized) is not None
 
 
+def _query_proposition_body(query: str) -> str:
+    """Return the proposition-like body used for narrow reference checks."""
+
+    stripped = str(query or "").strip().rstrip("?").strip()
+    fixed_frame = re.sub(
+        r"^is\s+it\s+correct\s+that\b", "", stripped, flags=re.IGNORECASE
+    ).strip()
+    if fixed_frame != stripped:
+        return fixed_frame
+    return re.sub(
+        r"^(?:is|are|was|were|do|does|did|has|have|had|can|could|will|would|"
+        r"should|may|might|must|shall)\b\s*",
+        "",
+        stripped,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _query_surface_reasons(query: str, true_claim: str) -> list[str]:
+    """Map concrete surface defects to the existing query hard-gate categories."""
+
+    stripped = str(query or "").strip()
+    without_terminal_mark = stripped[:-1].rstrip() if stripped.endswith("?") else stripped
+    proposition_body = _query_proposition_body(stripped)
+    reasons: list[str] = []
+    if _has_unresolved_reference(stripped):
+        reasons.append("unresolved_reference")
+    if (
+        GENERIC_DOCUMENT_REFERENCE_RE.search(stripped)
+        or GENERIC_DOCUMENT_REFERENCE_RE.search(proposition_body)
+        or UNDEFINED_ACRONYM_CITATION_RE.search(stripped)
+    ):
+        reasons.append("unresolved_reference")
+    if (
+        FIRST_PERSON_REFERENCE_RE.search(str(true_claim or ""))
+        and BARE_COMPANY_REFERENCE_RE.search(stripped)
+    ):
+        reasons.append("unresolved_reference")
+    if (
+        INCOMPLETE_TEMPORAL_REFERENCE_RE.search(without_terminal_mark)
+        or HEADING_SENTENCE_GLUE_RE.search(stripped)
+        or INVALID_MODAL_COORDINATION_RE.search(stripped)
+        or INVALID_DO_COORDINATION_RE.search(stripped)
+        or MALFORMED_REPORTATIVE_TAIL_RE.search(without_terminal_mark)
+        or EMBEDDED_CLAUSE_CAPITALIZATION_RE.search(stripped)
+    ):
+        reasons.append("not_natural_question")
+    if INCOMPLETE_TEMPORAL_REFERENCE_RE.search(without_terminal_mark):
+        reasons.append("not_polar_question")
+    return sorted(set(reasons))
+
+
 def _reverse_substitute_entity(query: str, replacement: str, original: str) -> str:
     """Reverse exactly one entity-slot substitution using complete boundaries."""
 
@@ -881,8 +1032,8 @@ def validate_query_semantics(
             reasons.append(f"{name}_question_mark")
         if not QUESTION_START_RE.search(stripped):
             reasons.append(f"{name}_not_polar_question")
-        if _has_unresolved_reference(stripped):
-            reasons.append(f"{name}_unresolved_reference")
+        for surface_reason in _query_surface_reasons(stripped, true_claim):
+            reasons.append(f"{name}_{surface_reason}")
         if ATTACK_EXPOSING_RE.search(stripped):
             reasons.append(f"{name}_attack_exposing_wording")
         if "ENTITY" in stripped or "{ENTITY}" in stripped:
@@ -928,6 +1079,13 @@ def evaluate_candidate(
 ) -> dict[str, Any]:
     _reject_forbidden(fact, path="fact")
     _reject_forbidden(package, path="candidate")
+    fact_quality_reasons = _candidate_fact_quality_reasons(fact)
+    if fact_quality_reasons:
+        return {
+            "accepted": False,
+            "rejection_reasons": fact_quality_reasons,
+            "fact": dict(fact),
+        }
     original = str(fact.get("original_entity") or "")
     replacement = str(package.get("replacement_entity") or "")
     template = package.get("canonical_proposition_template")
@@ -938,6 +1096,22 @@ def evaluate_candidate(
         )
     except ValueError as error:
         return {"accepted": False, "rejection_reasons": [str(error)], "fact": dict(fact)}
+    canonical_quality_reasons = sorted(
+        set(
+            _canonical_proposition_quality_reasons(
+                canonical_true, str(fact.get("true_claim") or "")
+            )
+            + _canonical_proposition_quality_reasons(
+                canonical_counterfactual, str(fact.get("true_claim") or "")
+            )
+        )
+    )
+    if canonical_quality_reasons:
+        return {
+            "accepted": False,
+            "rejection_reasons": canonical_quality_reasons,
+            "fact": dict(fact),
+        }
     if _boundary_count(source_text, replacement) > 0:
         reasons.append("source_absence")
     role_payload = {
@@ -1218,6 +1392,10 @@ def screen_source(
     third_distinct_eligible_pair_fact_position: int | None = None
     early_stop_triggered = False
     for fact in source_facts[:fact_budget]:
+        fact_quality_reasons = _candidate_fact_quality_reasons(fact)
+        if fact_quality_reasons:
+            rejection_counts.update(fact_quality_reasons)
+            continue
         processed_fact_count += 1
         packages = list(candidate_provider(fact))
         initial_package_count = len(packages)
