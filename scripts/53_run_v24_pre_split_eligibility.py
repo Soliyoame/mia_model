@@ -7,22 +7,31 @@ Luna sibling model; Retriever, victim, membership and AUC are never loaded.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.prepare.restoration_first_v24 import (  # noqa: E402
+    DATASET_ORDER,
+    _query_input_quality_reasons,
+    _source_identity,
+    CandidateFactPoolReader,
+    build_candidate_fact_pool,
     build_luna_candidate_provider,
     build_v24_semantic_similarity,
     enumerate_candidate_facts,
     get_max_candidate_facts_per_source,
     iter_frozen_source_pool,
     load_v24_config,
+    load_candidate_fact_pools,
     scan_until_target,
     screen_source,
     source_pool_bindings,
@@ -30,11 +39,525 @@ from src.prepare.restoration_first_v24 import (  # noqa: E402
     validate_split_manifest,
 )
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
-from src.utils.io import read_json, read_jsonl, write_json, write_jsonl  # noqa: E402
+from src.utils.io import (  # noqa: E402
+    append_jsonl_record,
+    read_json,
+    read_jsonl,
+    write_json,
+    write_jsonl,
+    write_jsonl_atomic,
+)
 
 
 CANARY_OUTPUT_DIR = Path("artifacts/v24/development/query_quality_canary_r1")
 CAPACITY_OUTPUT_DIR = Path("artifacts/v24/development/capacity_check_r1")
+FRESH_CANARY_OUTPUT_DIR = Path(
+    "artifacts/v24/development/query_quality_canary_r3_fresh_preflight"
+)
+
+
+# 这些词只用于选择 development-only canary fixture，不是 v24 scientific gate。
+_FRESH_CANARY_LOW_INFORMATION_ENTITIES = frozenset(
+    {
+        "a",
+        "an",
+        "after",
+        "and",
+        "another",
+        "as",
+        "at",
+        "but",
+        "by",
+        "dear editors",
+        "every december",
+        "for",
+        "from",
+        "he",
+        "her",
+        "if",
+        "i",
+        "i've",
+        "in",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "our",
+        "please",
+        "privacy",
+        "reports",
+        "she",
+        "supporting information",
+        "there",
+        "attached",
+        "the",
+        "them",
+        "they",
+        "this",
+        "those",
+        "these",
+        "to",
+        "we",
+        "you",
+        "your",
+        "the company",
+        "what i",
+        "assignment",
+    }
+)
+_FRESH_CANARY_CONNECTOR_WORDS = frozenset(
+    {
+        "although",
+        "as",
+        "at",
+        "during",
+        "for",
+        "from",
+        "if",
+        "in",
+        "on",
+        "or",
+        "since",
+        "to",
+    }
+)
+_FRESH_CANARY_HEADING_PREFIX_RE = re.compile(
+    r"(?i)^(?:item\s+\d+|common\s+name|discussion(?:\s+damage)?|"
+    r"conclusion(?:\s+this)?|introduction(?:\s+more)?|methods|results|"
+    r"background|images?|figure|fig\.?|purpose|case\s+presentation|"
+    r"measurements\s+questionnaire|supplementary|table\b|the\s+role\s+of\b|"
+    r"non[- ]gaussian\s+models\b)"
+)
+_FRESH_CANARY_METADATA_PREFIX_RE = re.compile(
+    r"(?i)^(?:start\s+date\s*:|subject\s*:|sent\s+from\b|"
+    r"attaching\s+the\b|regards\b|thanks\b)"
+)
+_FRESH_CANARY_TABLE_FRAGMENT_RE = re.compile(
+    r"(?i)\b(?:common\s+name|species\s+family|maximum\s+length|"
+    r"vast\s+age\s+classes|trawls\s+per\s+year)\b"
+)
+_FRESH_CANARY_TRUNCATED_TAIL_RE = re.compile(
+    r"(?i)(?:[$€£]\d+|\(\s*\d+\.|\b(?:the|a|an|of|to|in|on|at|for|from|and|or|u|s)\s*)\.$"
+)
+_FRESH_CANARY_TITLE_GLUE_RE = re.compile(
+    r"^(?:(?i:government\s+contract\s+matters\s*[-–])|"
+    r"(?i:financial\s+markets\s+today\s*[-–])|"
+    r"(?:[A-Z][a-z0-9-]*(?:\s+[A-Z][a-z0-9-]+){2,}\s+(?:In|The|This)\b))"
+)
+_FRESH_CANARY_HEADING_SENTENCE_GLUE_RE = re.compile(
+    r"\b(?:[A-Za-z]{3,}|[A-Z][a-z]{3,})\s+[A-Z][a-z]{2,}\s+"
+    r"(?:were|was|are|is|all|analyses|the|a|an|this|these)\b"
+)
+_FRESH_CANARY_HEADING_TRANSITION_RE = re.compile(
+    r"\b(?!(?:The|This|A|An)\b)(?:[A-Za-z]{3,}|[A-Z][a-z]{3,})\s+"
+    r"[A-Z][A-Za-z0-9-]{1,}\s+(?:were|was|are|is|all|analyses|animal|"
+    r"cells|ligand|model|system|the|a|an|this|these|A)\b"
+)
+_FRESH_CANARY_VERB_ENTITY_RE = re.compile(
+    r"(?i)^(?:applying|assessing|considering|describing|determining|"
+    r"examining|identifying|measuring|reporting|studying|using)\b"
+)
+_FRESH_CANARY_RELATION_RE = re.compile(
+    r"(?i)\b(?:is|are|was|were|has|have|had|received|signed|acquired|served|"
+    r"incorporated|located|treated|measured|identified|formed|issued|held|"
+    r"reported|increased|decreased|showed|indicated|caused|contains|asked|"
+    r"sent|filed|requires|provides|includes|occurred|observed|used|defined|"
+    r"determined|recorded|owned|entered|obtained|compared|analyzed|evaluated|"
+    r"found|demonstrated|consists|remains|became|made|conducted)\b"
+)
+
+
+def _historical_canary_sources(root: Path) -> set[tuple[str, str]]:
+    """Collect prior canary source identities only for fresh-fixture exclusion."""
+
+    seen: set[tuple[str, str]] = set()
+    patterns = (
+        "artifacts/v*/development/**/canary_inputs.jsonl",
+        "artifacts/v*/development/**/canary_results.jsonl",
+    )
+    for pattern in patterns:
+        for path in sorted(root.glob(pattern)):
+            try:
+                rows = read_jsonl(path)
+            except (OSError, ValueError, TypeError):
+                continue
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                dataset = str(row.get("dataset") or "")
+                source_key = str(row.get("source_key") or "")
+                if dataset and source_key:
+                    seen.add((dataset, source_key))
+    return seen
+
+
+def _fresh_fact_preflight(
+    fact: Mapping[str, object], source: Mapping[str, object]
+) -> tuple[bool, list[str]]:
+    """复用构造阶段的输入质量检查，并校验原文和实体 span。"""
+
+    source_text = str(source.get("full_text") or "")
+    claim = str(fact.get("true_claim") or "").strip()
+    original = str(fact.get("original_entity") or "").strip()
+    reasons = list(_query_input_quality_reasons(fact))
+    if not claim or not original:
+        reasons.append("v24_canary_fact_missing_claim_or_entity")
+        return False, sorted(set(reasons))
+    proposition_span = fact.get("proposition_span")
+    original_span = fact.get("original_span")
+    if (
+        not isinstance(proposition_span, (list, tuple))
+        or len(proposition_span) != 2
+        or not isinstance(original_span, (list, tuple))
+        or len(original_span) != 2
+    ):
+        reasons.append("v24_canary_fact_span_schema")
+        return False, sorted(set(reasons))
+    try:
+        proposition_start, proposition_end = int(proposition_span[0]), int(proposition_span[1])
+        original_start, original_end = int(original_span[0]), int(original_span[1])
+    except (TypeError, ValueError):
+        reasons.append("v24_canary_fact_span_schema")
+        return False, sorted(set(reasons))
+    if (
+        proposition_start < 0
+        or proposition_end <= proposition_start
+        or source_text[proposition_start:proposition_end] != claim
+    ):
+        reasons.append("v24_canary_fact_claim_not_source_grounded")
+    if (
+        original_start < proposition_start
+        or original_end <= original_start
+        or source_text[original_start:original_end] != original
+        or not (proposition_start <= original_start < original_end <= proposition_end)
+    ):
+        reasons.append("v24_canary_fact_original_span_invalid")
+    if reasons:
+        return False, sorted(set(reasons))
+    return True, []
+
+
+def _fresh_canary_fact_selection_score(fact: Mapping[str, object]) -> int:
+    """Rank already-valid facts for a development-only canary fixture.
+
+    This is a fixture suitability preference, not a v24 scientific gate.  It
+    keeps obvious tokenizer/entity-extractor artifacts out of the Luna review
+    set while leaving formal fact enumeration and screening unchanged.
+    """
+
+    claim = str(fact.get("true_claim") or "").strip()
+    entity = str(fact.get("original_entity") or "").strip()
+    normalized_entity = " ".join(entity.casefold().split())
+    words = re.findall(r"[A-Za-z]+", claim)
+    score = 0
+    if normalized_entity in _FRESH_CANARY_LOW_INFORMATION_ENTITIES:
+        score -= 1000
+    if len(entity) <= 2:
+        score -= 180
+    if not re.search(r"[A-Za-z]", entity):
+        score -= 500
+    if re.fullmatch(r"[0-9$%.,:/() -]+", entity):
+        score -= 500
+    if _FRESH_CANARY_HEADING_PREFIX_RE.search(claim):
+        score -= 300
+    if _FRESH_CANARY_METADATA_PREFIX_RE.search(claim):
+        score -= 240
+    if _FRESH_CANARY_TABLE_FRAGMENT_RE.search(claim):
+        score -= 220
+    if _FRESH_CANARY_TRUNCATED_TAIL_RE.search(claim):
+        score -= 220
+    if _FRESH_CANARY_TITLE_GLUE_RE.search(claim):
+        score -= 300
+    if _FRESH_CANARY_HEADING_SENTENCE_GLUE_RE.search(claim):
+        score -= 300
+    if _FRESH_CANARY_HEADING_TRANSITION_RE.search(claim):
+        score -= 300
+    if _FRESH_CANARY_VERB_ENTITY_RE.search(entity):
+        score -= 260
+    if claim and not claim[0].isupper():
+        score -= 280
+    if entity[:1].islower():
+        score -= 100
+    if entity.casefold().endswith((
+        " if",
+        " and",
+        " or",
+        " of",
+        " the",
+        " a",
+        " an",
+        " in",
+        " at",
+        " on",
+        " for",
+    )) or normalized_entity in {"a", "an", "the", "let", "there", "within"}:
+        score -= 180
+    if entity.endswith(("'s", "’s")):
+        score -= 80
+    if len(words) < 5:
+        score -= 80
+    elif len(words) < 8:
+        score -= 20
+    if normalized_entity.split()[:1] and normalized_entity.split()[0] in _FRESH_CANARY_CONNECTOR_WORDS:
+        score -= 120
+    if len(entity) >= 4:
+        score += min(len(entity), 30)
+    if len(entity.split()) >= 2:
+        score += 30
+    if entity[:1].isupper():
+        score += 10
+    if claim.endswith((".", "?", "!")):
+        score += 10
+    if _FRESH_CANARY_RELATION_RE.search(claim):
+        score += 25
+    else:
+        score -= 220
+    if any(marker in claim for marker in ("�", "��")):
+        score -= 15
+    return score
+
+
+def _fresh_canary_fact_is_suitable(fact: Mapping[str, object]) -> bool:
+    """Return whether a fact is suitable for the new development fixture."""
+
+    return _fresh_canary_fact_selection_score(fact) >= 0
+
+
+def _fresh_canary_input_from_fact(
+    fact: Mapping[str, object], *, dataset: str, canary_pair_index: int
+) -> dict[str, object]:
+    """Project one enumerated fact to the minimal fresh canary input schema."""
+
+    return {
+        "kind": "v24_query_quality_canary_input",
+        "dataset": dataset,
+        "canary_pair_index": canary_pair_index,
+        "source_key": str(fact.get("source_key") or ""),
+        "pair_id": str(fact.get("upstream_pair_id") or ""),
+        "true_claim": str(fact.get("true_claim") or ""),
+        "original_entity": str(fact.get("original_entity") or ""),
+        "original_span": list(fact.get("original_span") or []),
+        "proposition_span": list(fact.get("proposition_span") or []),
+        "fact_order": int(fact.get("fact_order", 0) or 0),
+        "source_hash": str(fact.get("source_hash") or ""),
+        "normalized_text_hash": str(fact.get("normalized_text_hash") or ""),
+    }
+
+
+def _load_canary_candidate_pools(
+    root: Path, config: Mapping[str, object], paths: Sequence[str | Path],
+) -> dict[tuple[str, str], CandidateFactPoolReader]:
+    """仅 canary 允许同数据集的互不重叠开发补充池，保留各自 hash。"""
+    if not paths:
+        raise ValueError("v24_candidate_pool_required")
+    pools: dict[tuple[str, str], CandidateFactPoolReader] = {}
+    seen_sources: dict[str, set[str]] = {}
+    for path in paths:
+        reader = next(iter(load_candidate_fact_pools(root, config, [path]).values()))
+        key = (reader.dataset, reader.manifest["pool_sha256"])
+        if key in pools:
+            raise ValueError("v24_canary_duplicate_candidate_pool")
+        previous = [pool for pool in pools.values() if pool.dataset == reader.dataset]
+        if previous and any(pool.manifest["scope"] != "development_subset" for pool in [*previous, reader]):
+            raise ValueError("v24_canary_supplement_requires_development_pool")
+        seen = seen_sources.setdefault(reader.dataset, set())
+        if seen.intersection(reader.offsets):
+            raise ValueError("v24_canary_candidate_pool_source_overlap")
+        seen.update(reader.offsets)
+        pools[key] = reader
+    return pools
+
+
+def prepare_fresh_canary(
+    root: Path,
+    *,
+    per_dataset: int = 10,
+    output_dir: str | Path = FRESH_CANARY_OUTPUT_DIR,
+    candidate_pools: Sequence[str | Path] = (),
+    allow_legacy_facts: bool = False,
+) -> dict[str, object]:
+    """Build a fresh 30-row canary fixture and run only offline preflight."""
+
+    if per_dataset <= 0:
+        raise ValueError("v24_fresh_canary_per_dataset_invalid")
+    config = load_v24_config(root)
+    pools = {} if allow_legacy_facts else _load_canary_candidate_pools(root, config, candidate_pools)
+    if not allow_legacy_facts and {key[0] for key in pools} != set(DATASET_ORDER):
+        raise ValueError("v24_canary_requires_three_candidate_pools")
+    zero_policy = config.get("development", {}).get(
+        "canary_zero_candidate_policy", "skip_and_replace_in_frozen_order",
+    )
+    if zero_policy != "skip_and_replace_in_frozen_order":
+        raise ValueError("v24_canary_zero_candidate_policy_invalid")
+    output = Path(output_dir)
+    if not output.is_absolute():
+        output = root / output
+    summary_path = output / "preflight_summary.json"
+    if summary_path.exists():
+        raise RuntimeError("v24_fresh_canary_output_exists")
+
+    historical = _historical_canary_sources(root)
+    inputs: list[dict[str, object]] = []
+    preflight_rows: list[dict[str, object]] = []
+    rejection_counts: dict[str, int] = {}
+    screened_source_count = 0
+    candidate_fact_count = 0
+    passed_fact_count = 0
+    dataset_counts: dict[str, dict[str, int]] = {}
+    shortfalls: dict[str, int] = {}
+
+    for dataset in DATASET_ORDER:
+        selected = 0
+        dataset_screened = 0
+        dataset_facts = 0
+        dataset_zero_candidates = 0
+        dataset_replacements = 0
+        source_readers = {
+            key: pool for pool in pools.values() if pool.dataset == dataset for key in pool.offsets
+        }
+        for source in iter_frozen_source_pool(root, dataset):
+            reader = source_readers.get(str(source["source_key"]))
+            if not allow_legacy_facts and reader is None:
+                continue
+            dataset_screened += 1
+            screened_source_count += 1
+            source_key = str(source.get("source_key") or "")
+            if (dataset, source_key) in historical:
+                if not allow_legacy_facts:
+                    raise ValueError("v24_canary_pool_source_not_fresh")
+                continue
+            facts = list(enumerate_candidate_facts(source) if allow_legacy_facts else reader.facts_for_source(source))
+            dataset_facts += len(facts)
+            candidate_fact_count += len(facts)
+            if not facts and not allow_legacy_facts:
+                # 只跳过已完成且校验通过的零候选记录，读取失败不转换成零候选。
+                dataset_zero_candidates += 1
+                preflight_rows.append({
+                    **_source_identity(source),
+                    "document_id": source.get("document_id"),
+                    "status": "skipped_zero_candidates",
+                    "candidate_fact_count": 0,
+                    "candidate_pool_sha256": reader.manifest["pool_sha256"],
+                    "rejection_reasons": ["zero_candidate_source"],
+                })
+                continue
+            passed_facts: list[dict[str, object]] = []
+            for fact in facts:
+                ok, reasons = _fresh_fact_preflight(fact, source)
+                if not ok:
+                    for reason in reasons:
+                        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+                    continue
+                passed_fact_count += 1
+                passed_facts.append(dict(fact))
+            suitable_facts = [
+                fact for fact in passed_facts if _fresh_canary_fact_is_suitable(fact)
+            ] if allow_legacy_facts else [fact for fact in passed_facts if int(fact["fact_order"]) < get_max_candidate_facts_per_source(config)]
+            if not suitable_facts:
+                if not allow_legacy_facts:
+                    raise ValueError("v24_canary_nonempty_source_failed_preflight")
+                if passed_facts:
+                    rejection_counts["fresh_fixture_no_suitable_fact"] = (
+                        rejection_counts.get("fresh_fixture_no_suitable_fact", 0) + 1
+                    )
+                continue
+            fact = max(
+                suitable_facts,
+                key=lambda item: (
+                    _fresh_canary_fact_selection_score(item),
+                    -int(item.get("fact_order", 0) or 0),
+                    str(item.get("upstream_pair_id") or ""),
+                ),
+            ) if allow_legacy_facts else suitable_facts[0]
+            row = _fresh_canary_input_from_fact(
+                fact, dataset=dataset, canary_pair_index=len(inputs)
+            )
+            if not allow_legacy_facts:
+                row["candidate_pool_sha256"] = reader.manifest["pool_sha256"]
+            inputs.append(row)
+            preflight_rows.append(
+                {
+                    **_source_identity(source),
+                    "document_id": source.get("document_id"),
+                    "canary_pair_index": row["canary_pair_index"],
+                    "dataset": dataset,
+                    "source_key": source_key,
+                    "pair_id": row["pair_id"],
+                    "status": "passed",
+                    "selection_score": _fresh_canary_fact_selection_score(fact) if allow_legacy_facts else None,
+                    "selection_mode": "development_fixture_preference" if allow_legacy_facts else "frozen_pool_first_fact_within_budget",
+                    "rejection_reasons": [],
+                    "replacement_source": not allow_legacy_facts and dataset_screened > per_dataset,
+                }
+            )
+            dataset_replacements += int(not allow_legacy_facts and dataset_screened > per_dataset)
+            selected += 1
+            if selected >= per_dataset:
+                break
+        dataset_counts[dataset] = {
+            "screened_source_count": dataset_screened,
+            "candidate_fact_count": dataset_facts,
+            "selected_input_count": selected,
+            "zero_candidate_source_count": dataset_zero_candidates,
+            "replacement_source_count": dataset_replacements,
+        }
+        if selected != per_dataset:
+            shortfalls[dataset] = per_dataset - selected
+
+    if not shortfalls and len(inputs) != per_dataset * 3:
+        raise RuntimeError("v24_fresh_canary_input_count_invalid")
+    if len({(str(row["dataset"]), str(row["source_key"])) for row in inputs}) != len(inputs):
+        raise RuntimeError("v24_fresh_canary_source_overlap")
+
+    bindings = source_pool_bindings(root)
+    manifest = {
+        "kind": "v24_fresh_query_quality_canary_manifest",
+        "protocol_version": config["protocol_version"],
+        "purpose": "development_only_membership_blind_input_preflight",
+        "status": "insufficient_candidate_sources" if shortfalls else "passed",
+        "input_count": len(inputs),
+        "per_dataset": per_dataset,
+        "datasets": list(DATASET_ORDER),
+        "historical_source_exclusion_count": len(historical),
+        "screened_source_count": screened_source_count,
+        "candidate_fact_count": candidate_fact_count,
+        "preflight_pass_count": passed_fact_count,
+        "preflight_rejection_reason_distribution": dict(sorted(rejection_counts.items())),
+        "dataset_counts": dataset_counts,
+        "zero_candidate_source_policy": zero_policy,
+        "zero_candidate_source_count": sum(row["zero_candidate_source_count"] for row in dataset_counts.values()),
+        "source_shortfalls": shortfalls,
+        "source_pool_bindings": bindings,
+        "candidate_fact_pools": [pools[key].binding() for key in sorted(pools)],
+        "max_candidate_facts_per_source": get_max_candidate_facts_per_source(config),
+        "external_calls_performed": 0,
+        "retriever_calls_performed": 0,
+        "victim_calls_performed": 0,
+        "membership_read": False,
+        "input_sha256": sha256_obj(inputs),
+    }
+    manifest["manifest_sha256"] = sha256_obj(manifest)
+    # 缺口时仅保存筛选证据，避免未完成 fixture 被当作已使用的 canary 输入。
+    if not shortfalls:
+        write_jsonl(inputs, output / "canary_inputs.jsonl")
+    write_jsonl(preflight_rows, output / "preflight_results.jsonl")
+    write_json(manifest, output / "fresh_canary_manifest.json")
+    summary = {
+        **manifest,
+        "status": "insufficient_candidate_sources" if shortfalls else "passed",
+        "inputs_path": _display_path(root, output / "canary_inputs.jsonl") if not shortfalls else None,
+        "preflight_results_path": _display_path(root, output / "preflight_results.jsonl"),
+        "manifest_path": _display_path(root, output / "fresh_canary_manifest.json"),
+        "manifest_file_sha256": sha256_file(output / "fresh_canary_manifest.json"),
+        "input_file_sha256": sha256_file(output / "canary_inputs.jsonl") if not shortfalls else None,
+        "preflight_results_sha256": sha256_file(output / "preflight_results.jsonl"),
+    }
+    write_json(summary, summary_path)
+    if shortfalls:
+        details = ",".join(f"{dataset}:{per_dataset - count}/{per_dataset}" for dataset, count in shortfalls.items())
+        raise RuntimeError(f"v24_fresh_canary_source_shortfall:{details}")
+    return summary
 
 
 def _membership_blind_fact(row: Mapping[str, object], source: Mapping[str, object]) -> dict[str, object]:
@@ -64,8 +587,24 @@ def _membership_blind_fact(row: Mapping[str, object], source: Mapping[str, objec
     if not claim or not original or source_text.find(claim) < 0:
         raise ValueError("v24_canary_fact_not_source_grounded")
     claim_offset = source_text.find(claim)
-    local_offset = claim.find(original)
-    if local_offset < 0:
+    provided_span = row.get("original_span")
+    local_offset: int | None = None
+    if isinstance(provided_span, (list, tuple)) and len(provided_span) == 2:
+        try:
+            span_start, span_end = int(provided_span[0]), int(provided_span[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("v24_canary_original_span_invalid") from exc
+        if (
+            span_start < claim_offset
+            or span_end <= span_start
+            or span_end > claim_offset + len(claim)
+            or source_text[span_start:span_end] != original
+        ):
+            raise ValueError("v24_canary_original_span_invalid")
+        local_offset = span_start - claim_offset
+    else:
+        local_offset = claim.find(original)
+    if local_offset < 0 or claim[local_offset:local_offset + len(original)] != original:
         raise ValueError("v24_canary_original_not_in_true_claim")
     identity = {
         "dataset": str(source.get("dataset") or row.get("dataset") or ""),
@@ -87,9 +626,11 @@ def _membership_blind_fact(row: Mapping[str, object], source: Mapping[str, objec
         "true_claim": claim,
         "original_entity": original,
         "original_span": [claim_offset + local_offset, claim_offset + local_offset + len(original)],
-        "proposition_span": [claim_offset, claim_offset + len(claim)],
+        "proposition_span": list(
+            row.get("proposition_span") or [claim_offset, claim_offset + len(claim)]
+        ),
         "slotted_true_claim": _mask_entity_mentions(claim, original),
-        "fact_order": int(row.get("canary_pair_index", 0) or 0),
+        "fact_order": int(row.get("fact_order", row.get("canary_pair_index", 0)) or 0),
     }
 
 
@@ -99,17 +640,28 @@ def _load_canary_inputs(root: Path, path: str | Path) -> list[dict[str, object]]
         # Explicit projection makes legacy fields impossible to enter the Luna prompt.
         records.append({
             key: row[key]
-            for key in ("source_key", "dataset", "true_claim", "original_entity", "original_span", "pair_id", "canary_pair_index")
+            for key in (
+                "source_key",
+                "dataset",
+                "true_claim",
+                "original_entity",
+                "original_span",
+                "proposition_span",
+                "pair_id",
+                "canary_pair_index",
+                "fact_order",
+                "candidate_pool_sha256",
+            )
             if key in row
         })
     return records
 
 
-def _source_lookup(root: Path, datasets: set[str], source_keys: set[str]) -> dict[str, dict[str, object]]:
-    found: dict[str, dict[str, object]] = {}
+def _source_lookup(root: Path, datasets: set[str], source_keys: set[tuple[str, str]]) -> dict[tuple[str, str], dict[str, object]]:
+    found: dict[tuple[str, str], dict[str, object]] = {}
     for dataset in sorted(datasets):
         for source in iter_frozen_source_pool(root, dataset):
-            key = str(source.get("source_key") or "")
+            key = (dataset, str(source.get("source_key") or ""))
             if key in source_keys:
                 found[key] = source
                 if len(found) == len(source_keys):
@@ -120,152 +672,573 @@ def _source_lookup(root: Path, datasets: set[str], source_keys: set[str]) -> dic
     return found
 
 
-def run_canary(root: Path, *, input_path: str | Path, output_dir: str | Path) -> dict[str, object]:
+def _canary_llm_identity(config: dict[str, object]) -> dict[str, object]:
+    """只解析有效配置，不创建客户端；不保存 endpoint 或凭据。"""
+    from src.llm.factory import load_llm_profiles, llm_profile_identity, resolve_effective_llm_profile
+
+    profile = resolve_effective_llm_profile(
+        load_llm_profiles(config), "sibling",
+        profile_name=str(config.get("llm", {}).get("profile") or "luna_query_generator"),
+    )
+    identity = llm_profile_identity(profile)
+    return {key: identity.get(key) for key in ("profile_name", "model", "model_version", "profile_hash")}
+
+
+def _canary_provider_totals(
+    previous: Mapping[str, object], current: Mapping[str, object],
+) -> dict[str, object]:
+    """合并已保存调用与当前进程统计，异常仅保留类型以免回显敏感响应。"""
+    result: dict[str, object] = {
+        key: current.get(key) or previous.get(key)
+        for key in ("profile_name", "configured_model")
+    }
+    for key in ("logical_api_calls", "physical_attempts", "transport_retry_count"):
+        result[key] = int(previous.get(key) or 0) + int(current.get(key) or 0)
+    result["provider_model_ids"] = sorted({
+        str(value) for stats in (previous, current) for value in stats.get("provider_model_ids") or []
+    })
+    result["failures"] = [
+        str(value).split(":", 1)[0] if re.fullmatch(r"\w+", str(value).split(":", 1)[0]) else "provider_error"
+        for stats in (previous, current) for value in stats.get("failures") or []
+    ]
+    return result
+
+
+def _load_canary_checkpoint(
+    output: Path, *, run_fingerprint: str, inputs: list[dict[str, object]],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """校验已保存前缀；只允许结果比汇总领先一条的原子写入窗口。"""
+    summary_path, results_path = output / "canary_summary.json", output / "canary_results.jsonl"
+    if not summary_path.is_file() or not results_path.is_file():
+        raise RuntimeError("v24_canary_checkpoint_missing")
+    try:
+        summary = read_json(summary_path)
+        raw_lines = results_path.read_bytes().splitlines(keepends=True)
+        rows = list(read_jsonl(results_path))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("v24_canary_checkpoint_unreadable") from exc
+    if not isinstance(summary, dict) or summary.get("run_fingerprint") != run_fingerprint:
+        raise RuntimeError("v24_canary_checkpoint_identity_drift")
+    saved_count = summary.get("completed_pair_count")
+    if (
+        type(saved_count) is not int or not 0 <= saved_count <= len(inputs)
+        or not saved_count <= len(rows) <= min(saved_count + 1, len(inputs))
+        or len(raw_lines) != len(rows)
+    ):
+        raise RuntimeError("v24_canary_checkpoint_row_count_drift")
+    if hashlib.sha256(b"".join(raw_lines[:saved_count])).hexdigest() != summary.get("result_sha256"):
+        raise RuntimeError("v24_canary_checkpoint_hash_drift")
+    for index, row in enumerate(rows):
+        original = inputs[index]
+        if row.get("result_content_sha256") != sha256_obj({
+            key: value for key, value in row.items() if key != "result_content_sha256"
+        }):
+            raise RuntimeError("v24_canary_checkpoint_hash_drift")
+        if row.get("run_fingerprint") != run_fingerprint:
+            raise RuntimeError("v24_canary_checkpoint_identity_drift")
+        if row.get("input_index") != index or any(
+            row.get(key) != original.get(input_key)
+            for key, input_key in (
+                ("canary_pair_index", "canary_pair_index"), ("dataset", "dataset"),
+                ("source_key", "source_key"), ("upstream_pair_id", "pair_id"),
+            )
+        ):
+            raise RuntimeError("v24_canary_checkpoint_order_drift")
+        if (
+            type(row.get("eligible")) is not bool
+            or not isinstance(row.get("candidate_evidence"), list)
+            or not isinstance(row.get("rejection_reason_counts"), dict)
+            or (row["eligible"] and not isinstance(row.get("selected_pair"), dict))
+            or (not row["eligible"] and row.get("selected_pair") is not None)
+        ):
+            raise RuntimeError("v24_canary_checkpoint_result_invalid")
+    for state in [summary, *rows]:
+        usage = state.get("provider")
+        if not isinstance(usage, dict) or any(
+            type(usage.get(key)) is not int or usage[key] < 0
+            for key in ("logical_api_calls", "physical_attempts", "transport_retry_count")
+        ) or type(state.get("external_call_counts_complete")) is not bool:
+            raise RuntimeError("v24_canary_checkpoint_usage_invalid")
+    if summary.get("status") not in {"running", "interrupted", "passed", "failed_hard_gates"}:
+        raise RuntimeError("v24_canary_checkpoint_status_invalid")
+    if summary.get("status") in {"passed", "failed_hard_gates"}:
+        passed = sum(row["eligible"] for row in rows)
+        expected_status = "passed" if passed == len(inputs) else "failed_hard_gates"
+        if saved_count != len(inputs) or summary.get("passed_pair_count") != passed or summary["status"] != expected_status:
+            raise RuntimeError("v24_canary_checkpoint_final_status_drift")
+    return summary, rows
+
+
+def run_canary(
+    root: Path, *, input_path: str | Path, output_dir: str | Path,
+    candidate_pools: Sequence[str | Path] = (), resume: bool = False,
+    show_progress: bool = True,
+) -> dict[str, object]:
     config = load_v24_config(root)
+    pools = _load_canary_candidate_pools(root, config, candidate_pools)
     inputs = _load_canary_inputs(root, input_path)
     expected = int(config.get("development", {}).get("canary_pair_count", 30))
     correction_retries = int(config.get("eligibility", {}).get("semantic_correction_retries", 1))
     fact_budget = get_max_candidate_facts_per_source(config)
     if len(inputs) != expected:
         raise ValueError(f"v24_canary_input_count:{len(inputs)}:{expected}")
-    sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs}, {str(row.get("source_key") or "") for row in inputs})
-    semantic_scorer = build_v24_semantic_similarity(root)
-    provider = build_luna_candidate_provider(root)
-    results: list[dict[str, object]] = []
-    try:
-        for row in inputs:
-            try:
-                source = sources[str(row["source_key"])]
-                fact = _membership_blind_fact(row, source)
-                screened = screen_source(
-                    source,
-                    candidate_provider=provider,
-                    facts=[fact],
-                    minimum_pairs=1,
-                    allow_surface_fallback=False,
-                    similarity_fn=semantic_scorer,
-                    semantic_correction_retries=correction_retries,
-                    include_candidate_evidence=True,
-                    max_candidate_facts_per_source=fact_budget,
-                )
-                selected = screened.get("selected_pairs") or []
-                results.append({
-                    "canary_pair_index": row.get("canary_pair_index"),
-                    "dataset": fact["dataset"],
-                    "source_key": fact["source_key"],
-                    "upstream_pair_id": fact["upstream_pair_id"],
-                    "eligible": bool(screened.get("eligible")),
-                    "selected_pair": selected[0] if selected else None,
-                    "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
-                    "candidate_evidence": screened.get("candidate_evidence", []),
-                })
-            except Exception as exc:
-                # Preserve per-pair failure evidence before the aggregate canary
-                # status is decided.  Error text is intentionally secret-free.
-                results.append({
-                    "canary_pair_index": row.get("canary_pair_index"),
-                    "dataset": row.get("dataset"),
-                    "source_key": row.get("source_key"),
-                    "upstream_pair_id": row.get("pair_id"),
-                    "eligible": False,
-                    "selected_pair": None,
-                    "candidate_evidence": [],
-                    "rejection_reason_counts": {
-                        f"execution_error:{type(exc).__name__}:{exc}": 1,
-                    },
-                })
-    finally:
-        semantic_scorer.close()
-    passed = sum(bool(item["eligible"]) for item in results)
     output = root / output_dir
-    write_jsonl(results, output / "canary_results.jsonl")
-    summary = {
-        "status": "passed" if passed == expected else "failed_hard_gates",
+    if not resume and output.exists() and any(output.iterdir()):
+        raise ValueError("v24_canary_output_exists")
+    if len({(row["dataset"], row["source_key"]) for row in inputs}) != len(inputs):
+        raise ValueError("v24_canary_duplicate_source")
+    sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs},
+                             {(str(row["dataset"]), str(row["source_key"])) for row in inputs})
+    frozen_facts: list[dict[str, object]] = []
+    for row in inputs:
+        dataset = str(row["dataset"])
+        reader = pools.get((dataset, str(row.get("candidate_pool_sha256") or "")))
+        if reader is None:
+            raise ValueError("v24_canary_candidate_pool_drift")
+        facts = reader.facts_for_source(sources[(dataset, str(row["source_key"]))])
+        matching = [fact for fact in facts[:fact_budget] if fact["upstream_pair_id"] == row.get("pair_id")]
+        if len(matching) != 1 or any(matching[0][key] != row.get(key) for key in (
+            "true_claim", "original_entity", "original_span", "proposition_span", "fact_order",
+        )):
+            raise ValueError("v24_canary_fact_not_in_candidate_pool")
+        frozen_facts.append(matching[0])
+    code_root = Path(__file__).resolve().parents[1]
+    context = {
         "protocol_version": config["protocol_version"],
         "canary_pair_count": expected,
-        "passed_pair_count": passed,
         "fallback_pair_count": 0,
         "fallback_allowed": False,
         "semantic_correction_retries": correction_retries,
         "max_candidate_facts_per_source": fact_budget,
         "config_sha256": sha256_obj(config),
+        "candidate_fact_pools": [pools[key].binding() for key in sorted(pools)],
         "input_sha256": sha256_file(root / input_path),
-        "provider": provider.stats(),
-        "semantic_similarity": semantic_scorer.identity(),
-        "result_sha256": sha256_file(output / "canary_results.jsonl"),
-        "external_calls_performed": provider.physical_attempts,
-        "retriever_calls_performed": 0,
-        "victim_calls_performed": 0,
-        "membership_read": False,
+        "facts_sha256": sha256_obj(frozen_facts),
+        "llm_profile": _canary_llm_identity(config),
+        "code_sha256": sha256_obj({
+            "runner": sha256_file(__file__),
+            "screening": sha256_file(code_root / "src/prepare/restoration_first_v24.py"),
+        }),
     }
-    write_json(summary, output / "canary_summary.json")
-    if passed != expected:
-        raise RuntimeError(f"v24_canary_hard_gate_failed:{passed}/{expected}")
+    run_fingerprint = sha256_obj(context)
+    results_path = output / "canary_results.jsonl"
+    summary_path = output / "canary_summary.json"
+    results: list[dict[str, object]] = []
+    summary: dict[str, object] = {}
+    previous_usage: dict[str, object] = {}
+    semantic_identity = None
+    counts_complete = True
+    if resume:
+        summary, results = _load_canary_checkpoint(output, run_fingerprint=run_fingerprint, inputs=inputs)
+        if summary["status"] in {"passed", "failed_hard_gates"}:
+            if summary["status"] == "failed_hard_gates":
+                raise RuntimeError(f"v24_canary_hard_gate_failed:{summary['passed_pair_count']}/{expected}")
+            return summary
+        latest = results[-1] if len(results) > summary["completed_pair_count"] else summary
+        previous_usage = dict(latest["provider"])
+        counts_complete = bool(latest["external_call_counts_complete"])
+        active = summary.get("active_input_index")
+        if active is not None and active >= len(results):
+            # 在途请求可能已被服务端处理；恢复不声称知道其实际调用/重试次数。
+            counts_complete = False
+        semantic_identity = summary.get("semantic_similarity")
+    else:
+        write_jsonl_atomic([], results_path)
+
+    provider = None
+    active_input_index = None
+
+    def save_progress(status: str, *, interruption_type: str | None = None) -> dict[str, object]:
+        usage = _canary_provider_totals(previous_usage, provider.stats() if provider is not None else {})
+        progress = {
+            **context, "run_fingerprint": run_fingerprint, "status": status,
+            "completed_pair_count": len(results),
+            "passed_pair_count": sum(bool(row["eligible"]) for row in results),
+            "active_input_index": active_input_index,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "resumed": resume, "provider": usage, "semantic_similarity": semantic_identity,
+            "result_sha256": sha256_file(results_path),
+            "external_calls_performed": usage["physical_attempts"],
+            "external_call_counts_complete": counts_complete and active_input_index is None,
+            "retriever_calls_performed": 0, "victim_calls_performed": 0, "membership_read": False,
+        }
+        if interruption_type:
+            progress["interruption_type"] = interruption_type
+        write_json(progress, summary_path)
+        return progress
+
+    def final_status() -> str:
+        return "passed" if all(row["eligible"] for row in results) else "failed_hard_gates"
+
+    if len(results) == expected:
+        summary = save_progress(final_status())
+        if summary["status"] == "failed_hard_gates":
+            raise RuntimeError(f"v24_canary_hard_gate_failed:{summary['passed_pair_count']}/{expected}")
+        return summary
+    if not resume:
+        save_progress("running")
+    if show_progress:
+        print(f"Canary: 已保存 {len(results)}/{expected} 条结果", flush=True)
+    semantic_scorer = build_v24_semantic_similarity(root)
+    try:
+        if semantic_identity is not None and semantic_identity != semantic_scorer.identity():
+            raise RuntimeError("v24_canary_semantic_identity_drift")
+        semantic_identity = semantic_scorer.identity()
+        provider = build_luna_candidate_provider(root)
+        try:
+            for index in range(len(results), expected):
+                row, fact = inputs[index], frozen_facts[index]
+                active_input_index = index
+                save_progress("running")
+                if show_progress:
+                    print(f"Canary: 正在处理 {index + 1}/{expected} {row['dataset']} {row['source_key']}", flush=True)
+                result = {
+                    "run_fingerprint": run_fingerprint, "input_index": index,
+                    "canary_pair_index": row.get("canary_pair_index"),
+                    "dataset": fact["dataset"],
+                    "source_key": fact["source_key"],
+                    "upstream_pair_id": fact["upstream_pair_id"],
+                    "source_hash": fact.get("source_hash"),
+                    "normalized_text_hash": fact.get("normalized_text_hash"),
+                }
+                try:
+                    screened = screen_source(
+                        sources[(str(row["dataset"]), str(row["source_key"]))],
+                        candidate_provider=provider, facts=[fact], minimum_pairs=1,
+                        allow_surface_fallback=False, similarity_fn=semantic_scorer,
+                        semantic_correction_retries=correction_retries, include_candidate_evidence=True,
+                        max_candidate_facts_per_source=fact_budget,
+                    )
+                    selected = screened.get("selected_pairs") or []
+                    result.update({
+                        "eligible": bool(screened.get("eligible")),
+                        "selected_pair": selected[0] if selected else None,
+                        "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
+                        "candidate_evidence": screened.get("candidate_evidence", []),
+                    })
+                except Exception as exc:
+                    counts_complete = False
+                    result.update({
+                        "eligible": False, "selected_pair": None, "candidate_evidence": [],
+                        "rejection_reason_counts": {f"execution_error:{type(exc).__name__}": 1},
+                    })
+                result["provider"] = _canary_provider_totals(previous_usage, provider.stats())
+                result["external_call_counts_complete"] = counts_complete
+                result["result_content_sha256"] = sha256_obj(result)
+                # 只在原子替换成功后推进内存位置；磁盘错误不得变成科学门禁失败。
+                write_jsonl_atomic([*results, result], results_path)
+                results.append(result)
+                active_input_index = None
+                summary = save_progress(final_status() if len(results) == expected else "running")
+                if show_progress:
+                    print(f"Canary: 已保存 {len(results)}/{expected}，通过 {summary['passed_pair_count']}", flush=True)
+        except BaseException as exc:
+            try:
+                # 中断可能发生在 replace 成功、内存 append 之前，先以磁盘为准。
+                _, results = _load_canary_checkpoint(
+                    output, run_fingerprint=run_fingerprint, inputs=inputs,
+                )
+                if active_input_index is not None and active_input_index < len(results):
+                    active_input_index = None
+                counts_complete = counts_complete and active_input_index is None
+                save_progress("interrupted", interruption_type=type(exc).__name__)
+            except (OSError, RuntimeError):
+                # 保留原始中断；前一次原子保存的结果和汇总仍可用于恢复。
+                pass
+            raise
+    finally:
+        semantic_scorer.close()
+    if summary["status"] == "failed_hard_gates":
+        raise RuntimeError(f"v24_canary_hard_gate_failed:{summary['passed_pair_count']}/{expected}")
     return summary
 
 
-def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_luna: bool) -> dict[str, object]:
+def _capacity_paths(
+    root: Path,
+    output_dir: str | Path,
+    *,
+    dataset: str,
+    use_luna: bool,
+) -> tuple[Path, Path]:
+    output = Path(output_dir)
+    if not output.is_absolute():
+        output = root / output
+    mode = "luna_sample" if use_luna else "offline_estimate"
+    return (
+        output / f"{dataset}.{mode}.json",
+        output / f"{dataset}.{mode}.checkpoint.jsonl",
+    )
+
+
+def _capacity_source_reference(source: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "dataset": str(source.get("dataset") or ""),
+        "source_key": str(source.get("source_key") or ""),
+        "source_order_rank": str(source.get("source_order_rank") or ""),
+        "source_hash": str(source.get("source_hash") or ""),
+        "normalized_text_hash": str(source.get("normalized_text_hash") or ""),
+    }
+
+
+def _capacity_provider_usage(
+    before: Mapping[str, object],
+    after: Mapping[str, object],
+) -> dict[str, object]:
+    failures_before = list(before.get("failures") or [])
+    failures_after = list(after.get("failures") or [])
+    return {
+        "logical_api_calls": int(after.get("logical_api_calls") or 0)
+        - int(before.get("logical_api_calls") or 0),
+        "physical_attempts": int(after.get("physical_attempts") or 0)
+        - int(before.get("physical_attempts") or 0),
+        "transport_retry_count": int(after.get("transport_retry_count") or 0)
+        - int(before.get("transport_retry_count") or 0),
+        "provider_model_ids": sorted(str(value) for value in after.get("provider_model_ids") or []),
+        "profile_name": after.get("profile_name"),
+        "configured_model": after.get("configured_model"),
+        "failures": [str(value) for value in failures_after[len(failures_before):]],
+    }
+
+
+def _validate_capacity_checkpoint(
+    rows: list[dict[str, object]],
+    *,
+    run_fingerprint: str,
+    selected_sources: list[dict[str, object]],
+) -> None:
+    if len(rows) > len(selected_sources):
+        raise RuntimeError("v24_capacity_checkpoint_row_count_drift")
+    for source_index, row in enumerate(rows):
+        if row.get("run_fingerprint") != run_fingerprint:
+            raise RuntimeError("v24_capacity_checkpoint_identity_drift")
+        if row.get("status") != "completed" or row.get("source_index") != source_index:
+            raise RuntimeError("v24_capacity_checkpoint_order_drift")
+        if row.get("source") != _capacity_source_reference(selected_sources[source_index]):
+            raise RuntimeError("v24_capacity_checkpoint_source_drift")
+        if not isinstance(row.get("screen_result"), Mapping):
+            raise RuntimeError("v24_capacity_checkpoint_result_invalid")
+
+
+def _capacity_provider_summary(
+    rows: list[dict[str, object]],
+    provider: object,
+) -> dict[str, object]:
+    current = dict(provider.stats())  # type: ignore[attr-defined]
+    model_ids: set[str] = set()
+    failures: list[str] = []
+    logical_api_calls = 0
+    physical_attempts = 0
+    transport_retry_count = 0
+    for row in rows:
+        usage = row.get("provider_usage")
+        if not isinstance(usage, Mapping):
+            raise RuntimeError("v24_capacity_checkpoint_provider_usage_invalid")
+        logical_api_calls += int(usage.get("logical_api_calls") or 0)
+        physical_attempts += int(usage.get("physical_attempts") or 0)
+        transport_retry_count += int(usage.get("transport_retry_count") or 0)
+        model_ids.update(str(value) for value in usage.get("provider_model_ids") or [])
+        failures.extend(str(value) for value in usage.get("failures") or [])
+    return {
+        **current,
+        "logical_api_calls": logical_api_calls,
+        "physical_attempts": physical_attempts,
+        "transport_retry_count": transport_retry_count,
+        "provider_model_ids": sorted(model_ids),
+        "failures": failures,
+    }
+
+
+def _display_path(root: Path, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def run_capacity_check(
+    root: Path,
+    *,
+    dataset: str,
+    sample_sources: int,
+    use_luna: bool,
+    output_dir: str | Path = CAPACITY_OUTPUT_DIR,
+    resume: bool = False,
+    show_progress: bool = True,
+    candidate_pools: Sequence[str | Path] = (),
+    allow_legacy_facts: bool = False,
+) -> dict[str, object]:
     if sample_sources <= 0:
         raise ValueError("v24_capacity_sample_invalid")
     config = load_v24_config(root)
+    pools = {} if allow_legacy_facts else load_candidate_fact_pools(root, config, candidate_pools)
+    if not allow_legacy_facts and dataset not in pools:
+        raise ValueError("v24_capacity_candidate_pool_dataset_missing")
+    candidate_pool_binding = pools[dataset].binding() if not allow_legacy_facts else None
     correction_retries = int(config.get("eligibility", {}).get("semantic_correction_retries", 1))
     fact_budget = get_max_candidate_facts_per_source(config)
     selected_sources: list[dict[str, object]] = []
     source_iter = iter_frozen_source_pool(root, dataset)
     for source in source_iter:
+        if not allow_legacy_facts and str(source["source_key"]) not in pools[dataset].offsets:
+            continue
         selected_sources.append(source)
         if len(selected_sources) >= sample_sources:
             break
+    if len(selected_sources) != sample_sources:
+        raise RuntimeError("v24_capacity_sample_source_shortfall")
+    source_references = [_capacity_source_reference(source) for source in selected_sources]
+    config_sha256 = sha256_obj(config)
+    source_selection_sha256 = sha256_obj(source_references)
+    run_fingerprint = sha256_obj({
+        "protocol_version": config.get("protocol_version"),
+        "dataset": dataset,
+        "mode": "luna_sample" if use_luna else "offline_fact_capacity_estimate",
+        "sample_sources": sample_sources,
+        "max_candidate_facts_per_source": fact_budget,
+        "semantic_correction_retries": correction_retries,
+        "config_sha256": config_sha256,
+        "source_selection_sha256": source_selection_sha256,
+        "candidate_fact_pool": candidate_pool_binding,
+    })
+    summary_path, checkpoint_path = _capacity_paths(
+        root, output_dir, dataset=dataset, use_luna=use_luna
+    )
+    if summary_path.exists():
+        existing = read_json(summary_path)
+        if existing.get("run_fingerprint") != run_fingerprint:
+            raise RuntimeError("v24_capacity_summary_identity_drift")
+        if use_luna and (
+            not checkpoint_path.is_file()
+            or existing.get("checkpoint_sha256") != sha256_file(checkpoint_path)
+        ):
+            raise RuntimeError("v24_capacity_checkpoint_hash_drift")
+        if not resume:
+            raise RuntimeError("v24_capacity_summary_exists_use_resume")
+        return dict(existing)
+    if checkpoint_path.exists() and not resume:
+        raise RuntimeError("v24_capacity_checkpoint_exists_use_resume")
+
+    checkpoint_rows = list(read_jsonl(checkpoint_path)) if checkpoint_path.exists() else []
+    _validate_capacity_checkpoint(
+        checkpoint_rows,
+        run_fingerprint=run_fingerprint,
+        selected_sources=selected_sources,
+    )
+    resumed = bool(checkpoint_rows)
+    screen_results: list[dict[str, object]] = [
+        dict(row["screen_result"])  # type: ignore[arg-type]
+        for row in checkpoint_rows
+    ]
     semantic_scorer = build_v24_semantic_similarity(root) if use_luna else None
     provider = build_luna_candidate_provider(root) if use_luna else None
-    eligible_count = 0
-    screened_count = 0
-    candidate_fact_count = 0
-    processed_fact_count = 0
-    unprocessed_fact_count = 0
-    candidate_package_count = 0
-    early_stop_source_count = 0
-    diversity_counts = {"1": 0, "2": 0, "3": 0}
     if use_luna:
+        if semantic_scorer is None or provider is None:
+            raise RuntimeError("v24_capacity_luna_runtime_missing")
+        if show_progress:
+            print(
+                f"Capacity sample {dataset}: completed "
+                f"{len(checkpoint_rows)}/{len(selected_sources)} sources",
+                flush=True,
+            )
         try:
-            for source in selected_sources:
-                result = screen_source(
+            for source_index in range(len(checkpoint_rows), len(selected_sources)):
+                source = selected_sources[source_index]
+                if show_progress:
+                    print(
+                        f"Processing {dataset} source "
+                        f"{source_index + 1}/{len(selected_sources)}",
+                        flush=True,
+                    )
+                provider_before = provider.stats()
+                screened = screen_source(
                     source,
                     candidate_provider=provider,
+                    facts=None if allow_legacy_facts else pools[dataset].facts_for_source(source),
+                    allow_legacy_facts=allow_legacy_facts,
                     minimum_pairs=3,
                     allow_surface_fallback=False,
                     similarity_fn=semantic_scorer,
                     semantic_correction_retries=correction_retries,
                     max_candidate_facts_per_source=fact_budget,
                 )
-                screened_count += 1
-                candidate_fact_count += int(result.get("candidate_fact_count", 0))
-                processed_fact_count += int(result.get("processed_fact_count", 0))
-                unprocessed_fact_count += int(result.get("unprocessed_fact_count", 0))
-                candidate_package_count += int(result.get("candidate_package_count", 0))
-                early_stop_source_count += int(bool(result.get("early_stop_triggered")))
-                diversity = str(int(result.get("original_entity_diversity", 0)))
-                if diversity in diversity_counts and result.get("eligible"):
-                    diversity_counts[diversity] += 1
-                eligible_count += int(bool(result.get("eligible")))
+                checkpoint_row = {
+                    "kind": "v24_capacity_source_checkpoint",
+                    "status": "completed",
+                    "run_fingerprint": run_fingerprint,
+                    "source_index": source_index,
+                    "source": source_references[source_index],
+                    "screen_result": dict(screened),
+                    "provider_usage": _capacity_provider_usage(
+                        provider_before, provider.stats()
+                    ),
+                }
+                append_jsonl_record(checkpoint_row, checkpoint_path)
+                checkpoint_rows.append(checkpoint_row)
+                screen_results.append(dict(screened))
+                if show_progress:
+                    print(
+                        f"Completed {dataset} source "
+                        f"{source_index + 1}/{len(selected_sources)} "
+                        f"eligible={bool(screened.get('eligible'))}",
+                        flush=True,
+                    )
         finally:
             semantic_scorer.close()
     else:
-        # Offline capacity sanity check: count source-grounded slots only.  It is
-        # an estimate, never the exact eligibility scan and never a formal result.
         for source in selected_sources:
-            screened_count += 1
-            fact_count = len(enumerate_candidate_facts(source))
-            # 此分支不调用 provider/Luna；预算内容量估计必须与实际处理计数分开。
-            budgeted_fact_count = min(fact_count, fact_budget)
-            candidate_fact_count += fact_count
-            processed_fact_count += 0
-            unprocessed_fact_count += fact_count
-            eligible_count += int(budgeted_fact_count >= 3)
-    rate = eligible_count / max(1, screened_count)
+            fact_count = len(enumerate_candidate_facts(source) if allow_legacy_facts else pools[dataset].facts_for_source(source))
+            screen_results.append({
+                "eligible": None,
+                "candidate_fact_count": fact_count,
+                "processed_fact_count": 0,
+                "unprocessed_fact_count": fact_count,
+                "candidate_package_count": 0,
+                "early_stop_triggered": False,
+                "original_entity_diversity": 0,
+            })
+
+    screened_count = len(screen_results)
+    candidate_fact_count = sum(int(row.get("candidate_fact_count") or 0) for row in screen_results)
+    processed_fact_count = sum(int(row.get("processed_fact_count") or 0) for row in screen_results)
+    unprocessed_fact_count = sum(int(row.get("unprocessed_fact_count") or 0) for row in screen_results)
+    candidate_package_count = sum(int(row.get("candidate_package_count") or 0) for row in screen_results)
+    raw_fact_budget_feasible_count = sum(
+        min(int(row.get("candidate_fact_count") or 0), fact_budget) >= 3
+        for row in screen_results
+    )
+    raw_fact_budget_feasible_rate = raw_fact_budget_feasible_count / max(1, screened_count)
+    eligible_count = sum(row.get("eligible") is True for row in screen_results) if use_luna else 0
+    eligible_rate = eligible_count / max(1, screened_count) if use_luna else None
+    early_stop_source_count = sum(bool(row.get("early_stop_triggered")) for row in screen_results)
+    diversity_counts = {str(value): 0 for value in range(1, 4)}
+    if use_luna:
+        for row in screen_results:
+            diversity = str(int(row.get("original_entity_diversity") or 0))
+            if row.get("eligible") is True and diversity in diversity_counts:
+                diversity_counts[diversity] += 1
     target = int(config.get("eligibility", {}).get("target_sources", 2250))
+    expected_source_count = int(
+        config.get("source_pool", {}).get("expected_source_counts", {}).get(dataset, 0)
+        or 0
+    )
+    provider_summary = (
+        _capacity_provider_summary(checkpoint_rows, provider)
+        if provider is not None
+        else None
+    )
+    projected_eligible_source_count = (
+        int(round(float(eligible_rate) * expected_source_count))
+        if eligible_rate is not None
+        else None
+    )
+    if not use_luna:
+        capacity_status = "estimate_only"
+    elif int(projected_eligible_source_count or 0) >= target:
+        capacity_status = "sample_projection_at_or_above_target"
+    else:
+        capacity_status = "sample_projection_below_target"
     result = {
-        "status": "passed",
+        "status": "completed",
         "dataset": dataset,
         "mode": "luna_sample" if use_luna else "offline_fact_capacity_estimate",
         "candidate_source_count": screened_count,
@@ -273,8 +1246,14 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
         "processed_fact_count": processed_fact_count,
         "unprocessed_fact_count": unprocessed_fact_count,
         "candidate_package_count": candidate_package_count,
-        "observed_eligible_source_rate": rate,
-        "projected_eligible_source_count": int(round(rate * int(config.get("source_pool", {}).get("expected_source_counts", {}).get(dataset, 0) or 0))),
+        "raw_fact_budget_feasible_source_count": raw_fact_budget_feasible_count,
+        "raw_fact_budget_feasible_source_rate": raw_fact_budget_feasible_rate,
+        "projected_raw_fact_budget_feasible_source_count": int(
+            round(raw_fact_budget_feasible_rate * expected_source_count)
+        ),
+        "observed_eligible_source_count": eligible_count if use_luna else None,
+        "observed_eligible_source_rate": eligible_rate,
+        "projected_eligible_source_count": projected_eligible_source_count,
         "target_eligible_source_count": target,
         "max_candidate_facts_per_source": fact_budget,
         "early_stop_source_count": early_stop_source_count,
@@ -285,31 +1264,105 @@ def run_capacity_check(root: Path, *, dataset: str, sample_sources: int, use_lun
             sum(int(key) * value for key, value in diversity_counts.items())
             / max(1, eligible_count)
         ),
-        "capacity_status": "estimate_only" if not use_luna else ("sufficient_sample_signal" if rate > 0 else "no_eligible_sample"),
-        "provider": provider.stats() if provider is not None else None,
+        "capacity_status": capacity_status,
+        "run_fingerprint": run_fingerprint,
+        "config_sha256": config_sha256,
+        "source_selection_sha256": source_selection_sha256,
+        "resumed": resumed,
+        "checkpoint_path": _display_path(root, checkpoint_path) if use_luna else None,
+        "checkpoint_sha256": sha256_file(checkpoint_path) if use_luna else None,
+        "provider": provider_summary,
         "semantic_similarity": semantic_scorer.identity() if semantic_scorer is not None else None,
-        "external_calls_performed": provider.physical_attempts if provider is not None else 0,
+        "external_calls_performed": (
+            int(provider_summary.get("physical_attempts") or 0)
+            if provider_summary is not None
+            else 0
+        ),
         "retriever_calls_performed": 0,
         "victim_calls_performed": 0,
         "membership_read": False,
+        "candidate_fact_pool": candidate_pool_binding,
+        "development_sources": source_references,
+        "proposed_fact_count": (
+            sum(pools[dataset].record(str(source["source_key"]))["proposed_fact_count"] for source in selected_sources)
+            if not allow_legacy_facts else None
+        ),
     }
-    write_json(result, root / CAPACITY_OUTPUT_DIR / f"{dataset}.json")
+    write_json(result, summary_path)
     return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="v24 offline pre-split eligibility checks")
-    parser.add_argument("command", choices=("validate-config", "source-pools", "validate-eligibility", "validate-split", "run-canary", "run-capacity-check"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "validate-config",
+            "source-pools",
+            "validate-eligibility",
+            "validate-split",
+            "prepare-fresh-canary",
+            "run-canary",
+            "run-capacity-check",
+            "build-candidate-pool",
+            "validate-candidate-pool",
+        ),
+    )
     parser.add_argument("--manifest", help="普通 v24 manifest 路径（仅 validate-* 命令使用）")
-    parser.add_argument("--dataset", choices=("edgar", "enron", "pubmed"))
+    parser.add_argument("--dataset", choices=DATASET_ORDER)
     parser.add_argument("--input", dest="input_path", help="membership-blind canary input JSONL")
-    parser.add_argument("--output-dir", default=str(CANARY_OUTPUT_DIR))
+    parser.add_argument("--output-dir")
     parser.add_argument("--sample-sources", type=int)
+    parser.add_argument("--per-dataset", type=int, default=10)
     parser.add_argument("--use-luna", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="恢复 canary、capacity 或 candidate pool 的已有结果")
+    parser.add_argument("--candidate-pool", action="append", default=[], help="v24 pool_manifest.json；可重复提供，canary 还允许同数据集的互不重叠开发补充池")
     args = parser.parse_args()
     if args.command == "validate-config":
         config = load_v24_config(PROJECT_ROOT)
-        print(json.dumps({"status": "passed", "protocol_version": config["protocol_version"], "external_calls_performed": 0}, ensure_ascii=False))
+        adapter = config["candidate_fact_adapter"]
+        adapter_kind = str(adapter.get("kind") or "")
+        if adapter_kind == "gliner2_entity_value_span":
+            candidate_model_bound = all(
+                bool(adapter.get(key))
+                for key in ("model", "model_revision", "local_path", "model_lock_path")
+            )
+            candidate_binding = {
+                "kind": adapter_kind,
+                "model": adapter.get("model"),
+                "model_revision": adapter.get("model_revision"),
+                "local_path_bound": bool(adapter.get("local_path")),
+                "model_lock_bound": bool(adapter.get("model_lock_path")),
+            }
+        else:
+            candidate_model_bound = False
+            candidate_binding = {"kind": adapter_kind}
+        print(json.dumps({"status": "passed", "protocol_version": config["protocol_version"],
+                          "candidate_model_bound": candidate_model_bound,
+                          "candidate_binding": candidate_binding,
+                          "external_calls_performed": 0}, ensure_ascii=False))
+    elif args.command == "build-candidate-pool":
+        if not args.dataset:
+            parser.error("build-candidate-pool requires --dataset")
+        output_dir = args.output_dir or (
+            f"artifacts/v24/development/candidate_fact_pool/{args.dataset}" if args.sample_sources is not None
+            else f"artifacts/v24/candidate_fact_pools/{args.dataset}"
+        )
+        result = build_candidate_fact_pool(PROJECT_ROOT, dataset=args.dataset, output_dir=output_dir,
+                                           sample_sources=args.sample_sources, resume=args.resume)
+        print(json.dumps({key: result[key] for key in (
+            "status", "dataset", "scope", "completed_source_count", "proposed_fact_count", "candidate_fact_count", "pool_sha256", "usage",
+        )}, ensure_ascii=False))
+    elif args.command == "validate-candidate-pool":
+        if not args.manifest:
+            parser.error("validate-candidate-pool requires --manifest")
+        config = load_v24_config(PROJECT_ROOT)
+        reader = CandidateFactPoolReader(PROJECT_ROOT / args.manifest, config=config)
+        reader.validate_environment(PROJECT_ROOT, config)
+        reader.validate_sources(PROJECT_ROOT)
+        print(json.dumps({"status": "passed", "dataset": reader.dataset,
+                          "completed_source_count": len(reader.offsets), "pool_sha256": reader.manifest["pool_sha256"],
+                          "external_calls_performed": 0}, ensure_ascii=False))
     elif args.command == "source-pools":
         print(json.dumps({"status": "passed", "source_pools": source_pool_bindings(PROJECT_ROOT), "external_calls_performed": 0}, ensure_ascii=False))
     elif args.command in {"validate-eligibility", "validate-split"}:
@@ -319,17 +1372,42 @@ def main() -> int:
         validator = validate_eligibility_manifest if args.command == "validate-eligibility" else validate_split_manifest
         result = validator(payload)
         print(json.dumps({**result, "external_calls_performed": 0}, ensure_ascii=False))
+    elif args.command == "prepare-fresh-canary":
+        if args.output_dir:
+            output_dir = args.output_dir
+        else:
+            output_dir = str(FRESH_CANARY_OUTPUT_DIR)
+        print(json.dumps(
+            prepare_fresh_canary(
+                PROJECT_ROOT,
+                per_dataset=args.per_dataset,
+                output_dir=output_dir,
+                candidate_pools=args.candidate_pool,
+            ),
+            ensure_ascii=False,
+        ))
     elif args.command == "run-canary":
         input_path = args.input_path or load_v24_config(PROJECT_ROOT).get("development", {}).get("canary_input_path")
         if not input_path:
             parser.error("run-canary requires --input or development.canary_input_path")
-        print(json.dumps(run_canary(PROJECT_ROOT, input_path=input_path, output_dir=args.output_dir), ensure_ascii=False))
+        output_dir = args.output_dir or str(CANARY_OUTPUT_DIR)
+        print(json.dumps(run_canary(PROJECT_ROOT, input_path=input_path, output_dir=output_dir,
+                                   candidate_pools=args.candidate_pool, resume=args.resume), ensure_ascii=False))
     else:
         if not args.dataset:
             parser.error("run-capacity-check requires --dataset")
         config = load_v24_config(PROJECT_ROOT)
         sample_sources = args.sample_sources or int(config.get("development", {}).get("capacity_sample_sources", 30))
-        print(json.dumps(run_capacity_check(PROJECT_ROOT, dataset=args.dataset, sample_sources=sample_sources, use_luna=args.use_luna), ensure_ascii=False))
+        output_dir = args.output_dir or str(CAPACITY_OUTPUT_DIR)
+        print(json.dumps(run_capacity_check(
+            PROJECT_ROOT,
+            dataset=args.dataset,
+            sample_sources=sample_sources,
+            use_luna=args.use_luna,
+            output_dir=output_dir,
+            resume=args.resume,
+            candidate_pools=args.candidate_pool,
+        ), ensure_ascii=False))
     return 0
 
 

@@ -32,6 +32,20 @@ class _Response:
         return b'{"ok": true}'
 
 
+class _IncompleteErrorBody:
+    def read(self) -> bytes:
+        raise http.client.IncompleteRead(b"partial", 10)
+
+    def close(self) -> None:
+        return None
+
+
+class _StreamingResponse(_Response):
+    def __iter__(self):
+        yield b'data: {"id":"x","model":"test-model","choices":[{"delta":{"content":"ok"}}]}\n'
+        yield b"data: [DONE]\n"
+
+
 class SiblingRateLimitTests(unittest.TestCase):
     def test_every_physical_retry_acquires_a_token(self) -> None:
         limiter = _CountingLimiter()
@@ -134,6 +148,61 @@ class SiblingRateLimitTests(unittest.TestCase):
         self.assertEqual(body, '{"ok": true}')
         self.assertEqual(retry_count, 2)
         self.assertEqual(limiter.calls, 3)
+
+    def test_retryable_http_status_with_incomplete_error_body_still_retries(self) -> None:
+        limiter = _CountingLimiter()
+        client = OpenAICompatibleChatClient(
+            base_url="https://example.invalid/v1",
+            model="test-model",
+            retry_until_success=True,
+            retry_backoff_base=0,
+            retry_backoff_max=0,
+            request_rate_limiter=limiter,
+        )
+        request = urllib.request.Request("https://example.invalid")
+        interrupted = urllib.error.HTTPError(
+            request.full_url,
+            503,
+            "unavailable",
+            hdrs=None,
+            fp=_IncompleteErrorBody(),
+        )
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[interrupted, _Response()],
+        ):
+            body, retry_count = client._urlopen_with_retries(request, 1.0)
+        self.assertEqual(body, '{"ok": true}')
+        self.assertEqual(retry_count, 1)
+        self.assertEqual(limiter.calls, 2)
+
+    def test_stream_retryable_http_status_with_incomplete_error_body_still_retries(self) -> None:
+        limiter = _CountingLimiter()
+        client = OpenAICompatibleChatClient(
+            base_url="https://example.invalid/v1",
+            model="test-model",
+            stream=True,
+            retry_until_success=True,
+            retry_backoff_base=0,
+            retry_backoff_max=0,
+            request_rate_limiter=limiter,
+        )
+        request = urllib.request.Request("https://example.invalid")
+        interrupted = urllib.error.HTTPError(
+            request.full_url,
+            503,
+            "unavailable",
+            hdrs=None,
+            fp=_IncompleteErrorBody(),
+        )
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[interrupted, _StreamingResponse()],
+        ):
+            result = client._stream_with_retries(request, 1.0)
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[-1], 1)
+        self.assertEqual(limiter.calls, 2)
 
     def test_retry_until_success_does_not_retry_permanent_http_error(self) -> None:
         limiter = _CountingLimiter()

@@ -2969,3 +2969,438 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 新 canary 尚未获授权；在新的独立 attempt 达到自动 `30/30` 且完成 Assistant-only `60/60` query-quality review 前，不得运行 EDGAR capacity sample、完整 eligibility scan、membership split、Retriever、victim 或 formal evaluation。
 
 当前唯一下一步：先提交现有 prompt/test 修复并等待主人单独授权新的 development-only Luna canary；不得复用 attempt6 输出目录，也不得以失败样本替换或降低 hard gates。
+
+### 2026-09-04：v24 development canary attempt7 失败与 validator 修复（当前）
+
+- [x] 独立目录 `artifacts/v24/development/query_quality_canary_r3_structural_attempt7/` 完成 30 logical cells，自动 hard gates=`28/30`，fallback=`0`，终态=`failed_hard_gates`；summary/results 原始文件和 hash 已保留。
+- [x] provider=`gpt-5.6-luna`，logical API calls=`32`、physical attempts=`72`、transport retries=`40`；Retriever/victim/membership/AUC/GPU/formal=`0`。
+- [x] EDGAR index `2` 为 canonical first-person `we` 残留；Enron index `14` 为固定 `Is it correct that ...` 框架中的自然多 modal 被旧正则误报。两者都没有导致 hard gate 放宽或失败样本替换。
+- [x] 现有 v24 validator 的 modal/do coordination 正则改为仅检测句首倒装协调；candidate/correction Prompt 增补逐字段清除 first-person/document-bound token 的明确要求。该修复不改变 canonical reference gate 或任何 scientific hard gate。
+- [x] 定向 v24 unittest=`69/69 OK`；AST parse 与 `git diff --check` 通过；未运行新的 API、capacity、Retriever、victim 或 formal 任务。
+- [ ] attempt7 仍不满足自动 `30/30`，Assistant-only `60/60` review 尚未开始；在新的独立 canary 达标前继续阻断 capacity sample 及所有下游。
+
+当前唯一下一步：等待主人单独授权新的 v24 development-only Luna canary attempt，使用新输出目录；不得复用 attempt7、降低 hard gates 或把失败证据改标为通过。
+
+### 2026-09-04：v24 query naturalization 直接问句优先（当前）
+
+- [x] 只读统计 attempt7：56 条已选 query 中 42 条（75%）使用 `Is it correct that ...?`，而 fallback=`0`；问题定位为旧 Prompt 对固定安全模板的过强偏好。
+- [x] candidate Prompt 与唯一 semantic correction retry 均改为优先生成语法成立的直接 polar question；固定 verification frame 仅保留给直接倒装会失真、歧义或无法自然承载复杂多 modal 命题的情况。
+- [x] 保持 validator 对 `Is/Are/Was/Were/Do/Does/Did/Has/Have/Had/Can/Could/Will/Would/Should/May/Might/Must/Shall` 的合法接受；新增 `Does/Was/Can/Will` 回归，不把 opening diversity 变成 hard gate或 ranking signal。
+- [x] 不改变 scientific hard gates、BGE、candidate ranking、fallback、PVS、split、query budget 或 v23 frozen 文件；本次 API/Retriever/victim/GPU/membership/AUC/formal 调用均为 `0`。
+- [ ] 运行 v24 定向 unittest、AST parse 与 `git diff --check`；通过后方可请求新的独立 Luna canary 授权。
+
+当前唯一下一步：完成离线验证；随后等待主人单独授权新的独立 v24 development-only Luna canary，不复用 attempt7，不启动 capacity 或下游。
+
+### 2026-09-04：v24 development canary attempt10 direct-polar 终态是
+
+- [x] 新独立输出目录 `artifacts/v24/development/query_quality_canary_r3_direct_polar_attempt10/` 完成 30 logical cells；自动 hard gates=`27/30`、`fallback_pair_count=0`、状态=`failed_hard_gates`，失败 evidence 原样保留。
+- [x] provider=`gpt-5.6-luna`；logical API calls=`31`、physical attempts=`76`、transport retries=`45`；summary/results hashes 分别为 `98a1b9cf6247ad5bc1456cf54ce2c9b37f8ee2debe63f956f57566a7b5de3c7e` / `4a1bb9145651214565cbd98a0f78bd8499d24f749ece162003d0bfe348086ddd`。
+- [x] 失败为既有 pre-Luna fact-quality gate：Enron index `5`=`candidate_fact_incomplete_temporal_reference`，PubMed index `1`=`candidate_fact_heading_sentence_glue`，PubMed index `9`=`candidate_fact_entity_contains_citation`；不属于 direct-polar naturalization 回归，也未替换样本或放宽 hard gates。
+- [x] 54 条 query 的 direct-polar=`46/54`（85.19%），`Is it correct that`=`8/54`（14.81%），fallback=`0`；NLI neutral diagnostic 可通过，未读取 membership/Retriever/victim/AUC。
+- [ ] attempt10 未达到 `30/30`，因此不启动 Assistant-only `60/60` review 或 capacity sample；完整 eligibility scan、membership split、Retriever、victim 和 formal evaluation 继续 blocked。
+
+当前唯一下一步：在现有 v24 范围内处理这三类已知 fact-quality 输入问题后，使用新的独立 canary attempt；不得复用 attempt10、替换失败样本或降低 hard gates。
+
+### 2026-09-05：v24 Qwen3.5-4B Candidate-Fact Pool（当前）
+
+- [x] 实现本地 Ollama 原文 claim/entity 抽取、严格 JSON、唯一 spans、单槽检查、跨 chunk 去重与稳定 fact_order；配置固定 Qwen3.5-4B Q4_K_M、关闭 thinking、4096/1024、seed=42、temperature=0、单并发及一次传输重试。digest 暂未绑定，真实运行必须通过 digest/量化/GPU 检查。
+- [x] 实现 source JSONL + 普通 pool manifest，保留提议/拒绝计数、完整响应和失败证据；零候选完成 source 不丢失分母，未完成 source 不伪装为零候选。checkpoint/resume 校验完整记录，损坏拒绝复用，完成池禁止覆盖。
+- [x] 53 号 runner 接入 build/validate 命令与重复 `--candidate-pool`；capacity、fresh canary、frozen scanner 显式读取同一绑定池，并复核所选数据集的冻结源池数据库内容 hash。开发子集不能用于正式 scanner，pool hash 进入 capacity/resume 和 eligibility manifest，Luna 配置变化不自动要求重新抽取。
+- [x] 复用现有开发记录的 source identities/text hashes，补齐冻结原文 hash 并写入池排除集合；恢复旧 capacity 确定性 source prefix，仅消费身份。禁止历史类型、反事实、membership、Retriever/victim 回答或 AUC/PVS 进入候选输入。
+- [x] 离线验收通过：v24 `97/97`，加 PVS/source/budget 回归共 `102/102`；静态配置通过、`candidate_model_bound=false`，内存 AST 编译、diff check 通过。起始快照的 76 个 v23 文件 hash 保持一致；没有新增代码文件或真实实验 artifact，没有提交/推送。
+- [x] 本阶段真实模型/API/GPU/检索/victim 调用为 0；模型部署、10-source 验证、Luna canary、capacity、完整构建均未启动。Qwen3-4B 保留 IA、Luna 保留重构/query、Gemma 保留 victim；不声称 Qwen 不同权重之间的模型家族独立性。
+- [ ] 单独授权后，先部署并绑定本地完整 digest；固定每数据集 10 个 source，验证显存、速度、长度预检与事实质量，不因失败或候选不足替换/补抽 source。
+- [ ] 抽取开发验证后再决定新 Luna canary；重新取得自动 `30/30` 和 Assistant-only `60/60` 证据后，才推进 capacity、完整候选池及下游。保留 attempt10 与旧 regex 失败证据，不将其混入新 adapter 结果。
+
+当前唯一下一步：等待主人单独授权模型部署及每数据集 10-source 抽取验证。新候选输入会改变 eligibility，需重新取得相关实验依据；仍使用 v24，不改 hard gates、BGE/NLI diagnostic、前 8 预算/early stop、3 pairs/6 queries、split 配额与 victim budget，不增加 governance 层。
+
+### 2026-09-05：Qwen3.5-4B 抽取部署验证完成
+
+- [x] ModelScope 下载并导入 Ollama；GGUF hash=`00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`，Ollama digest=`sha256:67dd8464f0fdef87b1c1984629e6ef728498332e5a7d72c709ba7dd1046baae7`。
+- [x] Q4_K_M、RTX 4060 全 GPU 驻留、Ollama 0.32.5、`num_ctx=8192`、`num_predict=1024`、`think=false` 已通过实际 preflight；抽取后仍为全 GPU/8192。
+- [x] 固定范围 EDGAR/Enron/PubMed 各 10 source，30 source/113 chunk；8192 超限 chunk=`0`。完成/失败=`15/15`，失败均为输出截断；Ollama chat=`74`，Luna/victim/Retriever=`0`。
+- [x] 候选统计 EDGAR 162、Enron 38、PubMed 11，合计 211；Assistant-only quality review=`quality_followup_required`，结构残片不能通过正式事实质量门禁。
+- [x] 诊断 artifact 已封存于 `artifacts/v24/development/qwen35_extraction_validation_20260905_8k/`，失败 source 和截断响应完整保留，不作为正式池。
+- [x] 离线回归 `102/102 OK`，AST 与 `git diff --check` 通过；未运行 Luna canary、capacity、完整候选池、Retriever、victim 或 formal test。
+- [ ] 新独立 development 目录处理输出截断与事实完整性修复；未通过前不得进入下游。
+
+当前唯一下一步：保留本批失败证据，完成最小质量修复/复核，不补抽、不替换 source，不降低 hard gates。
+
+### 2026-09-05：Qwen3.5-4B 3072 输出验证完成
+
+- [x] `num_ctx=8192` 保持不变，`num_predict=3072` 已接入 YAML、adapter identity、请求参数和测试；新增明确结构残片拒绝规则。
+- [x] 同一固定 30 source/113 chunk 重新验证，8192 超限为 `0/113`，最大边界 7088；完成/失败 `25/5`，失败全为 3072 输出截断。
+- [x] 分数据集完成/失败：EDGAR `8/2`、Enron `10/0`、PubMed `7/3`；候选 183/19/306，合计 508；原始提议 877，拒绝 369；零候选完成 source=4。
+- [x] Ollama chat=96，模型为 Q4_K_M、digest 已绑定、全 GPU/8192 驻留；Luna/victim/Retriever/membership/AUC=0。
+- [x] 106 项 v24/PVS/source-budget 回归、AST、diff check 和产物 hash 复核通过；诊断 artifact 位于 `artifacts/v24/development/qwen35_extraction_validation_20260905_8k_3072/`，不作为正式池。
+- [ ] 5 个 source 仍因输出截断失败，且尚未完成逐事实语义审查；正式候选池、Luna canary、capacity 和下游继续阻断。
+
+当前唯一下一步：在独立 development 目录处理截断 source 并完成 Assistant-only 逐事实审查，保留本轮失败证据，不替换 source、不降低 hard gates。
+
+### 2026-09-05：3072 抽取验证事实审查完成
+
+- [x] 25 个完成 source 的前 8 个候选已逐条 Assistant-only 审查，覆盖 130/508 候选：明显无问题 95、需复核 6、拒绝 29。
+- [x] 已记录邮件头/署名、键值字段、整段实体、并列槽、方程编号等失败模式；artifact=assistant_fact_review.json，不宣称人工盲审或统计质量指标。
+- [ ] 5 个 source 仍因 done_reason=length 在 3072 截断；EDGAR 8/10、Enron 10/10、PubMed 7/10，正式池和下游继续阻断。
+
+当前唯一下一步：基于审查证据决定最小结构规则，再在独立目录复核截断 source 和实体槽质量。
+### 2026-09-05：Qwen3.5-4B 4096 验证状态（superseding）
+
+- [x] `num_predict=4096` 已同步 v24 YAML、adapter identity、Ollama options 和 context unittest；`num_ctx=8192`、Q4_K_M、digest、think=false、seed=42、单并发保持冻结。
+- [x] 同一固定 30 source/113 chunk 精确预检通过：EDGAR/Enron/PubMed 最大边界 `7998/7159/8112`，超限 `0/113`。
+- [x] 实际完成/失败：EDGAR `8/2`、Enron `10/0`、PubMed `8/2`，合计 `26/30`；4 个失败全部为完整输出截断，Ollama chat=`103`，无 context overflow、传输失败、非法 JSON。
+- [x] 候选=`547`、原始提议=`969`、代码拒绝=`422`；零候选完成 source=`4`，计入分母。Luna/victim/Retriever/membership/AUC=`0`。
+- [x] 诊断输出目录：`artifacts/v24/development/qwen35_extraction_validation_20260905_8k_4096/`；3072 目录原样保留，不作为正式候选池。
+- [x] v24 定向 unittest=`101/101 OK`，AST 与 `git diff --check` 通过。
+- [ ] 仍未达到稳定完成和事实质量条件，正式 candidate pool、Luna canary、capacity、split、Retriever、victim 与 formal evaluation 继续阻断。
+
+当前唯一下一步：完成 4096 诊断目录的 Assistant-only 前 8 facts 质量审查，并基于失败证据决定最小结构修复；不补抽、不替换 source、不降低 hard gates。
+### 2026-09-05：v24 GLiNER2 entity/value span adapter（superseding）
+
+- [x] candidate construction 改为原文 proposition + GLiNER2 entity/value span detection；Luna、Gemma、Qwen3-4B IA 和所有下游职责保持不变。
+- [x] 增加少量 proposition structural rejection 与 rejection counters；不引入新的 LLM 或通用 NLP parser。
+- [x] `preferred_max_words=6` 降级为诊断，`hard_max_words=12` 作为保护；保留长组织名、生物医学/药物/基因/通路、法规名和技术术语，记录 entity word count 与 label provenance。
+- [x] 支持同一 claim 多 entity/value candidates，按 proposition span、entity span、entity text 确定性排序并按相同 `(claim span, entity span)` 去重。
+- [x] 现有 pool JSONL/manifest/checkpoint/resume/hash、显式 `--candidate-pool`、zero-candidate 分母、前 8 facts、hard gates、PVS、split 和 query budget 未改变。
+- [x] Qwen3.5 历史验证产物保留为 diagnostic-only，不复用到 GLiNER2 pool；v23 文件未修改。
+- [x] mock/static 验收：v24 unittest=`106/106 OK`，AST 与 `git diff --check` 通过；真实模型/GPU/API/Luna/Retriever/victim/capacity/formal 均未运行。
+- [ ] 需要新的 GLiNER2 development validation，确认本地模型绑定、GPU 驻留、proposition rejection 分布和 entity/value 质量后，才考虑正式 pool。
+
+当前唯一下一步：固定 10-source development validation 使用 GLiNER2 adapter；完成前继续阻断正式 candidate pool、Luna canary、capacity 和下游正式阶段。
+
+### 2026-09-05：v24 Qwen adapter removal（superseding）
+
+- [x] 删除 v24 Qwen3.5/Ollama candidate adapter 代码、配置分支和 pool 消费兼容分支；GLiNER2 是唯一正式 candidate extractor。
+- [x] 保留 Qwen 历史验证产物为 `diagnostic_only`，不删除、不覆盖、不复用。
+- [x] 更新 `validate-config` 与 GLiNER2 mock 测试；旧 Qwen 专属测试仅作 skipped legacy regression，不参与 v24 adapter 验收。
+- [x] 重新验证：v24 unittest `106` 项（`96` passed，`10` skipped legacy），AST OK，`git diff --check` 通过。
+
+当前唯一下一步：固定三数据集各 10 source 的 GLiNER2 development validation；正式 pool、Luna canary、capacity 和下游实验继续阻断。
+
+### 2026-09-05：GLiNER2 三数据集 10-source validation 完成
+
+- [x] EDGAR/Enron/PubMed 各完成 10 个冻结 source（30/30），使用本地 CUDA GLiNER2，独立输出目录 `artifacts/v24/development/gliner2_entity_value_validation_20260905_r2/`。
+- [x] 三池 `validate-candidate-pool` 全部通过；零候选 source=0；候选统计 EDGAR `1118`、Enron `112`、PubMed `2296`；pool hash 已写入 notes 和 manifest。
+- [x] 记录 proposition/span rejection、模型 revision、设备和 source-pool identity；首轮失败目录保留，修复仅涉及 validator 对重复 mention 的重复拒绝。
+- [x] 未调用 Luna、Retriever、victim、membership、AUC、capacity 或正式下游；Qwen 历史目录继续 diagnostic-only。
+- [ ] 完成预先定义的逐事实质量复核；在复核完成前不构建 formal candidate pool、不启动 Luna canary 或下游实验。
+
+当前唯一下一步：GLiNER2 30-source development pool 逐事实质量复核，并保留所有失败证据。
+
+### 2026-09-05：30-source candidate structural review 完成
+
+- [x] 全部 `3526` 个 GLiNER2 candidate 已生成 assistant-only structural review artifact；结果 pass=`3516`、reject=`9`、review=`1`。
+- [x] review 明确标记 `diagnostic_only=true`、`human_review_performed=false`，不改变 candidate pool、前 8 规则或下游协议。
+- [ ] 对 10 条非 pass candidate 做独立语义决定；在决定完成前继续阻断 Luna canary、capacity、formal pool 和下游实验。
+
+当前唯一下一步：复核 9 条 reject 与 1 条 review 候选，并保留原始记录。
+
+### 2026-09-06：v24 BEIR source-pool migration implementation
+
+- [x] v24 数据集绑定改为 `nfcorpus`、`scidocs`、`trec-covid`；旧数据集生产入口 fail closed。
+- [x] v24-local reader/contract 与 BEIR corpus builder 已实现；固定统一字段映射和 1 document=1 source=1 chunk。
+- [x] duplicate ID/text、manifest/order/database hash、membership-blind flags、2250 minimum、development exclusion 已覆盖。
+- [x] v24 unittest、AST 和 diff check 通过；v23 未作为新数据集兼容层修改。
+- [ ] 真实 BEIR source pool 尚未构建；GLiNER2 10x3 validation、Luna canary、capacity 和 formal eligibility 继续阻断。
+
+当前唯一下一步：获得本地固定 `corpus.jsonl` 后构建三套 v24 source pool，并固定 10x3 development identities。
+
+### 2026-09-06：BEIR source pools 构建完成
+
+- [x] 下载并解压三个 BEIR corpus，未读取 query/qrels。
+- [x] v24-local pools 已冻结：NFCorpus `3593`、SCIDOCS `25656`、TREC-COVID `170367`；每个 source 只有一个 rank-0 chunk。
+- [x] manifest/order/database hash、membership-blind flags 和每池 10 个 development identities 已生成并通过 reader 验证。
+- [x] v24 unittest `110` 项通过（`100 passed`、`10 skipped legacy`），AST 和 `git diff --check` 通过。
+- [ ] GLiNER2 10x3 development validation 尚未运行；Luna canary、capacity、formal eligibility 继续阻断。
+
+当前唯一下一步：获得单独授权后，在三套新冻结 pool 上运行 GLiNER2 各 10 source 验证。
+
+### 2026-09-06：新 BEIR GLiNER2 10x3 validation 完成
+
+- [x] NFCorpus、SCIDOCS、TREC-COVID 各 10 source，30/30 完成；candidate=`291/212/312`，proposal=`380/260/381`。
+- [x] 三个 candidate pool 离线 validation passed，pool hash 已绑定；零候选 source=0，fact slot 结构异常=0。
+- [x] 未调用 Luna、Retriever、victim、capacity 或 formal eligibility；新池仍为 development-only。
+- [ ] 完成新三数据集 candidate 的 assistant-only structural/semantic review。
+
+当前唯一下一步：复核新三数据集 815 条候选，保留所有 reject/review 证据，再决定 Luna canary。
+
+### 2026-09-06：815 candidate assistant-only review 完成
+
+- [x] 新三数据集全部 `815` 条候选已完成结构复核：pass=`810`、review=`5`、reject=`0`。
+- [x] 5 条 review 候选来自 NFCorpus 的 `and/or` 短语，未从 candidate pool 删除。
+- [x] review artifact 标记为 diagnostic-only，未调用任何下游模型或服务。
+- [ ] 对 5 条候选进行独立语义决定。
+
+当前唯一下一步：完成 5 条 review 候选的语义复核，再决定是否授权 Luna canary。
+
+### 2026-09-06：5 条 review 候选独立语义决定
+
+- [x] 已写入 `artifacts/v24/development/gliner2_beir_validation_20260906/semantic_review_decisions.json`；保留 4 条、拒绝 1 条。
+- [x] 拒绝 `nfcorpus::MED-1013` 的 `functioning and quality of life`（两个可独立替换概念）；保留其余四条固定术语/程度值/数值范围候选。
+- [x] 原始 `assistant_fact_review.json`、source records、candidate pool hash 和下游协议未修改；该记录仍是 assistant-only diagnostic evidence。
+
+当前唯一下一步：用户单独授权后才进行 Luna canary；在此之前不启动 Luna、capacity、formal eligibility 或正式评估。
+
+### 2026-09-06：entity/value ranking 静态实现
+
+- [x] 对现有 815 条候选做只读分布检查，确认 OTHER/generic span 与错误 label 会过早占据 first-8。
+- [x] 保留同 claim 多槽；使用确定性三档 surface+label quality。0/1 档共同按 claim 轮转，每轮按 tier 与原文位置排序，低优先级 2 档最后轮转。疑似词性仅降级，避免宽泛词尾硬删；明显结构问题才拒绝。
+- [x] candidate count 仍是完整 validated+deduped 集合，`fact_order` 和完整 `candidate_processing_order` 为冻结顺序；reader 重算 ranking/grounding 并拒绝漂移，adapter policy 变化使旧池不能继续消费。first-8 不补第 9、early stop、Luna/hard gates/PVS/split/query budget 均未变。
+- [x] 修复问句、明确 heading/body glue 和过宽 signature 过滤；GLiNER2 schema/model/revision 与 Luna prompt projection 保持不变，排名 metadata 不进入 Luna。
+- [x] 独立离线报告 `artifacts/v24/development/entity_ranking_offline_diagnosis_20260906.json` 保存每 source counts、每 claim histogram、label distribution/examples、旧与重放 first-8。原 815 条在新过滤重放后为 744；low-priority 诊断 `113/215 -> 16/211`，claim coverage `77 -> 165`。不得将按本次规则计算的诊断变化写成独立语义准确率或真实 validation passed。
+- [x] 更正旧记录：原 TREC-COVID 有 2 个零候选 source，新问句过滤重放后为 3 个，全部计入分母；旧 `810 pass + 5 review` 不代表全池只有 1 条语义问题，5 条独立决定亦仅为 Assistant 复核。原 artifacts 未改写，未生成手工筛选的 814 条池。
+- [x] v24 + BEIR reader 定向 mock unittest `126` 项（`116 passed`、`10 skipped legacy`）通过；未运行真实 GLiNER2、Luna、Retriever、victim 或 capacity。
+- [x] Conda 解释器路径、AST、诊断 JSON/hash、`git diff --check` 通过；最终 `git status` 复查完成，76 个 v23 文件及原 validation 目录内 8 个产物 hash 不变。本次未提交、推送或产生临时脚本/缓存。
+- [ ] 尚未完成新 ranking 的真实 development validation，不能表述为 ranking validation passed。
+
+当前唯一下一步：使用独立 development 输出重跑已使用的同一批 30 个 source identities，复核 first-8 及全部失败/零候选；不得自动改选另一批 source，不修改 development exclusion，不用旧 validation 背书新排序。重跑前继续保持 Luna/capacity/formal 未启动。
+
+### 2026-09-06：ranking rerun 完成
+
+- [x] 新增 development-only `fixed_source_identities` 参数，按 source key 与 source/text hash 绑定旧 30-source 身份；resume 时 identity drift fail closed，正式池路径拒绝该参数。
+- [x] 新 GLiNER2 rerun 目录：`artifacts/v24/development/gliner2_beir_ranked_validation_rerun_20260906/`；NFCorpus/SCIDOCS/TREC-COVID 各 `10/10` 完成，候选 `270/212/264`，原始提议 `354/264/326`，first-8 `75/80/56`。
+- [x] 总 inference attempts=`224`；三池 reader/hash 校验通过，身份与旧记录一致。TREC-COVID 零候选 source=`3`，全部保留并计入分母。
+- [x] mock/static 回归 `124` 项（`114 passed`、`10 skipped legacy`），未调用 Luna、Retriever、victim、capacity 或 formal evaluation。
+- [ ] 仍需对新排序 first-8 做 assistant-only 质量复核；之后才讨论独立 Luna canary 授权。不得将本轮 development 结果写成正式质量或 eligibility 通过。
+
+- [x] first-8 assistant-only review 已写入 `artifacts/v24/development/gliner2_beir_ranked_validation_rerun_20260906/first8_quality_review.json`：211 条中 pass=`209`、review=`2`、reject=`0`；review 仅为 `and/or` 协调短语。
+- [ ] 仍需对 2 条 review 候选作独立语义决定；该 review 不等价于人工盲审或正式质量通过。
+
+当前唯一下一步：独立决定 `first8_quality_review.json` 中 2 条 review 候选，之后再讨论是否授权 Luna canary。
+
+### 2026-09-06：ranking v2 最小收紧完成（待真实复核）
+
+- [x] 保留同 claim 多槽和完整 candidate pool；新增 source-level unique normalized entity preference，processing order 分为 unique pass 与 duplicate fallback，first-8 仍严格为 8。
+- [x] bare scalar/cardinal number 降级但不删除；typed value、日期、金额、百分比、带单位数值保持较高优先级。
+- [x] generic OTHER 使用小型 generic head/abstract suffix 诊断降级；明显 adjective/comparative slot、question proposition 和 publication fragment 增加确定性拒绝。
+- [x] 新增测试，v24 unittest `129` 项通过（`119 passed`、`10 skipped legacy`）。
+- [x] 生成 `entity_ranking_v2_offline_comparison.json` 作为旧 rerun 的 diagnostic-only 投影，未覆盖历史 artifact；尚无 v2 真实 GLiNER2 证据。
+
+当前唯一下一步：用户授权后重跑同一批 30-source v2 GLiNER2 development validation，再决定是否进入 Luna canary。
+
+### 2026-09-06：v2 GLiNER2 真实 10x3 validation 完成
+
+- [x] 固定同一批 30 source identities，v2 输出目录为 `artifacts/v24/development/gliner2_beir_ranked_v2_validation_20260906/`；三数据集 `10/10`，source identity/hash `30/30` 一致。
+- [x] proposals/candidates：NFCorpus `351/260`、SCIDOCS `264/205`、TREC-COVID `326/253`；合计 `941/718`，inference=`222`，first-8=`211`。
+- [x] first-8 unique entity preference 后重复占用：NFCorpus=`8`、SCIDOCS=`0`、TREC-COVID=`0`；candidate pool 未删除重复 candidate。TREC-COVID 零候选=`3`，保留分母。
+- [x] v2 first-8 assistant-only review=`209 pass / 2 review / 0 reject`，仅 diagnostic-only；reader/hash/manifest 校验通过。
+- [ ] 尚需独立决定 2 条 review 候选；未启动 Luna、capacity、formal eligibility 或正式评估。
+
+当前唯一下一步：独立复核 v2 first-8 的 2 条 review 候选，之后再讨论 Luna canary 授权。
+
+### 2026-09-06：v2 review 语义决定完成
+
+- [x] 复核 v2 first-8 的 2 条 `coordinated_entity_span`：`one or two` 和 `five or more times` 均保留为单一 value slot。
+- [x] 新增 development-only `semantic_review_decisions.json`；两条均 `retain_for_candidate_pool`，`replacement_suitability=not_assessed`。
+- [x] 未改写 candidate pool 或 first-8 顺序，未启动 Luna、capacity、formal eligibility、Retriever 或 victim。
+
+当前唯一下一步：等待单独授权后进行 development-only Luna canary；正式 eligibility 和正式实验继续阻断。
+
+### 2026-09-07：canary 零候选顺延补选已实现
+
+- [x] 按用户新要求解除 canary 每个原固定 source 都必须有候选的限制；仅零候选可跳过，沿冻结顺序从绑定池中补足每数据集 10 个输入。
+- [x] 复用 `--candidate-pool` 支持互不重叠的 development 补充池；原池不覆盖，同 dataset 多池只用于 canary，正式 pool 和 capacity 入口不变。
+- [x] preflight evidence 保留零候选和补入 source 的身份/hash，现有开发排除逻辑同时覆盖两者；不足时保存缺口，未完成 fixture 不生成 canary 输入。
+- [x] mock 覆盖连续零候选、冻结顺序和 pool hash 稳定、补充池读取、开发排除、缺口、错误记录 fail closed、first-8，以及 Luna 失败不补 source。136 项定向测试（126 passed、10 skipped legacy）和 AST 通过，旧 v2 三池离线校验通过。
+- [ ] 尚未真实补抽 TREC-COVID source，也未准备真实补选 canary fixture 或调用 Luna。原 30-source validation 结果仍保留，不能把补选 canary 的通过率当作总体 source eligibility。
+
+当前唯一下一步：为 TREC-COVID 的 3 个零候选缺口按冻结顺序补充 development 候选，之后准备新的 10x3 canary fixture；真实模型任务尚未执行。
+
+### 2026-09-07：补充抽取与 10x3 canary 输入准备完成（superseding）
+
+- [x] 使用冻结 GLiNER2/ranking v2，在独立 development 补充池完成 TREC-COVID rank `20/21/22` 三篇抽取；三篇均非空，候选=`61/23/10`，合计 `94`，原始提议=`109`，本地 CUDA inference=`24`，失败=`0`。
+- [x] 补充池：`artifacts/v24/development/gliner2_beir_canary_supplement_20260907/batch_01/trec-covid/pool_manifest.json`；reader、source/chunk、排序和 hash 校验通过，原三套 v2 池及零候选证据保留。
+- [x] 离线 fixture：`artifacts/v24/development/query_quality_canary_beir_ranked_v2_20260907/preflight/canary_inputs.jsonl`；preflight=`passed`，检查 `33` 篇、跳过 `3` 篇零候选、补入 `3` 篇，每数据集选中 `10` 篇，共 `30` 个不同 source。
+- [x] 输入与 manifest 内容/文件 hash、first-8 绑定和全部 `33` 条 source decision 身份复核通过；已检查的入选/零候选 source 均受开发排除覆盖，三数据集当前开发 source key 数=`20/20/23`。
+- [x] 本次真实 Luna/API、Retriever、victim、capacity、formal 与 membership/AUC 调用或读取为 `0`；输入准备完成不等于问句生成或质量审核通过。
+- [ ] 使用固定输入运行新的 development-only Luna canary，并完成 Assistant-only 60-query review；真实 Luna API 需单独授权。
+- [ ] 进入后续 capacity 前修复源池总量读取缺失导致的零投影问题；当前尚未开展 capacity 或正式下游。
+
+当前唯一下一步：单独授权后运行已准备输入对应的 Luna canary，使用原三套 v2 池及 TREC-COVID 补充池，保留全部自动门禁失败并进行逐条问句质量复核。
+
+### 2026-09-07：已授权并启动 BEIR Luna canary（进行中）
+
+- [x] 主人授权运行固定 30-input Luna canary 并复核目标 60 条问句；已启动 `artifacts/v24/development/query_quality_canary_beir_ranked_v2_20260907/luna_attempt1/`，四套池及输入 hash 均已绑定。
+- [x] 模型和限速/重试配置按现有配置运行；只读目录连通性检查 HTTP `200` 且列出 Luna，该检查 completion 次数为 `0`。
+- [x] 长时间等待期间主人明确选择继续原配置等待；当前同一运行尚未返回整批 summary，实际完成数和 API 次数尚不可核验。
+- [ ] 收到本轮 canary 终态及结果，核验模型身份、输入/结果 hash、自动门禁和调用计数。
+- [ ] 逐条复核实际生成问句并记录未生成/失败项，明确 Assistant-only，不能将未完成的审核记作 60/60 passed。
+
+当前唯一下一步：继续等待当前 `luna_attempt1`，返回后完成问句质量复核；不重复启动该批输入的另一运行。
+
+### 2026-09-07：状态核验与文档职责调整（superseding）
+
+- [x] 17:27（Asia/Shanghai）复核：未发现原 canary/Python 进程，`luna_attempt1` 无结果和 summary 文件；原任务有中断记录。此前“进行中、继续等待”的状态已过时，本批完成数和调用数仍未知，不能判为科学门禁失败。
+- [x] README 更新为 v24 当前入口并保留历史说明；AGENTS.md 只保存稳定规则及研究总表链接，不再重复实验过程、进度或阶段快照。
+- [x] 记录上一步离线定向回归：146 项，136 passed、10 skipped legacy；本次没有修改代码、配置或实验产物，也没有新增模型/API/Retriever/victim 调用。
+- [ ] 最小修复 canary 的逐 source 保存、进度与恢复；修复 capacity 源池总量取数，并补充对应离线回归。
+- [ ] 固定输入 canary 完成后核验真实结果，执行自动 30/30 pair 门禁与 Assistant-only 60-query 复核，保留所有缺失及失败证据。
+- [ ] canary 通过后，先验证 NFCorpus 的真实 source 级容量；全部样本（含零候选与失败）计入分母，不以补选 canary 的通过率代替每篇 3-pair eligibility。
+- [ ] 在正式运行前补齐 v24 query/split 到 RAG/PVS 的接口和开发集端到端验证，再冻结配置与代码并按单 cell 推进正式实验。
+
+当前唯一下一步（待开发）：修复现有 53 号 runner 的 canary 持久化/恢复与 capacity 总量取数并完成离线回归；本次文档修改不构成实现或真实实验已完成的证据。
+
+### 2026-09-07：canary 保存与恢复修复完成（superseding）
+
+- [x] 53 号 `run-canary` 在初始化前建立结果/汇总文件，每条 source/input 完成后原子保存成功或失败证据，并显示、保存进度。
+- [x] CLI 支持 `run-canary --resume`；校验固定输入、候选池、source/fact、配置、有效模型与相关代码，跳过已保存条目。已保存失败不得重试，完成的失败运行仍保持 hard-gate 失败。
+- [x] 覆盖结果先于汇总落盘、原子替换后尚未更新内存、临时文件写入中断和最终汇总缺失；已完成结果可离线复用，损坏或身份漂移在模型调用前拒绝。
+- [x] 明确未落盘条目需要重新执行；在途实际调用/重试次数可能未知，使用 `external_call_counts_complete=false`，不伪造精确调用数或将进程中断记作科学失败。
+- [x] 新增 14 项 canary 离线回归；v24、BEIR 与 sibling retry 定向测试合计 160 项（150 passed、10 skipped legacy）。本轮未运行真实模型/API/GPU/Retriever/victim，未修改配置或真实实验产物。
+- [x] README 已同步恢复方法和限制；AGENTS.md 继续只维护稳定规则。旧 `luna_attempt1` 及未完成证据保留，不声称修复找回了未落盘的结果。
+- [ ] 用已固定输入在新输出目录完成真实 Luna canary，再核验自动门禁与 Assistant-only 问句质量；恢复实现通过不等于真实 30-pair/60-query 验收通过。
+- [ ] 在进入 capacity 前修复源池总量取数，之后优先验证 NFCorpus 的真实 source 级容量。
+- [ ] 正式实验前补齐 v24 query/split 到 RAG/PVS 接口与开发集端到端验证。
+
+当前唯一下一步：在新输出目录运行固定输入的 BEIR Luna canary 并完成问句复核；中断后沿用同一输入、候选池和输出目录加 `--resume`。本轮已完成代码修复与离线验证，尚未启动该真实运行。
+
+### 2026-09-07：已授权重新运行固定 canary（luna_attempt2）
+
+- [x] 用户要求重新开始后，确认没有重复 Python 进程，并核验固定 `30` 条输入、`10/10/10` 数据集分布与四套候选池。
+- [x] 使用修复后的 53 号 runner 启动 `artifacts/v24/development/query_quality_canary_beir_ranked_v2_20260907/luna_attempt2/`；输入 hash 不变，未重新生成输入或候选池。
+- [x] 有效模型为 `gpt-5.6-luna`，沿用当前本机 HTTP 转发入口（端口 `8317`）和已配置的采样、预算及重试参数；CUDA 可用，BGE 本地 snapshot 已绑定。
+- [x] 18:56（Asia/Shanghai）确认首条结果已经逐条保存；本轮 run fingerprint=`d773e25f097add1523ade620928bea0d96756a885b36c97a468cf66f5af21c54`。保存/进度修复已在真实调用中开始生效。
+- [ ] 等待本批全部 30 条输入完成，校验结果 hash、实际模型、自动门禁与终态调用计数；保留所有成功、失败和缺失项。
+- [ ] 对实际输出的问句完成 Assistant-only 质量复核；没有 gate-accepted pair 的输入须明确记作问句未提供，不冒充已审核的通过问句。
+
+当前唯一下一步：完成当前 `luna_attempt2` 及其问句复核。本批不启动 capacity、Retriever、victim 或正式实验。
+
+### 2026-09-07：luna_attempt2 完成，质量门禁未通过（superseding）
+
+- [x] 固定 `30` 条输入全部执行并逐条保存，终态时间为 `19:12:28`（Asia/Shanghai）；自动门禁 `28/30`，NFCorpus/SCIDOCS/TREC-COVID 分别为 `8/10`、`10/10`、`10/10`。`failed_hard_gates` 与退出码 `1` 表示完成后的门禁失败，不再等待该进程或重新启动同批运行。
+- [x] 实际模型=`gpt-5.6-luna`；逻辑调用 `36`、实际请求 `44`、传输重试 `8`，调用计数完整。真实运行验证逐条保存，未发生中断或使用 `--resume`；旧运行没有保存的完成数和调用数仍未知。
+- [x] 校验四套候选池、输入/source/fact、配置、有效模型、代码及 run identity；30 条结果顺序、逐行内容 hash、最终文件 hash 和累计调用量均一致，未出现执行错误条目。
+- [x] 保留 `nfcorpus::MED-1011`、`nfcorpus::MED-1015` 的自动失败及空 `selected_pair`；没有补选或重试为通过，其 `4` 个目标问句槽位记为 `not_generated`。
+- [x] Assistant-only 复核完成全部 `60` 个槽位：实际问句 `56` 条，`20` passed、`36` failed，未生成 `4`，待复核 `0`；完整通过 pair=`9/30`。逐数据集问句通过数为 `6/8/6`，失败数为 `10/12/14`，未生成数为 `4/0/0`；主要失败项为自包含性 `34` 条。
+- [x] 两份复核文件已完成并核验来源/问句 hash、唯一槽位及汇总；状态=`failed_assistant_query_quality_review`、`capacity_sample_allowed=false`。人类复核、独立盲审、agreement 和 Cohen's kappa 均未发生或不可用。
+- [x] README 与研究总表同步本轮终态，保留启动、中断和失败历史；AGENTS.md 不添加实验进度。本轮没有改变源代码、构造配置、门禁、预算、科学协议或旧 artifact，也未启动 capacity、Retriever、victim、membership/AUC 或正式实验。
+- [ ] 先针对原文指代、未定义统计范围、缩写、版权/OCR 残片及无依据主体补写完成最小开发修复与离线回归，同时排查两条 NFCorpus 的实体校验拒绝；再评估下一轮开发 canary。
+- [ ] canary 验收通过后，进入 capacity 前修复源池总量取数；正式实验前补齐 v24 query/split 到 RAG/PVS 接口及开发集端到端验证。
+
+当前唯一下一步（待开发）：以本轮失败问句为依据修复自包含性、源句质量和无依据的主体补写，并完成离线回归；当前 canary 已结束且未通过，不再等待或重试同批失败 source，不进入 capacity。
+
+### 2026-09-07：问句质量开发修复与离线回归完成（superseding）
+
+- [x] 修正把未解析主体改写成 `the reporting company` 等泛称的 prompt；首次与唯一一次语义纠正均可读取同篇 `source_context`，仅用于有原文依据的主体、研究范围与缩写消解，禁入字段仍在模型调用前拒绝。
+- [x] 补齐 canonical/query 的泛称、统计总体与缩写检查；明确名称、限定语和同句已给出的研究范围保留。原文没有出现的新主体不能仅凭生成器自评通过。
+- [x] query 构造与 fresh-canary 预检共用版权/OCR 单位噪声检查；保留候选池原文、排序、失败和固定 first-8，不读取第 9 个 fact 补足。
+- [x] 修复 Q+ 原始 fact 别名误报；两条 NFCorpus 的 `12` 个旧候选不再误报 IBS-GIS 为新实体，但仍因未明确研究指代而被拒绝。Q− 不自动放行只属于原始 fact 的别名，旧结果不改判。
+- [x] 新增 `17` 项回归；v24、BEIR 与 sibling retry 定向测试共 `177` 项（`167` passed、`10` skipped legacy），三个修改文件内存 AST 通过。恢复、数据隔离、固定预算、fallback 和候选池校验继续通过。
+- [x] 只读结构回放使用 mock 相似度 `0.95`：旧已生成 `28` 对中，拦截先前复核失败的 `19` 对，保留复核通过的 `9` 对；明确是已见开发样本回归，不是新 canary 或独立质量验收。
+- [x] 四套候选池、原 30 条 fact、配置、输入及旧运行/复核文件 hash 校验一致；本轮不改写实验 artifact。README 与两份研究总表更新，AGENTS.md 保持稳定规则职责；未提交、未推送、未新建协议或治理文件。
+- [ ] 使用修复后的预检准备下一批开发 canary 输入，真实 Luna 生成与逐条质量验收仍待执行；新运行使用新输出目录，不能用新代码原地 resume 旧 attempt。
+- [ ] canary 验收通过后再进入 capacity；源池总量取数与 v24 query/split → RAG/PVS 接口仍未修复。本轮 GPU/API/Retriever/victim、membership/AUC 与正式实验调用或读取为 `0`。
+
+当前唯一下一步：准备下一批开发 canary 输入，再按授权范围完成真实生成与逐条复核；当前完成的是代码修复和离线回归，不把旧结构回放当作质量验收通过。
+
+### 2026-09-07：已授权新开发样本 canary 验收（superseding）
+
+- [x] 确认没有遗留 Python 进程，当前配置、修复后代码、有效 Luna profile 与 CUDA 环境已核验；使用本地锁定模型，不安装或下载依赖。
+- [x] 在 `artifacts/v24/development/query_quality_canary_beir_contextfix_fresh_20260907/candidate_pools/` 完成 `32` 篇新开发 source 的 GLiNER2 抽取，保留 TREC-COVID `2` 篇零候选并按冻结顺序补取 `2` 篇；`271` 次本地推理、`965` 个候选，旧候选池与失败产物不覆盖。
+- [x] `preflight/` 固定 `30` 条输入，三数据集各 `10` 篇，first-8 与 source/text hash 校验通过，历史开发身份无重叠。本批输入 SHA-256=`2a662debf0defa405cfe3ca1136b5ebac68c8fcb47ef8345de7d667d53363770`。
+- [x] 运行前明确沿用原六项 Assistant-only 复核口径与 `30/30` 自动 pair、`60/60` query 验收要求；自评、结构门禁和 Assistant 标注不冒充独立人工证据。
+- [ ] 在新 `luna_attempt1/` 完成真实 Luna 生成，确认逐条保存、实际模型、结果 hash 和逻辑/实际请求/重试终态计数，所有失败与未生成槽位保留。
+- [ ] 完成全部 `60` 个目标槽位的 Assistant-only 质量复核，按数据集报告并记录通过/失败/未生成；本批不中途修改门禁或重试已保存失败。
+- [ ] 根据完整验收决定下一步；capacity 总量取数和 v24 → RAG/PVS 接口修复仍未完成，本批不启动正式下游。
+
+当前唯一下一步：执行并完成新开发 canary 的真实生成和问句复核，保留全部结果；通过前不进入 capacity。
+
+- [x] `21:24:49`（Asia/Shanghai）已启动新批次 `luna_attempt1/`，PID=`184324`；初始运行汇总/结果文件建立，run fingerprint=`959a591443853babb80f25620b140612cdfd7b87adc7f2054d181896d399351a`。完整生成和质量复核仍在进行，不能把启动成功记作验收通过。
+
+### 2026-09-07：新开发 canary 完成，质量验收未通过（superseding）
+
+- [x] `query_quality_canary_beir_contextfix_fresh_20260907/luna_attempt1/` 于 `21:56:39`（Asia/Shanghai）完成全部 `30` 篇，终态=`failed_hard_gates`，进程已结束；NFCorpus/SCIDOCS/TREC-COVID 自动通过分别为 `7/10`、`8/10`、`7/10`，合计 `22/30`。
+- [x] 首条、中途与终态结果均已真实落盘；没有中断或使用 `--resume`，不声称已完成真实恢复演练。全部失败保留，没有替换 source 或重试已保存失败。
+- [x] 实际模型仅 `gpt-5.6-luna`，逻辑调用 `41`、实际请求 `73`、传输重试 `32`，计数完整；`90` 个初始 package、`33` 个纠正 package，符合最多一次纠正，没有 fallback、provider failure 或 execution error。
+- [x] 完成全部 `60` 个目标槽位的 Assistant-only 复核：最终问句 `44` 条，`30` passed、`14` failed；`16` 个槽位没有 gate-accepted pair，待复核=`0`。三数据集各 `5/10` 对两问均通过，合计 `15/30`，`capacity_sample_allowed=false`。
+- [x] 记录两类待修复问题：标题/数学乱码与缺失前提、文献/实验指代仍会漏检；`titled ...`、存在句 `there`、补语 `that`、`Jacobi-polynomial-based` 的原文派生形式存在规则误报。原文已存在的替换词也造成实际构造失败，不能把所有拒绝都归于误报。
+- [x] 四套候选池、source/fact、first-8、输入/配置/代码/profile/run identity 与结果、复核 hash 全部校验一致，逐条调用量和汇总一致。保持 Assistant-only 标注口径，没有独立人工盲审、agreement 或 Cohen's kappa。
+- [x] README 与两份总表同步终态，保留既有启动/失败历史；本轮仅生成授权的开发实验及复核产物，没有修改代码、配置或旧结果，没有提交/推送，没有进入 capacity、Retriever、victim、membership/AUC 或正式实验。
+- [ ] 先在现有实现中修复指代/派生词校验误报，并补齐标题非命题、数学文本损坏和上下文缺失的检查及反事实原文排除提示，完成定向离线回归。
+- [ ] 修复后使用新开发输入与新输出目录验收，不用本批已见样本原地重试为 passed，也不把新旧开发通过率差异当受控提升证据。
+- [ ] canary 验收通过后再修复并进入 capacity；v24 → RAG/PVS 接口与开发端到端验证仍待后续完成。
+
+当前唯一下一步（待开发）：依据本批草稿、失败与逐问复核证据完成上述最小代码修复和离线回归；当前真实 canary 已结束且未通过，不再等待进程或进入下游。
+
+### 2026-09-07：指代、派生词与构造完整性修复完成（superseding，离线）
+
+- [x] 在现有 v24 实现中区分存在句/补语/有先行词的定语从句与外指代，支持有原文题名依据的 `titled/entitled`；未放行虚构题名、泛称或任意截断前缀。
+- [x] 对有原文依据的空格/连字符、普通名词规则复数和 `-based` 派生作有限兼容；名称、数字和 `source_absence` 保持约束，prompt 明确替换须在整篇原文中缺席。
+- [x] query 预检与构造检查覆盖非命题标题、公式转码残片、标题主题被改为报告者、缺失实验/文献/描述对象及数学变量定义；保留完整声明式标题、明确局部范围和 DC/FIO2 等正常表达。
+- [x] 新增 `10` 项回归；三个相关测试模块共 `187` 项，`177` passed、`10` skipped legacy，包含既有保存/恢复与 first-8 约束。两个修改的 Python 文件 AST 检查通过。
+- [x] 只读结构回放保留原 Assistant-only 复核通过的 `15` 对，拦截原漏过的 `7` 对；具名论文/存在句/派生词草稿的相关误报消除，原文已存在替换、单槽和补造关系等真实失败保留。语义分数与语义判断使用 mock，不能当作新真实质量验收。
+- [x] 核验四套候选池 `32` 条 source、固定 `30` 条 fact 的 source/span/first-8/binding；配置、53 号脚本、输入与四份运行/复核结果 hash 不变。旧失败产物、AGENTS 稳定规则与已有脏改动保留，没有新建治理文件、提交或推送。
+- [x] README 与两份总表同步当前状态；本轮真实模型/API/GPU、Retriever/victim、membership/AUC 与正式实验调用或读取为 `0`。候选排序、固定预算、scoring、split 和科学协议版本不变，但构造代码身份及可能通过的集合改变，旧 canary 不能用新代码原地续跑。
+- [ ] 使用新开发 source、新输出目录完成下一轮真实 canary 生成及逐问复核；当前仍没有修复后的独立验收结果。
+- [ ] canary 验收通过后再修复并进入 capacity；v24 → RAG/PVS 接口与开发端到端验证仍待后续完成。
+
+当前唯一下一步：用修复后的代码和新开发样本重新进行 canary 验收，保留既有失败证据；不将离线结构回放记作 canary 通过。
+
+### 2026-09-08：修复后新开发 canary 执行中（superseding）
+
+- [x] 按用户“开始下一步”在新目录 `query_quality_canary_beir_referencefix_fresh_20260908/` 完成新开发抽取；CUDA、本地锁定模型、代码/配置和有效 Luna profile 已核验，没有修改运行代码或配置。
+- [x] GLiNER2 共抽取 `31` 篇、`845` 个候选、`250` 次本地推理；保留 `trec-covid::00ajdmac` 的零候选及首轮 `preflight/` 的 `29/30` 不足额证据，按冻结顺序补取 `1` 篇。
+- [x] `preflight_attempt2/` 固定三数据集各 `10` 篇，共 `30` 条输入；四套候选池、source/text 身份隔离、原文/span 与 first-8 校验通过。输入 SHA-256=`4dd3bd14fcaa45141f853ff9d1fd56dd8b5e91b0673d109a9f66bd1fc859be2e`，新旧样本身份无重叠。
+- [x] `07:31:06`（Asia/Shanghai）启动 `luna_attempt1/`，PID=`202256`；初始和中途结果已保存。run fingerprint=`6e1dcc15dbb945f6aaae7b7c51422e92fde511c7fe0ecb3b6af8ae0bc732d9eb`，实际模型为 `gpt-5.6-luna`；`07:42` 快照已保存 `16/30`、自动通过 `14`，尚未结束。
+- [x] 固定使用既定六项 Assistant-only 复核标准；验收期间不调整代码、模型、门禁和预算，不补选或重试已保存失败。
+- [ ] 完成全部 `30` 条真实生成，核验终态、逐行/文件 hash、输入/代码/config/profile 一致性和累计实际请求/重试计数。
+- [ ] 完成全部 `60` 个槽位的 Assistant-only 复核，保存通过、失败及未选出问句记录；准确区分自动门禁、Assistant 标注与独立人工盲审。
+- [ ] 将终态和失败模式同步 README 与两份总表；质量验收通过前不进入 capacity，capacity 总量取数和 v24 → RAG/PVS 接口仍待后续修复。
+
+当前唯一下一步：完成正在运行的新开发 canary 与逐问质量复核；不重复启动本批，不将运行中快照写作最终验收结果。
+
+### 2026-09-08：修复后新开发 canary 已完成且未通过（superseding）
+
+- [x] `query_quality_canary_beir_referencefix_fresh_20260908/luna_attempt1/` 于 `07:51:43`（Asia/Shanghai）完成全部 `30` 篇，进程已结束，终态=`failed_hard_gates`；自动通过 NFCorpus `9/10`、SCIDOCS `8/10`、TREC-COVID `8/10`，合计 `25/30`。
+- [x] 首条、中途与最终结果均已保存，没有中断、真实 resume、替换 source 或重试已保存失败；本轮验证逐条持久化，不声称真实恢复演练。
+- [x] 实际模型仅 `gpt-5.6-luna`，逻辑调用 `38`、实际请求 `50`、传输重试 `12`，终态计数完整；`90` 个初始 package、`24` 个纠正 package，无 fallback、provider failure 或 execution error。
+- [x] 全部 `60` 个目标槽位完成 Assistant-only 复核：`50` 条实际问句中 `26` passed、`24` failed；`10` 个槽位未选出问句，待复核=`0`。两问均通过 NFCorpus/SCIDOCS/TREC-COVID 分别为 `4/5/4` 对，合计 `13/30`，`capacity_sample_allowed=false`。
+- [x] 记录 `20` 条 self-containedness 失败，以及无冒号名词性标题、比喻题名被补造谓语和原句病句；题名补充成功案例与仍然缺失的人群、比较基准、治疗/分组范围分别记录。
+- [x] 只读定位新误报：`US` 被当作 `us`；题名冒号空格与未识别的 `considers` 导致完整命题被拒；倒装问句中完整题名后的 `to investigate` 未被边界规则接受。保留所有拒绝，不把消除这些误报写成草稿整体质量已通过；目标在补充题名中重复等真实单槽失败继续保留。
+- [x] 输入、四套候选池、原文 fact/span/first-8、配置、有效 profile、代码及 run identity 与启动前一致；逐行/文件 hash、候选预算、累计调用数和复核汇总全部核验通过。Assistant-only 不冒充人类盲审；不同开发样本的通过率不解释为受控提升或正式三对/source 容量。
+- [x] README 与两份总表同步终态，AGENTS.md 不增加实验进度；本轮没有修改运行代码、配置或旧 artifact，没有提交/推送，没有进入 capacity、Retriever、victim、membership/AUC 或正式实验。
+- [ ] 在现有代码中修复上述误报、非命题标题及上下文缺失，补充本批失败的定向离线回归；不要为小修复新增协议/治理层。
+- [ ] 修复后使用新开发输入、新输出目录重新验收，保留本批失败；canary 通过后再修复并进入 capacity，v24 → RAG/PVS 接口仍待后续完成。
+
+当前唯一下一步（待开发）：修复 `US/us`、题名边界及非命题/上下文检查并完成定向回归；本批真实 canary 和逐问复核已全部结束且未通过，不再等待进程或进入 capacity。
+
+### 2026-09-08：US、题名边界及观察范围修复已完成（superseding，离线）
+
+- [x] 在现有 v24 实现中修正 `US/us`、有局部先行词的反身结构、题名标点空白及完整题名后的倒装不定式边界；未放行虚构/任意截断题名、实体槽外重复或真实第一人称。
+- [x] 补齐无冒号名词性标题及比喻题名被改成行动主体的检查；使用已识别题名的检查副本，保留完整谓语和有正文支持的关系。
+- [x] 补齐数字词计数、临床观察范围、参与单位、零事件、比较对象、治疗分组、day 0 和相对时间检查；百分比统计保留相邻原文明确给出的分析子集限定，研究名称不能替代这些细节。
+- [x] 初始/纠正 prompt 与 Q+/Q− 独立校验同步；覆盖原句保护方向含混的病句，未增加调用预算、模型或新语义 API。
+- [x] 新增 `12` 项回归并扩充正反例，最终三个相关测试模块 `199` 项：`189` passed、`10` skipped legacy；两个修改 Python 文件 AST 通过，既有预算、隔离和保存/恢复测试继续通过。
+- [x] 只读结构回放保留本批原通过 `13` 对、拦截漏过 `12` 对；index `18/28/29` 的 `18` 个草稿相关引用/表面误报消除。语义分数和判定使用 mock，旧真实运行和 Assistant-only 结论不改判，不计作新 canary 通过。
+- [x] 本批 `21` 个实验文件及 runner、配置、AGENTS.md hash 不变；代码身份已改变，不能用新代码按旧运行身份 resume。README 与两份总表同步，未新增协议/治理文件，未提交或推送。
+- [ ] 使用新开发 source、新输出目录进行修复后的真实 canary 生成和逐问复核；本轮真实模型/API/GPU、Retriever/victim、membership/AUC 调用或读取为 `0`。
+- [ ] canary 通过后再修复并进入 capacity；v24 → RAG/PVS 接口和开发端到端验证仍待后续完成。
+
+当前唯一下一步：以新开发输入和新输出目录验收本轮修复；当前完成的是代码与离线回归，既有失败证据保留，尚未进入 capacity。
+
+### 2026-09-08：记录 chunk 原则并准备新开发 canary（superseding）
+
+- [x] 记录后续原则：短文整篇单块、长文根据实际 tokenizer 长度评估固定多块；在 source 内选择互补事实，同源 chunk 同组，候选与查询总预算按 source 固定，统计单位仍为 source。
+- [x] 三套源池的词数分布已只读检查，详见研究总表；词数不是模型 token 数，不能据此直接判定模型截断或效果优劣。本批保持现有一个 BEIR document 对应一个冻结 chunk。
+- [x] 用户已授权使用新开发样本、新输出目录完成真实 canary；Conda `mia_model` 与 CUDA 可用。新根目录为 `artifacts/v24/development/query_quality_canary_beir_scopefix_fresh_20260908/`，不改写旧失败运行。
+- [x] 完成 `32` 篇新开发 source 抽取，`800` 个候选、`228` 次本地推理；与历史 source key/source hash/normalized text hash 无重叠。TREC-COVID 两篇零候选和首轮 `28/30` 不足额预检保留，按冻结顺序补选两篇。
+- [x] `preflight_attempt2/` 固定 `30` 条输入，三数据集各 `10` 篇；原文/span/first-8 与四套候选池校验通过。输入 SHA-256=`3d98e354867bbe2b8e190b544f6bbb0c369cca50bb91105ccb8f122c50d413be`。
+- [x] `09:49:32`（Asia/Shanghai）启动新 `luna_attempt1/`，PID=`258660`，实际模型=`gpt-5.6-luna`；run fingerprint=`93523d2f7d525ab3917ef3e52b12156bee09beeee2a4d36f88a15655e71fbfa4`。会话中断后后台仍运行，`09:56:33` 已保存 `9/30`、自动通过 `8`；未重复启动或使用 `--resume`。
+- [ ] 完成全部真实生成，核验逐条保存、模型与输入/代码/config/profile 身份及最终调用计数；当前快照不作最终验收结果。
+- [ ] 按既定六项标准复核全部 60 个目标槽位，分别记录通过、失败和未选出问句；验收要求仍为自动 30/30 pair、Assistant-only 60/60 query。
+- [ ] 将完整结果同步 README 和两份总表；canary 通过前不进入 capacity，后续另行落实长文策略及尚未完成的 capacity 取数、v24 → RAG/PVS 接口。
+
+当前唯一下一步：完成本批新开发 canary 及逐问验收；本轮不调整 chunk、固定预算或质量标准，不把启动和中途结果写作验收通过。
+
+### 2026-09-08：scopefix 新开发 canary 及逐问验收完成（superseding，未通过）
+
+- [x] 新 `luna_attempt1/` 于 `10:19:22`（Asia/Shanghai）完成全部 `30` 篇，终态=`failed_hard_gates`；NFCorpus/SCIDOCS/TREC-COVID 自动通过分别为 `8/5/5`，合计 `18/30`。会话中断期间后台运行和逐条保存继续，未重复启动或使用 `--resume`。
+- [x] 实际模型仅 `gpt-5.6-luna`；逻辑调用 `43`、实际请求 `52`、传输重试 `9`，计数完整。`90` 个初始 package 与 `39` 个纠正 package 符合预算；无 fallback、provider failure 或 execution error。
+- [x] 全部 `60` 个目标槽位完成 Assistant-only 复核：实际 `36` 条问句中 `16` passed、`20` failed；`24` 个槽位未选出问句，待复核=`0`。两问均通过 NFCorpus/SCIDOCS/TREC-COVID 分别为 `4/3/1` 对，合计 `8/30`；`capacity_sample_allowed=false`，没有独立人工盲审或 Cohen's kappa。
+- [x] 记录时间、比较人群、视频/文献/政策简报及回归研究范围缺失；粘连词与患者/病因表达仍影响自然性。完整题名的新增实体/指代拒绝列为疑似误报，缩写展开、recently 和标题片段等真实失败分别保留。
+- [x] 荷兰语输出、canonical 为疑问句、全称保留但只改括号缩写和数值关联问题均保留诊断；不在本批临时新增语言、反事实真值或一致性否决。
+- [x] 输入、候选池、模型、代码/config/profile/run 身份、逐行/文件 hash、候选预算及调用总量核验通过；运行前 `39` 个受保护文件 hash 未变。复核文件已保存，README 与两份总表同步；chunk 原则仅记录，运行代码/配置/切分未改，未提交或推送。
+- [ ] 先定位题名/缩写检查误报并完善时间、比较对象、研究范围及原文表达的开发回归；标题、语言、缩写变换策略如需改变，先明确其开发设计，再验证。
+- [ ] 修复后使用新开发样本和新输出目录验收；不原地重试本批失败。canary 通过后再修复并进入 capacity，v24 → RAG/PVS 接口和长文策略仍待后续处理。
+
+当前唯一下一步（待开发）：依据本批完整证据进行最小修复与离线回归。真实 canary 和逐问复核均已结束且未通过，不再等待进程，不进入 capacity。

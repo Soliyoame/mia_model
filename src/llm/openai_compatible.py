@@ -283,6 +283,20 @@ class OpenAICompatibleChatClient:
     # 可重试的瞬时传输错误与限流状态码。524 = Cloudflare 网关"源站超时",慢模型常踩,纳入重试。
     _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 524})
 
+    @staticmethod
+    def _read_http_error_detail(exc: urllib.error.HTTPError) -> str:
+        """尽力读取错误响应体；响应体截断不能绕过重试判断。"""
+
+        try:
+            return exc.read().decode("utf-8", errors="replace")
+        except http.client.IncompleteRead as read_error:
+            partial = getattr(read_error, "partial", b"")
+            if isinstance(partial, bytes):
+                return partial.decode("utf-8", errors="replace")
+            return str(partial or "")
+        except (http.client.HTTPException, OSError) as read_error:
+            return f"<error body unavailable: {type(read_error).__name__}>"
+
     def _urlopen_with_retries(
         self,
         request: urllib.request.Request,
@@ -314,7 +328,9 @@ class OpenAICompatibleChatClient:
                     return response.read().decode("utf-8"), attempt
             except urllib.error.HTTPError as exc:
                 # 服务器返回了错误状态码(如 429/500)。
-                detail = exc.read().decode("utf-8", errors="replace")
+                # 错误响应体也可能被网关截断；该 IncompleteRead 属于同一
+                # transport failure，不能让它绕过下面的 retry 判断。
+                detail = self._read_http_error_detail(exc)
                 # 属于"可重试"状态码且还有重试机会，就退避后重试。
                 if exc.code in self._RETRYABLE_STATUS and (
                     self.retry_until_success or attempt < attempts
@@ -430,7 +446,7 @@ class OpenAICompatibleChatClient:
                     attempt,
                 )
             except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")
+                detail = self._read_http_error_detail(exc)
                 if exc.code in self._RETRYABLE_STATUS and (
                     self.retry_until_success or attempt < attempts
                 ):

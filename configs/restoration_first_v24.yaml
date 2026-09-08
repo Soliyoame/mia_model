@@ -1,7 +1,7 @@
 protocol_version: pcv-mia-v24
 method_version: pcv-query-local-counterfactual-reconstruction
 specification_version: pcv-restoration-first-v24-pre-split-eligibility-r1
-status: implementation_ready_offline_only
+status: candidate_ranking_v2_canary_zero_candidate_replacement_ready
 selection_seed: 42
 
 llm:
@@ -19,26 +19,60 @@ semantic_similarity:
   query_instruction: ""
 
 development:
-  canary_input_path: artifacts/v23/development/query_quality_canary_r3_subject_presence_r2_attempt5/canary_inputs.jsonl
+  canary_input_path: null
   canary_pair_count: 30
+  canary_zero_candidate_policy: skip_and_replace_in_frozen_order
   allow_fallback: false
   capacity_sample_sources: 30
 
+datasets:
+  - nfcorpus
+  - scidocs
+  - trec-covid
+
 source_pool:
-  manifest_template: artifacts/v22/source_pools/{dataset}/source_pool_manifest.json
-  order_template: artifacts/v22/source_pools/{dataset}/source_order.json
-  database_template: artifacts/v22/source_pools/{dataset}/source_pool.sqlite3
-  expected_source_counts:
-    edgar: 5210
-    enron: 35000
-    pubmed: 47950
+  manifest_template: artifacts/v24/source_pools/{dataset}/source_pool_manifest.json
+  order_template: artifacts/v24/source_pools/{dataset}/source_order.json
+  database_template: artifacts/v24/source_pools/{dataset}/source_pool.sqlite3
+  minimum_source_count: 2250
   membership_blind: true
   require_manifest_and_order_hash: true
 
 candidate_fact_adapter:
-  kind: source_text_type_agnostic
-  require_source_grounded_true_claim: true
+  kind: gliner2_entity_value_span
+  model: fastino/gliner2-base-v1
+  model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+  model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+  local_path: models/v6_3/gliner2-base-v1
+  backend: gliner2
+  require_gpu: true
+  device: cuda
+  use_fp16: true
+  seed: 42
+  concurrency: 1
   include_legacy_type_or_counterfactual_fields: false
+  entity_span:
+    preferred_max_words: 6
+    hard_max_words: 12
+  entity_ranking:
+    enabled: true
+    policy: surface_tiers_claim_round_robin_unique_entity_v2
+  development_identity_patterns:
+    - artifacts/v*/development/**/canary_inputs.jsonl
+    - artifacts/v*/development/**/canary_results.jsonl
+    - artifacts/v24/development/**/pool_manifest.json
+    - artifacts/v24/development/**/source_records.jsonl
+    - artifacts/v24/development/**/validation_manifest.json
+    - artifacts/v24/development/**/preflight_results.jsonl
+    - artifacts/v24/development/**/*.luna_sample.checkpoint.jsonl
+    - artifacts/v24/development/**/*.luna_sample.json
+    - artifacts/v24/development/**/*.offline_estimate.json
+    - artifacts/v24/source_pools/*/development_exclusions.json
+    - artifacts/v23/governance/revision_reservations/**/plans/development/*.json
+    - artifacts/v22/pilot/**/source_results.jsonl
+    - artifacts/v22/calibration*/private/calibration_key.jsonl
+  legacy_development_prefix_manifests:
+    - artifacts/v24/development/capacity_check_r1/{dataset}.json
 
 eligibility:
   target_sources: 2250
