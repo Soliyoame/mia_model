@@ -13,7 +13,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
-from collections.abc import Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,21 +23,29 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.prepare.restoration_first_v24 import (  # noqa: E402
     DATASET_ORDER,
     _query_input_quality_reasons,
+    _reject_forbidden,
     _source_identity,
     CandidateFactPoolReader,
+    LunaCandidateProvider,
+    LunaDirectCandidateProvider,
     build_candidate_fact_pool,
     build_luna_candidate_provider,
     build_v24_semantic_similarity,
+    collect_development_identities,
     enumerate_candidate_facts,
     get_max_candidate_facts_per_source,
     iter_frozen_source_pool,
     load_v24_config,
     load_candidate_fact_pools,
+    reference_fact_view,
+    summarize_fact_ablation,
     scan_until_target,
     screen_source,
+    select_luna_direct_pairs,
     source_pool_bindings,
     validate_eligibility_manifest,
     validate_split_manifest,
+    validate_luna_direct_source,
 )
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import (  # noqa: E402
@@ -53,6 +62,13 @@ CANARY_OUTPUT_DIR = Path("artifacts/v24/development/query_quality_canary_r1")
 CAPACITY_OUTPUT_DIR = Path("artifacts/v24/development/capacity_check_r1")
 FRESH_CANARY_OUTPUT_DIR = Path(
     "artifacts/v24/development/query_quality_canary_r3_fresh_preflight"
+)
+LUNA_ONLY_AB_OUTPUT_DIR = Path(
+    "artifacts/v24/development/luna_only_ab_fresh30"
+)
+TWO_STAGE_ATTEMPTS = (
+    "fact_construction", "fact_verification", "initial", "initial_verification",
+    "semantic_correction", "semantic_correction_verification",
 )
 
 
@@ -168,28 +184,41 @@ _FRESH_CANARY_RELATION_RE = re.compile(
 )
 
 
-def _historical_canary_sources(root: Path) -> set[tuple[str, str]]:
+def _historical_canary_sources(
+    root: Path, *, exclude_directory: Path | None = None,
+) -> set[tuple[str, str]]:
     """Collect prior canary source identities only for fresh-fixture exclusion."""
 
     seen: set[tuple[str, str]] = set()
     patterns = (
         "artifacts/v*/development/**/canary_inputs.jsonl",
         "artifacts/v*/development/**/canary_results.jsonl",
+        "artifacts/v24/development/**/reference_facts.jsonl",
     )
     for pattern in patterns:
         for path in sorted(root.glob(pattern)):
+            if exclude_directory is not None and path.resolve().is_relative_to(exclude_directory.resolve()):
+                continue
             try:
                 rows = read_jsonl(path)
             except (OSError, ValueError, TypeError):
                 continue
-            for row in rows:
-                if not isinstance(row, Mapping):
-                    continue
-                dataset = str(row.get("dataset") or "")
-                source_key = str(row.get("source_key") or "")
-                if dataset and source_key:
-                    seen.add((dataset, source_key))
+            def visit(value: object, inherited_dataset: str = "") -> None:
+                if isinstance(value, Mapping):
+                    dataset = str(value.get("dataset") or inherited_dataset)
+                    source_key = value.get("source_key") or value.get("source_id")
+                    if dataset and isinstance(source_key, str) and source_key:
+                        seen.add((dataset, source_key))
+                    for nested in value.values():
+                        if isinstance(nested, (Mapping, list)):
+                            visit(nested, dataset)
+                elif isinstance(value, list):
+                    for nested in value:
+                        visit(nested, inherited_dataset)
+            visit(rows)
     return seen
+
+
 
 
 def _fresh_fact_preflight(
@@ -560,6 +589,586 @@ def prepare_fresh_canary(
     return summary
 
 
+def _luna_ab_settings(config: Mapping[str, object]) -> dict[str, object]:
+    settings = dict(config.get("development", {}).get("luna_only_ab", {}))
+    if (settings.get("stage_a_max_facts") != 8
+            or settings.get("screening_sources_per_dataset") != 10
+            or type(settings.get("repeatability_runs")) is not int
+            or settings["repeatability_runs"] not in (1, 2)
+            or settings.get("promotion_thresholds") is not None):
+        raise ValueError("v24_luna_ab_settings_invalid")
+    return settings
+
+
+def _luna_ab_development_path(root: Path, path: str | Path) -> Path:
+    resolved = (root / path).resolve()
+    if not resolved.is_relative_to((root / "artifacts/v24/development").resolve()):
+        raise ValueError("v24_luna_ab_development_path_required")
+    return resolved
+
+
+def run_luna_only_smoke(
+    root: Path, *, input_path: str | Path, output_dir: str | Path,
+    preview_only: bool = False, resume: bool = False, show_progress: bool = True,
+) -> dict[str, object]:
+    """一次 source/一次请求的开发 smoke；复用响应保存，不启动模型核验或下游实验。"""
+    config = load_v24_config(root)
+    settings = config.get("development", {}).get("luna_only_direct", {})
+    if settings != {"adapter": "luna_direct_paired_candidates", "max_candidates_per_source": 8,
+                    "pairs_per_source": 3, "smoke_max_sources": 8}:
+        raise ValueError("luna_direct_settings_invalid")
+    input_file = _luna_ab_development_path(root, input_path)
+    sources = list(read_jsonl(input_file))
+    if not 1 <= len(sources) <= settings["smoke_max_sources"]:
+        raise ValueError("luna_direct_smoke_source_budget")
+    identities = [validate_luna_direct_source(source) for source in sources]
+    if (len({row["source_key"] for row in identities}) != len(sources)
+            or len({row["chunk_sha256"] for row in identities}) != len(sources)):
+        raise ValueError("luna_direct_duplicate_source")
+    profile = _canary_llm_identity(config)
+    if profile["model"] != "gpt-5.6-luna":
+        raise ValueError("luna_direct_model_must_be_luna")
+    context = {
+        "run_kind": "luna_only_direct_smoke", "protocol_version": config["protocol_version"],
+        "source_count": len(sources), "sources": identities, "settings": settings,
+        "input_sha256": sha256_file(input_file), "config_sha256": sha256_obj(config), "llm_profile": profile,
+        "code_sha256": sha256_obj({"runner": sha256_file(__file__),
+                                    "screening": sha256_file(PROJECT_ROOT / "src/prepare/restoration_first_v24.py")}),
+        "transport_override": {"max_retries": 0, "retry_until_success": False},
+        "maximum_logical_api_calls": len(sources), "capacity_sample_allowed": False,
+        "formal_switch_allowed": False, "retriever_calls_performed": 0, "victim_calls_performed": 0,
+        "membership_read": False, "semantic_quality_review_completed": False,
+    }
+    fingerprint = sha256_obj(context)
+    if preview_only:
+        return {**context, "run_fingerprint": fingerprint, "status": "prepared_diagnostic"}
+    output = _luna_ab_development_path(root, output_dir)
+    result_path, summary_path = output / "smoke_results.jsonl", output / "smoke_summary.json"
+    rows: list[dict[str, object]] = []
+    active: dict[str, object] | None = None
+    if resume:
+        saved = read_json(summary_path)
+        rows = list(read_jsonl(result_path))
+        if (saved.get("run_fingerprint") != fingerprint
+                or saved.get("content_sha256") != sha256_obj({k: v for k, v in saved.items() if k != "content_sha256"})
+                or not saved["completed_sources"] <= len(rows) <= saved["completed_sources"] + 1
+                or saved["results_sha256"] != sha256_obj(rows[:saved["completed_sources"]])):
+            raise ValueError("luna_direct_checkpoint_drift")
+        for i, row in enumerate(rows):
+            if (i >= len(sources) or row.get("source_index") != i or row.get("source") != identities[i]
+                    or row.get("result_sha256") != sha256_obj({k: v for k, v in row.items() if k != "result_sha256"})):
+                raise ValueError("luna_direct_result_drift")
+        active = saved.get("active_request") if len(rows) == saved["completed_sources"] else None
+        if active is not None and active.get("source_index") != len(rows):
+            raise ValueError("luna_direct_active_request_drift")
+        if len(rows) == len(sources) and saved["status"] == "completed_diagnostic":
+            return saved
+    elif output.exists() and any(output.iterdir()):
+        raise ValueError("luna_direct_output_exists_use_resume")
+    else:
+        write_jsonl_atomic([], result_path)
+
+    def save(status: str) -> dict[str, object]:
+        responses = [row["response"] for row in rows if row.get("response") is not None]
+        rejections: Counter[str] = Counter()
+        for row in rows:
+            rejections.update((row.get("construction") or {}).get("rejection_reason_counts", {}))
+        payload = {
+            **context, "run_fingerprint": fingerprint, "status": status, "completed_sources": len(rows),
+            "results_sha256": sha256_obj(rows), "active_request": active,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "candidate_count": sum(len(row.get("candidates") or []) for row in rows),
+            "selected_pair_count": sum((row.get("construction") or {}).get("selected_pair_count", 0) for row in rows),
+            "eligible_source_count": sum(bool((row.get("construction") or {}).get("eligible")) for row in rows),
+            "execution_incomplete_count": sum(row.get("status") == "execution_incomplete" for row in rows),
+            "invalid_output_count": sum(row.get("status") == "invalid_output" for row in rows),
+            "rejection_reason_counts": dict(rejections),
+            "provider": {
+                "logical_api_calls": len(rows) + int(active is not None),
+                "physical_attempts": sum(1 + int(r.get("transport_retry_count") or 0) for r in responses),
+                "transport_retry_count": sum(int(r.get("transport_retry_count") or 0) for r in responses),
+                "external_call_counts_complete": len(responses) == len(rows) and active is None,
+                "provider_model_ids": sorted({r["provider_model_id"] for r in responses if r.get("provider_model_id")}),
+                **{key: sum(r[key] for r in responses) if all(type(r.get(key)) in (int, float) for r in responses) else None
+                   for key in ("input_tokens", "output_tokens", "latency_seconds")},
+            },
+        }
+        payload["content_sha256"] = sha256_obj(payload)
+        write_json(payload, summary_path)
+        return payload
+
+    provider: LunaDirectCandidateProvider | None = None
+    save("running")
+    for index in range(len(rows), len(sources)):
+        resumed_request = active is not None
+        if not resumed_request:
+            active = {"source_index": index, "status": "started", "response": None}
+            save("running")
+        assert active is not None
+        row = {"source_index": index, "source": identities[index], "status": "completed",
+               "response": None, "candidates": None, "construction": None, "error": None}
+
+        def observe(response: Mapping[str, object]) -> None:
+            active.update(status="response_received", response=dict(response))
+            # 落盘失败终止执行，不能变成候选质量拒绝。
+            try:
+                save("running")
+            except Exception as exc:
+                raise LunaABPersistenceError("luna_direct_response_save_failed") from exc
+
+        try:
+            if resumed_request and active.get("response") is None:
+                row.update(status="execution_incomplete", error="response_unavailable_after_interruption")
+            else:
+                if provider is None:
+                    provider = build_luna_candidate_provider(root, direct_pairs=True)
+                    # 只限制本次 smoke 的传输尝试，不改变历史 profile 或 comparator。
+                    provider.client.max_retries = 0
+                    provider.client.retry_until_success = False
+                provider.response_observer = observe
+                if resumed_request:
+                    candidates = provider.parse_response(active["response"])
+                else:
+                    candidates = provider.construct_paired_candidates(sources[index])
+                if active["response"].get("provider_model_id") != "gpt-5.6-luna":
+                    raise ValueError("luna_direct_returned_model_mismatch")
+                row["candidates"] = candidates
+                row["construction"] = select_luna_direct_pairs(sources[index], candidates)
+        except LunaABPersistenceError:
+            raise
+        except Exception as exc:
+            row.update(status="invalid_output" if active.get("response") is not None else "execution_incomplete",
+                       error=str(exc) if isinstance(exc, ValueError) and str(exc).startswith("luna_direct_") else type(exc).__name__)
+        row["response"] = active.get("response")
+        row["result_sha256"] = sha256_obj(row)
+        write_jsonl_atomic([*rows, row], result_path)
+        rows.append(row)
+        active = None
+        save("running")
+        if show_progress:
+            print(f"Luna direct smoke: {index + 1}/{len(sources)} {row['status']} pairs={(row.get('construction') or {}).get('selected_pair_count', 0)}", flush=True)
+    return save("completed_diagnostic")
+
+
+def prepare_luna_only_ab(
+    root: Path, *, output_dir: str | Path = LUNA_ONLY_AB_OUTPUT_DIR,
+    per_dataset: int = 10, candidate_pools: Sequence[str | Path] = (),
+) -> dict[str, object]:
+    """先冻结 source 身份，再由同一输入构建 comparator；零候选不得换样。"""
+    config = load_v24_config(root)
+    settings = _luna_ab_settings(config)
+    if candidate_pools or per_dataset != settings["screening_sources_per_dataset"]:
+        raise ValueError("v24_luna_ab_select_sources_before_extraction")
+    output = _luna_ab_development_path(root, output_dir)
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("v24_luna_ab_output_exists")
+    exclusions = [
+        row for dataset in DATASET_ORDER
+        for row in collect_development_identities(root, config, dataset)
+    ]
+    seen_keys = {(row["dataset"], row["source_key"]) for row in exclusions if row.get("source_key")}
+    seen_hashes = {row[key] for row in exclusions for key in ("source_hash", "normalized_text_hash") if row.get(key)}
+    selected = []
+    for dataset in DATASET_ORDER:
+        count = 0
+        for source in iter_frozen_source_pool(root, dataset):
+            identity = _source_identity(source)
+            if ((dataset, identity["source_key"]) in seen_keys
+                    or identity["source_hash"] in seen_hashes or identity["normalized_text_hash"] in seen_hashes):
+                continue
+            selected.append(identity)
+            seen_keys.add((dataset, identity["source_key"]))
+            seen_hashes.update((identity["source_hash"], identity["normalized_text_hash"]))
+            count += 1
+            if count == per_dataset:
+                break
+        if count != per_dataset:
+            raise ValueError("v24_luna_ab_fresh_source_shortfall:" + dataset)
+    manifest = {
+        "kind": "v24_luna_only_ab_inputs", "protocol_version": config["protocol_version"],
+        "sources": selected, "source_count": len(selected), "per_dataset": per_dataset,
+        "selection": "frozen_source_order_before_extraction_keep_zero_candidates",
+        "source_pool_bindings": source_pool_bindings(root),
+        "development_exclusions": exclusions, "settings": settings,
+        "selection_seed": config["selection_seed"], "source_order_sha256": sha256_obj(selected),
+        "external_calls_performed": 0, "membership_read": False,
+    }
+    manifest["content_sha256"] = sha256_obj(manifest)
+    path = output / "luna_only_ab_inputs.json"
+    write_json(manifest, path)
+    return {"status": "prepared_diagnostic", "source_count": len(selected),
+            "inputs_path": _display_path(root, path), "input_file_sha256": sha256_file(path),
+            "external_calls_performed": 0}
+
+
+def _load_luna_ab_inputs(root: Path, input_path: str | Path) -> tuple[dict, dict]:
+    path = _luna_ab_development_path(root, input_path)
+    manifest = read_json(path)
+    if (manifest.get("kind") != "v24_luna_only_ab_inputs"
+            or manifest.get("content_sha256") != sha256_obj({k: v for k, v in manifest.items() if k != "content_sha256"})):
+        raise ValueError("v24_luna_ab_input_hash")
+    rows = manifest.get("sources", [])
+    _reject_forbidden(rows)
+    if (len(rows) != 30 or manifest.get("source_count") != 30
+            or manifest.get("per_dataset") != 10
+            or [row.get("dataset") for row in rows] != [ds for ds in DATASET_ORDER for _ in range(10)]
+            or manifest.get("source_order_sha256") != sha256_obj(rows)):
+        raise ValueError("v24_luna_ab_input_order_or_count")
+    for key in ("source_hash", "normalized_text_hash"):
+        if len({row[key] for row in rows}) != len(rows):
+            raise ValueError("v24_luna_ab_text_overlap")
+    keys = {(row["dataset"], row["source_key"]) for row in rows}
+    if len(keys) != len(rows):
+        raise ValueError("v24_luna_ab_source_overlap")
+    sources = _source_lookup(root, set(DATASET_ORDER), keys)
+    excluded = manifest.get("development_exclusions", [])
+    for row in rows:
+        if _source_identity(sources[(row["dataset"], row["source_key"])]) != row:
+            raise ValueError("v24_luna_ab_source_identity_drift")
+        if any((item.get("dataset"), item.get("source_key")) == (row["dataset"], row["source_key"])
+               or item.get("source_hash") == row["source_hash"]
+               or item.get("normalized_text_hash") == row["normalized_text_hash"] for item in excluded):
+            raise ValueError("v24_luna_ab_historical_overlap")
+    if source_pool_bindings(root) != manifest["source_pool_bindings"]:
+        raise ValueError("v24_luna_ab_source_pool_drift")
+    return manifest, sources
+
+
+def _luna_ab_jobs(manifest: Mapping[str, object]) -> list[dict[str, object]]:
+    jobs = []
+    for repeat in range(manifest["settings"]["repeatability_runs"]):
+        for index, source in enumerate(manifest["sources"]):
+            # 两臂 source 顺序完全相同，先执行哪一臂按 source 交替。
+            arms = ("GLiNER2+Luna", "Luna-only") if (index + repeat) % 2 == 0 else ("Luna-only", "GLiNER2+Luna")
+            for arm in arms:
+                jobs.append({**source, "arm": arm, "repeat": repeat, "input_index": index})
+    return jobs
+
+
+def _luna_ab_overlap(left: Mapping[str, object], right: Mapping[str, object]) -> dict[str, object]:
+    def candidates(row):
+        stage_a = row.get("stage_a") or {}
+        return stage_a.get("grounded_facts", [item["raw_fact"] for item in row.get("fact_evidence", [])])
+
+    def overlap(a, b):
+        return len(a & b) / len(a | b) if a or b else None
+
+    a, b = candidates(left), candidates(right)
+    return {
+        "candidate_exact_overlap": overlap(
+            {(x["true_claim"], x["original_entity"], x.get("fixed_canonical_template")) for x in a},
+            {(x["true_claim"], x["original_entity"], x.get("fixed_canonical_template")) for x in b}),
+        "normalized_entity_overlap": overlap(
+            {" ".join(x["original_entity"].casefold().split()) for x in a},
+            {" ".join(x["original_entity"].casefold().split()) for x in b}),
+        "claim_overlap": overlap({x["true_claim"] for x in a}, {x["true_claim"] for x in b}),
+    }
+
+
+def _luna_ab_usage(drafts: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    responses = [row["response"] for row in drafts if "response" in row]
+    result = {
+        "logical_api_calls": len(drafts),
+        "physical_attempts": sum(1 + int(row.get("transport_retry_count") or 0) for row in responses),
+        "transport_retry_count": sum(int(row.get("transport_retry_count") or 0) for row in responses),
+        "external_call_counts_complete": len(responses) == len(drafts),
+        "provider_model_ids": sorted({str(row["provider_model_id"]) for row in responses if row.get("provider_model_id")}),
+    }
+    for field in ("input_tokens", "output_tokens", "latency_seconds"):
+        values = [row.get(field) for row in responses]
+        result[field] = sum(values) if all(type(value) in (int, float) for value in values) else None
+    return result
+
+
+def _luna_ab_summary(rows: Sequence[Mapping[str, object]], *, manifest: Mapping[str, object]) -> dict[str, object]:
+    repeats = manifest["settings"]["repeatability_runs"]
+    metrics = ("source_has_ge_1_usable_fact", "source_has_ge_3_usable_facts", "source_has_ge_3_eligible_pairs")
+    indexed = {(r["arm"], r["repeat"], r["dataset"], r["source_key"]): r for r in rows}
+    if len(indexed) != len(rows):
+        raise ValueError("v24_luna_ab_duplicate_result")
+    by_arm = {}
+    for arm in ("GLiNER2+Luna", "Luna-only"):
+        distributions = []
+        stability = []
+        for repeat in range(repeats):
+            by_dataset = {}
+            for dataset in DATASET_ORDER:
+                subset = [r for r in rows if r["arm"] == arm and r["repeat"] == repeat and r["dataset"] == dataset]
+                complete = [r for r in subset if not r["execution_incomplete"]]
+                facts = [r["screen_result"] for r in complete if isinstance(r.get("screen_result"), Mapping)]
+                stage_a_reasons, stage_b_reasons = Counter(), Counter()
+                for fact in facts:
+                    stage_a_reasons.update((fact.get("stage_a") or {}).get("rejection_reason_counts", {}))
+                    for evidence in fact.get("fact_evidence", []):
+                        stage_a_reasons.update(evidence.get("rejection_reasons", []))
+                    for evidence in fact.get("candidate_evidence", []):
+                        stage_b_reasons.update(evidence.get("rejection_reasons", []))
+                by_dataset[dataset] = {
+                    "expected_source_count": 10, "completed_source_count": len(complete),
+                    "missing_source_count": 10 - len(complete),
+                    "usable_fact_counts": [int(f.get("usable_fact_count") or 0) for f in facts],
+                    "eligible_pair_counts": [int(f.get("eligible_pair_count") or 0) for f in facts],
+                    "stage_a_failure_reasons": dict(stage_a_reasons),
+                    "stage_b_failure_reasons": dict(stage_b_reasons),
+                    **{metric: {"count": sum(bool(f.get(metric)) for f in facts),
+                                "rate": sum(bool(f.get(metric)) for f in facts) / 10 if len(complete) == 10 and len(facts) == 10 else None}
+                       for metric in metrics},
+                }
+            distributions.append({"repeat": repeat, "by_dataset": by_dataset,
+                                  "macro": {metric: sum(by_dataset[ds][metric]["rate"] for ds in DATASET_ORDER) / 3
+                                            if all(by_dataset[ds][metric]["rate"] is not None for ds in DATASET_ORDER) else None
+                                            for metric in metrics}})
+        if repeats >= 2:
+            for source in manifest["sources"]:
+                current = [indexed.get((arm, rep, source["dataset"], source["source_key"])) for rep in range(repeats)]
+                complete = all(row is not None and not row["execution_incomplete"] for row in current)
+                stability.append({**source, "complete": complete,
+                                  **{metric: {"stable": len({bool(r["screen_result"].get(metric)) for r in current}) == 1,
+                                              "usable_in_all_runs": all(bool(r["screen_result"].get(metric)) for r in current)}
+                                     if complete else None for metric in metrics},
+                                  "overlap_diagnostic": _luna_ab_overlap(current[0]["screen_result"], current[1]["screen_result"])
+                                  if complete else None})
+        by_arm[arm] = {"per_repeat": distributions, "source_repeatability": stability,
+                       "stability_rates": {metric: sum(row[metric]["stable"] for row in stability) / 30
+                                           if len(stability) == 30 and all(row["complete"] for row in stability) else None
+                                           for metric in metrics}}
+    paired = []
+    for repeat in range(repeats):
+        for source in manifest["sources"]:
+            a = indexed.get(("GLiNER2+Luna", repeat, source["dataset"], source["source_key"]))
+            b = indexed.get(("Luna-only", repeat, source["dataset"], source["source_key"]))
+            complete = a is not None and b is not None and not (a["execution_incomplete"] or b["execution_incomplete"])
+            paired.append({**source, "repeat": repeat, "complete": complete,
+                           "luna_minus_comparator": {metric: int(bool(b["screen_result"].get(metric))) - int(bool(a["screen_result"].get(metric)))
+                                                    for metric in metrics} if complete else None})
+    all_drafts = [draft for row in rows for draft in row.get("generation_drafts", [])]
+    return {
+        "status": "completed_diagnostic" if len(rows) == len(_luna_ab_jobs(manifest)) else "partial_diagnostic",
+        "source_count": 30, "condition_count": len(rows), "arms": by_arm, "paired_sources": paired,
+        "execution_incomplete_count": sum(row["execution_incomplete"] for row in rows),
+        "provider": _luna_ab_usage(all_drafts), "candidate_overlap_is_hard_gate": False,
+        "promotion_thresholds": None, "formal_switch_allowed": False, "capacity_sample_allowed": False,
+        "semantic_quality_review_completed": False, "human_review_performed": False,
+        "pairs_per_source": 3, "queries_per_source": 6,
+        "retriever_calls_performed": 0, "victim_calls_performed": 0, "membership_read": False,
+    }
+
+
+class LunaABPersistenceError(RuntimeError):
+    pass
+
+
+def run_luna_only_ab(
+    root: Path, *, input_path: str | Path, candidate_pools: Sequence[str | Path],
+    output_dir: str | Path, resume: bool = False, preview_only: bool = False,
+    repeatability_runs: int | None = None, show_progress: bool = True,
+) -> dict[str, object]:
+    """逐 source/arm 保存阶段响应；恢复只复用已保存请求，不重抽失败响应。"""
+    config = load_v24_config(root)
+    settings = _luna_ab_settings(config)
+    manifest, sources = _load_luna_ab_inputs(root, input_path)
+    if manifest["settings"] != settings or repeatability_runs not in (None, settings["repeatability_runs"]):
+        raise ValueError("v24_luna_ab_settings_drift")
+    pools = _load_canary_candidate_pools(root, config, candidate_pools)
+    if any(reader.manifest["scope"] != "development_subset" for reader in pools.values()):
+        raise ValueError("v24_luna_ab_development_pool_required")
+    frozen_facts = {}
+    for source in manifest["sources"]:
+        key = (source["dataset"], source["source_key"])
+        matches = [reader for reader in pools.values() if reader.dataset == key[0] and key[1] in reader.offsets]
+        if len(matches) != 1:
+            raise ValueError("v24_luna_ab_comparator_source_missing_or_duplicate")
+        frozen_facts[key] = matches[0].facts_for_source(sources[key])[:8]
+    profile = _canary_llm_identity(config)
+    if profile["model"] != "gpt-5.6-luna":
+        raise ValueError("v24_luna_ab_model_must_be_luna")
+    jobs = _luna_ab_jobs(manifest)
+    context = {
+        "run_kind": "luna_only_fresh30_ab", "inputs": manifest, "config_sha256": sha256_obj(config),
+        "input_file_sha256": sha256_file(root / input_path), "llm_profile": profile,
+        "candidate_pools": [pools[key].binding() for key in sorted(pools)],
+        "code_sha256": sha256_obj({"runner": sha256_file(__file__),
+                                  "screening": sha256_file(Path(__file__).resolve().parents[1] / "src/prepare/restoration_first_v24.py")}),
+        "facts_sha256": sha256_obj(list(frozen_facts.values())), "condition_count": len(jobs),
+        "maximum_logical_api_calls": 30 * settings["repeatability_runs"] * (8 * 6 + 1 + 8 * 5),
+        "promotion_thresholds": None, "capacity_sample_allowed": False,
+    }
+    fingerprint = sha256_obj(context)
+    if preview_only:
+        return {**context, "run_fingerprint": fingerprint, "status": "prepared_diagnostic", "external_calls_performed": 0}
+    output = _luna_ab_development_path(root, output_dir)
+    result_path, summary_path = output / "luna_only_ab_results.jsonl", output / "luna_only_ab_summary.json"
+    if not resume and output.exists() and any(output.iterdir()):
+        raise ValueError("v24_luna_ab_output_exists")
+    rows, progress = [], {}
+    if resume:
+        progress = read_json(summary_path)
+        rows = list(read_jsonl(result_path))
+        if (progress.get("run_fingerprint") != fingerprint
+                or progress.get("content_sha256") != sha256_obj({k: v for k, v in progress.items() if k != "content_sha256"})
+                or not progress["completed_conditions"] <= len(rows) <= progress["completed_conditions"] + 1
+                or progress.get("results_sha256") != sha256_obj(rows[:progress["completed_conditions"]])):
+            raise ValueError("v24_luna_ab_checkpoint_drift")
+        for index, row in enumerate(rows):
+            if (index >= len(jobs) or row.get("job") != jobs[index] or row.get("run_fingerprint") != fingerprint
+                    or row.get("result_content_sha256") != sha256_obj({k: v for k, v in row.items() if k != "result_content_sha256"})):
+                raise ValueError("v24_luna_ab_result_drift")
+        active = progress.get("active_index")
+        if active is not None and (type(active) is not int or active not in {len(rows), len(rows) - 1}):
+            raise ValueError("v24_luna_ab_active_job_drift")
+        if len(rows) == len(jobs) and progress.get("status") == "completed_diagnostic":
+            return progress
+    else:
+        write_jsonl_atomic([], result_path)
+    active_index = progress.get("active_index")
+    drafts = progress.get("active_generation", [])
+    semantic_identity = progress.get("semantic_similarity")
+
+    def save(status):
+        payload = {**context, "run_fingerprint": fingerprint, "status": status,
+                   "completed_conditions": len(rows), "results_sha256": sha256_obj(rows),
+                   "active_index": active_index, "active_generation": drafts, "semantic_similarity": semantic_identity}
+        if status == "completed_diagnostic":
+            payload["report"] = _luna_ab_summary(rows, manifest=manifest)
+        payload["content_sha256"] = sha256_obj(payload)
+        try:
+            write_json(payload, summary_path)
+        except Exception as exc:
+            raise LunaABPersistenceError("v24_luna_ab_save_failed") from exc
+        return payload
+
+    if len(rows) == len(jobs):
+        active_index, drafts = None, []
+        return save("completed_diagnostic")
+    save("running")
+    scorer = build_v24_semantic_similarity(root)
+    try:
+        if semantic_identity is not None and semantic_identity != scorer.identity():
+            raise ValueError("v24_luna_ab_semantic_identity_drift")
+        semantic_identity = scorer.identity()
+        provider = build_luna_candidate_provider(root)
+        if provider.profile.get("model") != profile["model"]:
+            raise LunaABPersistenceError("v24_luna_ab_runtime_model_drift")
+
+        class RecordedProvider:
+            def __init__(self):
+                self.cursor = 0
+
+            def request(self, method, *args):
+                position = self.cursor
+                self.cursor += 1
+                identity = sha256_obj({"method": method, "input": args})
+                if position < len(drafts):
+                    stage = drafts[position]
+                    if stage["request_sha256"] != identity or stage["method"] != method:
+                        raise LunaABPersistenceError("v24_luna_ab_request_drift")
+                    if stage["status"] == "completed":
+                        return stage["candidates"]
+                    if stage["status"] != "response_received":
+                        raise ValueError("v24_luna_ab_saved_request_unavailable")
+                else:
+                    stage = {"method": method, "request_sha256": identity, "status": "started", "candidates": []}
+                    drafts.append(stage)
+                    save("running")
+
+                def observe(response):
+                    stage.update(status="response_received", response=dict(response))
+                    save("running")
+
+                previous_observer = provider.response_observer
+                provider.response_observer = observe
+                try:
+                    if "response" in stage:
+                        candidates = list(provider.parse_response(
+                            stage["response"], max_candidates=8 if method == "construct_factual_slots" else 3,
+                            allow_empty=method == "construct_factual_slots"))
+                    else:
+                        candidates = list(getattr(provider, method)(*args))
+                    observed = stage.get("response", {}).get("provider_model_id")
+                    if observed and observed != "gpt-5.6-luna":
+                        raise LunaABPersistenceError("v24_luna_ab_observed_model_drift")
+                    stage.update(status="completed", candidates=candidates)
+                    save("running")
+                    return candidates
+                except LunaABPersistenceError:
+                    raise
+                except Exception as exc:
+                    stage.update(status="response_invalid" if "response" in stage else "request_failed",
+                                 error_type=type(exc).__name__)
+                    save("running")
+                    raise
+                finally:
+                    provider.response_observer = previous_observer
+
+            def __call__(self, fact):
+                return self.request("__call__", fact)
+
+            def __getattr__(self, method):
+                if method not in ("construct_factual_slots", "construct_fact", "verify_fact", "verify_queries", "correct"):
+                    raise AttributeError(method)
+                return lambda *args: self.request(method, *args)
+
+        for index in range(len(rows), len(jobs)):
+            job = jobs[index]
+            if active_index != index:
+                drafts = []
+            active_index = index
+            save("running")
+            key = (job["dataset"], job["source_key"])
+            try:
+                screened = screen_source(
+                    sources[key], candidate_provider=RecordedProvider(),
+                    facts=frozen_facts[key] if job["arm"] == "GLiNER2+Luna" else None,
+                    minimum_pairs=3, allow_surface_fallback=False, similarity_fn=scorer,
+                    semantic_correction_retries=1, include_candidate_evidence=True, include_full_candidate_evidence=True,
+                    max_candidate_facts_per_source=8, two_stage=True, luna_only=job["arm"] == "Luna-only",
+                    exhaustive_diagnostic=True)
+                error = None
+            except LunaABPersistenceError:
+                raise
+            except Exception as exc:
+                screened, error = None, type(exc).__name__
+            result = {**job, "job": job, "run_fingerprint": fingerprint, "screen_result": screened,
+                      "execution_incomplete": error is not None, "execution_error": error,
+                      "generation_drafts": drafts, "provider_usage": _luna_ab_usage(drafts)}
+            result["result_content_sha256"] = sha256_obj(result)
+            write_jsonl_atomic([*rows, result], result_path)
+            rows.append(result)
+            active_index, drafts = None, []
+            save("running")
+            if show_progress:
+                print(f"Luna A/B: {index + 1}/{len(jobs)} {job['arm']} {job['dataset']} execution_incomplete={error is not None}", flush=True)
+    except BaseException:
+        try:
+            saved_rows = list(read_jsonl(result_path))
+            if len(saved_rows) == len(rows) + 1 and saved_rows[-1].get("job") == jobs[len(rows)]:
+                rows = saved_rows
+                active_index, drafts = None, []
+            save("interrupted")
+        except (OSError, ValueError, LunaABPersistenceError):
+            pass
+        raise
+    finally:
+        scorer.close()
+    return save("completed_diagnostic")
+
+
+def summarize_luna_only_ab(root: Path, result_path: str | Path) -> dict[str, object]:
+    path = _luna_ab_development_path(root, result_path)
+    summary = read_json(path.parent / "luna_only_ab_summary.json")
+    rows = list(read_jsonl(path))
+    if (summary.get("content_sha256") != sha256_obj({k: v for k, v in summary.items() if k != "content_sha256"})
+            or summary.get("results_sha256") != sha256_obj(rows)):
+        raise ValueError("v24_luna_ab_summary_drift")
+    jobs = _luna_ab_jobs(summary["inputs"])
+    for index, row in enumerate(rows):
+        if (index >= len(jobs) or row["job"] != jobs[index]
+                or row["run_fingerprint"] != summary["run_fingerprint"]
+                or row["result_content_sha256"] != sha256_obj({k: v for k, v in row.items() if k != "result_content_sha256"})):
+            raise ValueError("v24_luna_ab_result_drift")
+    return _luna_ab_summary(rows, manifest=summary["inputs"])
+
+
 def _membership_blind_fact(row: Mapping[str, object], source: Mapping[str, object]) -> dict[str, object]:
     """Project an old canary row onto the minimal v24 fact contract."""
 
@@ -704,8 +1313,89 @@ def _canary_provider_totals(
     return result
 
 
+def _prepare_fact_ablation(
+    root: Path, input_path: str | Path, config: Mapping[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object] | None], dict, dict, dict]:
+    """复用已见开发池，核对参考证据并展开固定的 A/B 条件。"""
+    references = list(read_jsonl(root / input_path))
+    _reject_forbidden(references)
+    if not references or any(row.get("kind") != "v24_fact_ablation_reference" for row in references):
+        raise ValueError("v24_ablation_reference_schema")
+    allowed_strata = {"context_failure", "positive_control", "rejection_control"}
+    if any(row.get("stratum") not in allowed_strata for row in references):
+        raise ValueError("v24_ablation_stratum")
+    if len({row.get("sample_id") for row in references}) != len(references) or any(
+        not str(row.get("sample_id") or "").strip() for row in references
+    ):
+        raise ValueError("v24_ablation_sample_id")
+    raw_inputs = [row["raw_fact"] for row in references]
+    for key in ("source_key", "source_hash", "normalized_text_hash"):
+        if len({row.get(key) for row in raw_inputs}) != len(raw_inputs) or any(not row.get(key) for row in raw_inputs):
+            raise ValueError(f"v24_ablation_duplicate_or_missing_{key}")
+    main = [row for row in references if row["stratum"] != "rejection_control"]
+    if len(main) != 18 or any(
+        sum(row["raw_fact"]["dataset"] == dataset and row["stratum"] == stratum for row in main) != count
+        for dataset in DATASET_ORDER for stratum, count in (("context_failure", 4), ("positive_control", 2))
+    ):
+        raise ValueError("v24_ablation_requires_18_stratified_sources")
+    paths = sorted({str(row["candidate_pool"]) for row in references})
+    pools = _load_canary_candidate_pools(root, config, paths)
+    if any(reader.manifest["scope"] != "development_subset" for reader in pools.values()):
+        raise ValueError("v24_ablation_development_pool_required")
+    sources = _source_lookup(root, {row["dataset"] for row in raw_inputs},
+                             {(row["dataset"], row["source_key"]) for row in raw_inputs})
+    inputs, facts, controls = [], [], []
+    budget = get_max_candidate_facts_per_source(config)
+    source_index = 0
+    for record, row in zip(references, raw_inputs, strict=True):
+        source = sources[(row["dataset"], row["source_key"])]
+        reader = pools.get((row["dataset"], row.get("candidate_pool_sha256")))
+        if reader is None:
+            raise ValueError("v24_canary_candidate_pool_drift")
+        matches = [fact for fact in reader.facts_for_source(source)[:budget]
+                   if fact["upstream_pair_id"] == row.get("pair_id")]
+        if len(matches) != 1 or any(matches[0].get(key) != row.get(key) for key in (
+            "true_claim", "original_entity", "original_span", "proposition_span", "fact_order",
+            "source_hash", "normalized_text_hash",
+        )):
+            raise ValueError("v24_canary_fact_not_in_candidate_pool")
+        raw_fact = matches[0]
+        reference = record["reference_fact"]
+        completed_fact = reference_fact_view(raw_fact, reference, str(source["full_text"]))
+        metadata = {key: record[key] for key in ("sample_id", "stratum", "reference_fact")}
+        metadata["raw_fact"] = row
+        if record["stratum"] == "rejection_control":
+            if completed_fact is not None:
+                raise ValueError("v24_ablation_rejection_control_requires_unusable")
+            reasons = _query_input_quality_reasons(raw_fact)
+            controls.append({**metadata, "automatic_rejection_reasons": reasons,
+                             "automatically_rejected": bool(reasons), "external_calls_performed": 0})
+            continue
+        if record["stratum"] == "positive_control" and reference["status"] != "as_is":
+            raise ValueError("v24_ablation_positive_control_must_be_unchanged")
+        # 在相邻条件内配对，按 source 交替 A/B 顺序；每数据集各有三次 A 在先。
+        conditions = ("A", "B") if source_index % 2 == 0 else ("B", "A")
+        for condition in conditions:
+            view = raw_fact if condition == "A" else completed_fact
+            inputs.append({**row, **metadata, "condition": condition,
+                           "canary_pair_index": len(inputs),
+                           "generation_claim": view["true_claim"] if view else None})
+            facts.append(view)
+        source_index += 1
+    return inputs, facts, sources, pools, {
+        "run_kind": "fact_context_ablation", "diagnostic_only": True,
+        "source_count": len(main), "condition_count": len(inputs),
+        "reference_annotation_type": "assistant_reference",
+        "independent_blind_review_performed": False, "human_review_performed": False,
+        "maximum_logical_generation_calls": 2 * len(inputs),
+        "reference_unusable_source_count": sum(row["reference_fact"]["status"] == "unusable" for row in main),
+        "offline_rejection_controls": controls, "capacity_sample_allowed": False,
+    }
+
+
 def _load_canary_checkpoint(
-    output: Path, *, run_fingerprint: str, inputs: list[dict[str, object]],
+    output: Path, *, run_fingerprint: str, inputs: list[dict[str, object]], diagnostic: bool = False,
+    two_stage: bool = False,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     """校验已保存前缀；只允许结果比汇总领先一条的原子写入窗口。"""
     summary_path, results_path = output / "canary_summary.json", output / "canary_results.jsonl"
@@ -719,6 +1409,27 @@ def _load_canary_checkpoint(
         raise RuntimeError("v24_canary_checkpoint_unreadable") from exc
     if not isinstance(summary, dict) or summary.get("run_fingerprint") != run_fingerprint:
         raise RuntimeError("v24_canary_checkpoint_identity_drift")
+    if diagnostic or two_stage:
+        stages = summary.get("active_generation", [])
+        attempts = TWO_STAGE_ATTEMPTS if two_stage else ("initial", "semantic_correction")
+        if not isinstance(stages, list) or len(stages) > len(attempts):
+            raise RuntimeError("v24_ablation_checkpoint_drafts_invalid")
+        for index, stage in enumerate(stages):
+            if (
+                not isinstance(stage, dict)
+                or stage.get("attempt") != attempts[index]
+                or stage.get("status") not in {
+                    "started", "completed", "response_received", "response_invalid", "request_failed",
+                    "response_unavailable_after_interruption",
+                }
+                or (stage.get("status") in {"response_received", "response_invalid"} and (
+                    not isinstance(stage.get("response"), dict)
+                    or not isinstance(stage["response"].get("content"), str)
+                ))
+                or not isinstance(stage.get("candidates"), list) or len(stage["candidates"]) > 3
+                or stage.get("content_sha256") != sha256_obj({key: value for key, value in stage.items() if key != "content_sha256"})
+            ):
+                raise RuntimeError("v24_ablation_checkpoint_drafts_invalid")
     saved_count = summary.get("completed_pair_count")
     if (
         type(saved_count) is not int or not 0 <= saved_count <= len(inputs)
@@ -744,6 +1455,8 @@ def _load_canary_checkpoint(
             )
         ):
             raise RuntimeError("v24_canary_checkpoint_order_drift")
+        if diagnostic and any(row.get(key) != original.get(key) for key in ("sample_id", "condition", "generation_claim")):
+            raise RuntimeError("v24_ablation_checkpoint_condition_drift")
         if (
             type(row.get("eligible")) is not bool
             or not isinstance(row.get("candidate_evidence"), list)
@@ -759,11 +1472,15 @@ def _load_canary_checkpoint(
             for key in ("logical_api_calls", "physical_attempts", "transport_retry_count")
         ) or type(state.get("external_call_counts_complete")) is not bool:
             raise RuntimeError("v24_canary_checkpoint_usage_invalid")
-    if summary.get("status") not in {"running", "interrupted", "passed", "failed_hard_gates"}:
+    final_states = ({"completed_two_stage_diagnostic"} if two_stage else
+                    {"completed_diagnostic"} if diagnostic else {"passed", "failed_hard_gates"})
+    if summary.get("status") not in {"running", "interrupted", *final_states}:
         raise RuntimeError("v24_canary_checkpoint_status_invalid")
-    if summary.get("status") in {"passed", "failed_hard_gates"}:
+    if summary.get("status") in final_states:
         passed = sum(row["eligible"] for row in rows)
-        expected_status = "passed" if passed == len(inputs) else "failed_hard_gates"
+        expected_status = ("completed_two_stage_diagnostic" if two_stage else
+                           "completed_diagnostic" if diagnostic else
+                           "passed" if passed == len(inputs) else "failed_hard_gates")
         if saved_count != len(inputs) or summary.get("passed_pair_count") != passed or summary["status"] != expected_status:
             raise RuntimeError("v24_canary_checkpoint_final_status_drift")
     return summary, rows
@@ -773,37 +1490,62 @@ def run_canary(
     root: Path, *, input_path: str | Path, output_dir: str | Path,
     candidate_pools: Sequence[str | Path] = (), resume: bool = False,
     show_progress: bool = True,
+    fact_ablation: bool = False, preview_only: bool = False, two_stage: bool = False,
 ) -> dict[str, object]:
+    if fact_ablation and two_stage:
+        raise ValueError("v24_ablation_must_keep_original_generation")
+    record_stages = fact_ablation or two_stage
     config = load_v24_config(root)
-    pools = _load_canary_candidate_pools(root, config, candidate_pools)
-    inputs = _load_canary_inputs(root, input_path)
-    expected = int(config.get("development", {}).get("canary_pair_count", 30))
     correction_retries = int(config.get("eligibility", {}).get("semantic_correction_retries", 1))
     fact_budget = get_max_candidate_facts_per_source(config)
-    if len(inputs) != expected:
-        raise ValueError(f"v24_canary_input_count:{len(inputs)}:{expected}")
+    if fact_ablation:
+        inputs, frozen_facts, sources, pools, diagnostic_context = _prepare_fact_ablation(root, input_path, config)
+        expected = len(inputs)
+    else:
+        if preview_only and not two_stage:
+            raise ValueError("v24_preview_requires_fact_ablation")
+        diagnostic_context = {}
+        pools = _load_canary_candidate_pools(root, config, candidate_pools)
+        if two_stage and any(reader.manifest["scope"] != "development_subset" for reader in pools.values()):
+            raise ValueError("v24_two_stage_development_pool_required")
+        inputs = _load_canary_inputs(root, input_path)
+        expected = int(config.get("development", {}).get("canary_pair_count", 30))
+        if len(inputs) != expected:
+            raise ValueError(f"v24_canary_input_count:{len(inputs)}:{expected}")
+        if len({(row["dataset"], row["source_key"]) for row in inputs}) != len(inputs):
+            raise ValueError("v24_canary_duplicate_source")
+        sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs},
+                                 {(str(row["dataset"]), str(row["source_key"])) for row in inputs})
+        frozen_facts = []
+        for row in inputs:
+            dataset = str(row["dataset"])
+            reader = pools.get((dataset, str(row.get("candidate_pool_sha256") or "")))
+            if reader is None:
+                raise ValueError("v24_canary_candidate_pool_drift")
+            facts = reader.facts_for_source(sources[(dataset, str(row["source_key"]))])
+            matching = [fact for fact in facts[:fact_budget] if fact["upstream_pair_id"] == row.get("pair_id")]
+            if len(matching) != 1 or any(matching[0][key] != row.get(key) for key in (
+                "true_claim", "original_entity", "original_span", "proposition_span", "fact_order",
+            )):
+                raise ValueError("v24_canary_fact_not_in_candidate_pool")
+            frozen_facts.append(matching[0])
+        if two_stage:
+            diagnostic_context = {
+                "run_kind": "two_stage_fact_query_canary", "diagnostic_only": True,
+                "source_count": expected, "capacity_sample_allowed": False,
+                "fact_construction": "source_evidence_then_separate_llm_review",
+                "query_construction": "fixed_canonical_shared_question_template",
+                "review_method": "separate_llm_requests_same_model",
+                "independent_blind_review_performed": False, "human_review_performed": False,
+                "maximum_logical_api_calls": expected * (4 + 2 * correction_retries),
+                "request_stages": list(TWO_STAGE_ATTEMPTS[:4 + 2 * correction_retries]),
+            }
     output = root / output_dir
-    if not resume and output.exists() and any(output.iterdir()):
+    if not preview_only and not resume and output.exists() and any(output.iterdir()):
         raise ValueError("v24_canary_output_exists")
-    if len({(row["dataset"], row["source_key"]) for row in inputs}) != len(inputs):
-        raise ValueError("v24_canary_duplicate_source")
-    sources = _source_lookup(root, {str(row.get("dataset") or "") for row in inputs},
-                             {(str(row["dataset"]), str(row["source_key"])) for row in inputs})
-    frozen_facts: list[dict[str, object]] = []
-    for row in inputs:
-        dataset = str(row["dataset"])
-        reader = pools.get((dataset, str(row.get("candidate_pool_sha256") or "")))
-        if reader is None:
-            raise ValueError("v24_canary_candidate_pool_drift")
-        facts = reader.facts_for_source(sources[(dataset, str(row["source_key"]))])
-        matching = [fact for fact in facts[:fact_budget] if fact["upstream_pair_id"] == row.get("pair_id")]
-        if len(matching) != 1 or any(matching[0][key] != row.get(key) for key in (
-            "true_claim", "original_entity", "original_span", "proposition_span", "fact_order",
-        )):
-            raise ValueError("v24_canary_fact_not_in_candidate_pool")
-        frozen_facts.append(matching[0])
     code_root = Path(__file__).resolve().parents[1]
     context = {
+        **diagnostic_context,
         "protocol_version": config["protocol_version"],
         "canary_pair_count": expected,
         "fallback_pair_count": 0,
@@ -820,6 +1562,11 @@ def run_canary(
             "screening": sha256_file(code_root / "src/prepare/restoration_first_v24.py"),
         }),
     }
+    if preview_only:
+        return {**context, "status": "prepared_diagnostic", "external_calls_performed": 0,
+                "conditions": [{key: row[key] for key in (
+                    "sample_id", "dataset", "source_key", "stratum", "condition", "generation_claim",
+                ) if key in row} for row in inputs]}
     run_fingerprint = sha256_obj(context)
     results_path = output / "canary_results.jsonl"
     summary_path = output / "canary_summary.json"
@@ -829,8 +1576,10 @@ def run_canary(
     semantic_identity = None
     counts_complete = True
     if resume:
-        summary, results = _load_canary_checkpoint(output, run_fingerprint=run_fingerprint, inputs=inputs)
-        if summary["status"] in {"passed", "failed_hard_gates"}:
+        summary, results = _load_canary_checkpoint(
+            output, run_fingerprint=run_fingerprint, inputs=inputs, diagnostic=fact_ablation, two_stage=two_stage,
+        )
+        if summary["status"] in {"passed", "failed_hard_gates", "completed_diagnostic", "completed_two_stage_diagnostic"}:
             if summary["status"] == "failed_hard_gates":
                 raise RuntimeError(f"v24_canary_hard_gate_failed:{summary['passed_pair_count']}/{expected}")
             return summary
@@ -847,6 +1596,8 @@ def run_canary(
 
     provider = None
     active_input_index = None
+    active_generation = list(summary.get("active_generation", [])) if record_stages else []
+    cached_input_index = summary.get("active_input_index")
 
     def save_progress(status: str, *, interruption_type: str | None = None) -> dict[str, object]:
         usage = _canary_provider_totals(previous_usage, provider.stats() if provider is not None else {})
@@ -864,10 +1615,103 @@ def run_canary(
         }
         if interruption_type:
             progress["interruption_type"] = interruption_type
+        if record_stages:
+            progress["active_generation"] = active_generation
+        if two_stage:
+            progress.update(
+                automatic_quality_pass=len(results) == expected and all(row["eligible"] for row in results),
+                assistant_review_completed=False,
+                execution_incomplete_source_count=sum(bool(row.get("execution_incomplete")) for row in results),
+            )
         write_json(progress, summary_path)
         return progress
 
+    class CanaryPersistenceError(RuntimeError):
+        """响应落盘失败必须中止运行，不能转成候选质量拒绝。"""
+
+    def request_recorded_candidates(
+        attempt: str, request: Callable[[], Sequence[Mapping[str, object]]],
+    ) -> Sequence[Mapping[str, object]]:
+        """在既有 summary 中保存当前响应，恢复时不重复消耗已尝试的生成轮次。"""
+        nonlocal counts_complete
+        cached = next((stage for stage in active_generation if stage["attempt"] == attempt), None)
+
+        def persist_stage() -> None:
+            stage["content_sha256"] = sha256_obj({key: value for key, value in stage.items() if key != "content_sha256"})
+            try:
+                save_progress("running")
+            except Exception as exc:
+                raise CanaryPersistenceError("v24_canary_response_save_failed") from exc
+
+        if cached is not None and cached["status"] != "response_received":
+            if cached["status"] == "completed":
+                return cached["candidates"]
+            if cached["status"] in {"response_invalid", "request_failed"}:
+                if cached["status"] == "request_failed":
+                    counts_complete = False
+                raise ValueError("v24_canary_saved_response_failure")
+            # 已发起但没有持久响应的轮次不能免费重抽；保留缺失证据并继续固定预算。
+            counts_complete = False
+            cached["status"] = "response_unavailable_after_interruption"
+            stage = cached
+            persist_stage()
+            if two_stage:
+                raise RuntimeError("v24_two_stage_response_unavailable_after_interruption")
+            return []
+        stage = cached if cached is not None else {"attempt": attempt, "status": "started", "candidates": []}
+        if cached is None:
+            active_generation.append(stage)
+            persist_stage()
+
+        def record_response(evidence: Mapping[str, object]) -> None:
+            stage.update(status="response_received", response=dict(evidence))
+            persist_stage()
+
+        observing = isinstance(provider, LunaCandidateProvider)
+        previous_observer = provider.response_observer if observing else None
+        if observing:
+            provider.response_observer = record_response
+        try:
+            packages = list(provider.parse_response(stage["response"]) if cached is not None else request())
+        except CanaryPersistenceError:
+            raise
+        except Exception as exc:
+            stage.update(status="response_invalid" if "response" in stage else "request_failed", error_type=type(exc).__name__)
+            persist_stage()
+            raise
+        finally:
+            if observing:
+                provider.response_observer = previous_observer
+        stage.update(status="completed", candidates=packages)
+        persist_stage()
+        return packages
+
+    class RecordedProvider:
+        def __init__(self) -> None:
+            self.correcting = False
+
+        def __call__(self, fact: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+            return request_recorded_candidates("initial", lambda: provider(fact))
+
+        def correct(self, fact: Mapping[str, object], rejected: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+            self.correcting = True
+            return request_recorded_candidates("semantic_correction", lambda: provider.correct(fact, rejected))
+
+        def construct_fact(self, fact: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+            return request_recorded_candidates("fact_construction", lambda: provider.construct_fact(fact))
+
+        def verify_fact(self, fact: Mapping[str, object], construction: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+            return request_recorded_candidates("fact_verification", lambda: provider.verify_fact(fact, construction))
+
+        def verify_queries(self, fact: Mapping[str, object], packages: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+            attempt = "semantic_correction_verification" if self.correcting else "initial_verification"
+            return request_recorded_candidates(attempt, lambda: provider.verify_queries(fact, packages))
+
     def final_status() -> str:
+        if two_stage:
+            return "completed_two_stage_diagnostic"
+        if fact_ablation:
+            return "completed_diagnostic"
         return "passed" if all(row["eligible"] for row in results) else "failed_hard_gates"
 
     if len(results) == expected:
@@ -889,26 +1733,37 @@ def run_canary(
             for index in range(len(results), expected):
                 row, fact = inputs[index], frozen_facts[index]
                 active_input_index = index
+                if index != cached_input_index:
+                    active_generation = []
                 save_progress("running")
                 if show_progress:
                     print(f"Canary: 正在处理 {index + 1}/{expected} {row['dataset']} {row['source_key']}", flush=True)
                 result = {
                     "run_fingerprint": run_fingerprint, "input_index": index,
                     "canary_pair_index": row.get("canary_pair_index"),
-                    "dataset": fact["dataset"],
-                    "source_key": fact["source_key"],
-                    "upstream_pair_id": fact["upstream_pair_id"],
-                    "source_hash": fact.get("source_hash"),
-                    "normalized_text_hash": fact.get("normalized_text_hash"),
+                    "dataset": row["dataset"],
+                    "source_key": row["source_key"],
+                    "upstream_pair_id": row["pair_id"],
+                    "source_hash": fact.get("source_hash") if fact else row.get("source_hash"),
+                    "normalized_text_hash": fact.get("normalized_text_hash") if fact else row.get("normalized_text_hash"),
                 }
+                if fact_ablation:
+                    result.update({key: row[key] for key in (
+                        "sample_id", "condition", "stratum", "raw_fact", "reference_fact", "generation_claim",
+                    )})
                 try:
                     screened = screen_source(
                         sources[(str(row["dataset"]), str(row["source_key"]))],
-                        candidate_provider=provider, facts=[fact], minimum_pairs=1,
+                        candidate_provider=RecordedProvider() if record_stages else provider,
+                        facts=[fact], minimum_pairs=1,
                         allow_surface_fallback=False, similarity_fn=semantic_scorer,
                         semantic_correction_retries=correction_retries, include_candidate_evidence=True,
                         max_candidate_facts_per_source=fact_budget,
-                    )
+                        **({"include_full_candidate_evidence": True} if record_stages else {}),
+                        **({"two_stage": True} if two_stage else {}),
+                    ) if fact is not None else {
+                        "eligible": False, "rejection_reason_counts": {"reference_fact_unusable": 1},
+                    }
                     selected = screened.get("selected_pairs") or []
                     result.update({
                         "eligible": bool(screened.get("eligible")),
@@ -916,19 +1771,29 @@ def run_canary(
                         "rejection_reason_counts": screened.get("rejection_reason_counts", {}),
                         "candidate_evidence": screened.get("candidate_evidence", []),
                     })
+                    if two_stage:
+                        result.update(fact_evidence=screened.get("fact_evidence", []), execution_incomplete=False)
+                except CanaryPersistenceError:
+                    raise
                 except Exception as exc:
-                    counts_complete = False
+                    if not (record_stages and active_generation and active_generation[-1]["status"] == "response_invalid"):
+                        counts_complete = False
                     result.update({
                         "eligible": False, "selected_pair": None, "candidate_evidence": [],
                         "rejection_reason_counts": {f"execution_error:{type(exc).__name__}": 1},
                     })
+                    if two_stage:
+                        result.update(fact_evidence=[], execution_incomplete=True)
                 result["provider"] = _canary_provider_totals(previous_usage, provider.stats())
+                if record_stages:
+                    result["generation_drafts"] = list(active_generation)
                 result["external_call_counts_complete"] = counts_complete
                 result["result_content_sha256"] = sha256_obj(result)
                 # 只在原子替换成功后推进内存位置；磁盘错误不得变成科学门禁失败。
                 write_jsonl_atomic([*results, result], results_path)
                 results.append(result)
                 active_input_index = None
+                active_generation = []
                 summary = save_progress(final_status() if len(results) == expected else "running")
                 if show_progress:
                     print(f"Canary: 已保存 {len(results)}/{expected}，通过 {summary['passed_pair_count']}", flush=True)
@@ -936,10 +1801,11 @@ def run_canary(
             try:
                 # 中断可能发生在 replace 成功、内存 append 之前，先以磁盘为准。
                 _, results = _load_canary_checkpoint(
-                    output, run_fingerprint=run_fingerprint, inputs=inputs,
+                    output, run_fingerprint=run_fingerprint, inputs=inputs, diagnostic=fact_ablation, two_stage=two_stage,
                 )
                 if active_input_index is not None and active_input_index < len(results):
                     active_input_index = None
+                    active_generation = []
                 counts_complete = counts_complete and active_input_index is None
                 save_progress("interrupted", interruption_type=type(exc).__name__)
             except (OSError, RuntimeError):
@@ -1302,7 +2168,18 @@ def main() -> int:
             "validate-eligibility",
             "validate-split",
             "prepare-fresh-canary",
+            "prepare-luna-only-ab",
             "run-canary",
+            "run-luna-only-ab",
+            "preview-luna-only-ab",
+            "preview-luna-only-smoke",
+            "run-luna-only-smoke",
+            "preview-fact-ablation",
+            "run-fact-ablation",
+            "preview-two-stage-canary",
+            "run-two-stage-canary",
+            "summarize-fact-ablation",
+            "summarize-luna-only-ab",
             "run-capacity-check",
             "build-candidate-pool",
             "validate-candidate-pool",
@@ -1311,6 +2188,7 @@ def main() -> int:
     parser.add_argument("--manifest", help="普通 v24 manifest 路径（仅 validate-* 命令使用）")
     parser.add_argument("--dataset", choices=DATASET_ORDER)
     parser.add_argument("--input", dest="input_path", help="membership-blind canary input JSONL")
+    parser.add_argument("--review", help="Assistant-only 候选级复核 JSONL（summarize-fact-ablation 使用）")
     parser.add_argument("--output-dir")
     parser.add_argument("--sample-sources", type=int)
     parser.add_argument("--per-dataset", type=int, default=10)
@@ -1344,12 +2222,20 @@ def main() -> int:
     elif args.command == "build-candidate-pool":
         if not args.dataset:
             parser.error("build-candidate-pool requires --dataset")
+        fixed = None
+        if args.input_path:
+            inputs, _ = _load_luna_ab_inputs(PROJECT_ROOT, args.input_path)
+            fixed = [row for row in inputs["sources"] if row["dataset"] == args.dataset]
+            if args.sample_sources not in (None, len(fixed)):
+                parser.error("--sample-sources must match the fixed A/B inputs")
+            args.sample_sources = len(fixed)
         output_dir = args.output_dir or (
             f"artifacts/v24/development/candidate_fact_pool/{args.dataset}" if args.sample_sources is not None
             else f"artifacts/v24/candidate_fact_pools/{args.dataset}"
         )
         result = build_candidate_fact_pool(PROJECT_ROOT, dataset=args.dataset, output_dir=output_dir,
-                                           sample_sources=args.sample_sources, resume=args.resume)
+                                           sample_sources=args.sample_sources, resume=args.resume,
+                                           **({"fixed_source_identities": fixed} if fixed is not None else {}))
         print(json.dumps({key: result[key] for key in (
             "status", "dataset", "scope", "completed_source_count", "proposed_fact_count", "candidate_fact_count", "pool_sha256", "usage",
         )}, ensure_ascii=False))
@@ -1386,6 +2272,15 @@ def main() -> int:
             ),
             ensure_ascii=False,
         ))
+    elif args.command == "prepare-luna-only-ab":
+        print(json.dumps(
+            prepare_luna_only_ab(
+                PROJECT_ROOT,
+                per_dataset=args.per_dataset,
+                output_dir=args.output_dir or str(LUNA_ONLY_AB_OUTPUT_DIR),
+            ),
+            ensure_ascii=False,
+        ))
     elif args.command == "run-canary":
         input_path = args.input_path or load_v24_config(PROJECT_ROOT).get("development", {}).get("canary_input_path")
         if not input_path:
@@ -1393,6 +2288,73 @@ def main() -> int:
         output_dir = args.output_dir or str(CANARY_OUTPUT_DIR)
         print(json.dumps(run_canary(PROJECT_ROOT, input_path=input_path, output_dir=output_dir,
                                    candidate_pools=args.candidate_pool, resume=args.resume), ensure_ascii=False))
+    elif args.command in {"run-luna-only-smoke", "preview-luna-only-smoke"}:
+        if not args.input_path:
+            parser.error("luna-only-smoke requires --input frozen chunk JSONL")
+        if args.command == "run-luna-only-smoke" and not args.output_dir:
+            parser.error("run-luna-only-smoke requires a new --output-dir")
+        print(json.dumps(run_luna_only_smoke(
+            PROJECT_ROOT, input_path=args.input_path, output_dir=args.output_dir or ".",
+            preview_only=args.command == "preview-luna-only-smoke", resume=args.resume,
+        ), ensure_ascii=False))
+    elif args.command in {"run-luna-only-ab", "preview-luna-only-ab"}:
+        if not args.input_path:
+            parser.error("luna-only-ab requires --input luna_only_ab_inputs.json")
+        if not args.candidate_pool:
+            parser.error("run-luna-only-ab requires --candidate-pool for all datasets")
+        if args.command == "run-luna-only-ab" and not args.output_dir:
+            parser.error("run-luna-only-ab requires a new --output-dir")
+        print(json.dumps(run_luna_only_ab(
+            PROJECT_ROOT,
+            input_path=args.input_path,
+            candidate_pools=args.candidate_pool,
+            output_dir=args.output_dir or str(LUNA_ONLY_AB_OUTPUT_DIR),
+            resume=args.resume, preview_only=args.command == "preview-luna-only-ab",
+        ), ensure_ascii=False))
+    elif args.command in {"preview-two-stage-canary", "run-two-stage-canary"}:
+        if not args.input_path:
+            parser.error("two-stage-canary requires --input with development canary facts")
+        if args.command == "run-two-stage-canary" and not args.output_dir:
+            parser.error("run-two-stage-canary requires a new --output-dir")
+        print(json.dumps(run_canary(
+            PROJECT_ROOT, input_path=args.input_path, output_dir=args.output_dir or ".",
+            candidate_pools=args.candidate_pool, resume=args.resume, two_stage=True,
+            preview_only=args.command == "preview-two-stage-canary",
+        ), ensure_ascii=False))
+    elif args.command in {"preview-fact-ablation", "run-fact-ablation"}:
+        if not args.input_path:
+            parser.error("fact-ablation requires --input with Assistant reference facts")
+        if args.command == "run-fact-ablation" and not args.output_dir:
+            parser.error("run-fact-ablation requires a new --output-dir")
+        print(json.dumps(run_canary(
+            PROJECT_ROOT, input_path=args.input_path, output_dir=args.output_dir or ".",
+            resume=args.resume, fact_ablation=True, preview_only=args.command == "preview-fact-ablation",
+        ), ensure_ascii=False))
+    elif args.command == "summarize-fact-ablation":
+        if not args.input_path:
+            parser.error("summarize-fact-ablation requires --input canary_results.jsonl")
+        result_path = PROJECT_ROOT / args.input_path
+        summary = read_json(result_path.parent / "canary_summary.json")
+        if (summary.get("run_kind") != "fact_context_ablation"
+                or summary.get("status") != "completed_diagnostic"
+                or summary.get("result_sha256") != sha256_file(result_path)):
+            raise ValueError("v24_ablation_summary_result_mismatch")
+        results = list(read_jsonl(result_path))
+        if len(results) != summary.get("condition_count") or any(row.get("run_fingerprint") != summary.get("run_fingerprint") for row in results):
+            raise ValueError("v24_ablation_summary_result_mismatch")
+        report = summarize_fact_ablation(results, list(read_jsonl(PROJECT_ROOT / args.review)) if args.review else [])
+        report.update(result_sha256=sha256_file(result_path), review_sha256=sha256_file(PROJECT_ROOT / args.review) if args.review else None)
+        if args.output_dir:
+            report_path = PROJECT_ROOT / args.output_dir / "fact_ablation_report.json"
+            if report_path.exists() and read_json(report_path) != report:
+                raise ValueError("v24_ablation_report_exists")
+            if not report_path.exists():
+                write_json(report, report_path)
+        print(json.dumps(report, ensure_ascii=False))
+    elif args.command == "summarize-luna-only-ab":
+        if not args.input_path:
+            parser.error("summarize-luna-only-ab requires --input luna_only_ab_results.jsonl")
+        print(json.dumps(summarize_luna_only_ab(PROJECT_ROOT, args.input_path), ensure_ascii=False))
     else:
         if not args.dataset:
             parser.error("run-capacity-check requires --dataset")

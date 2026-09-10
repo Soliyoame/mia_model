@@ -137,6 +137,89 @@ def _selection_package(fact: dict[str, object], index: int) -> dict[str, object]
 
 
 class V24EligibilityTests(unittest.TestCase):
+    def _luna_source(self, text="The record identifies Alice as the designated representative."):
+        return {"dataset": "nfcorpus", "source_key": "luna-source", "source_order_rank": "0", "full_text": text}
+
+    def _luna_candidate(self, source=None, **changes):
+        source = source or self._luna_source()
+        value = {
+            "evidence_text": source["full_text"],
+            "true_claim": source["full_text"],
+            "original_entity": "Alice",
+            "canonical_fact": "The record identifies {ENTITY} as the designated representative.",
+            "supporting_evidence": [],
+            "selection_reason": "source-grounded",
+        }
+        value.update(changes)
+        return value
+
+    def test_luna_stage_a_prompt_forbids_model_offsets(self):
+        prompt = v24.build_luna_factual_slot_prompt(self._luna_source())
+        self.assertIn("Do not emit character offsets", prompt)
+        self.assertIn("evidence_text", prompt)
+        self.assertIn("true_claim", prompt)
+        self.assertIn("original_entity", prompt)
+
+    def test_luna_stage_a_rejects_any_model_supplied_location_field(self):
+        for candidate in (
+            self._luna_candidate(evidence_start=0),
+            self._luna_candidate(supporting_evidence=[{"text": "Alice", "supports": "target", "span": [22, 27]}]),
+        ):
+            accepted, summary = v24.ground_luna_factual_slots(self._luna_source(), [candidate])
+            self.assertEqual(accepted, [])
+            self.assertEqual(summary["rejection_reason_counts"], {"stage_a_model_offset_forbidden": 1})
+
+    def test_luna_stage_a_exact_grounding_and_ambiguous_quotes_fail_closed(self):
+        source = self._luna_source("The record identifies Alice. Alice is the representative.")
+        candidate = self._luna_candidate(
+            source,
+            evidence_text="Alice",
+            true_claim="Alice",
+            original_entity="Alice",
+            canonical_fact="{ENTITY} is the representative.",
+        )
+        accepted, summary = v24.ground_luna_factual_slots(source, [candidate])
+        self.assertEqual(accepted, [])
+        self.assertEqual(summary["rejection_reason_counts"], {"stage_a_invalid_evidence_text_ambiguous": 1})
+        accepted, summary = v24.ground_luna_factual_slots(self._luna_source(), [self._luna_candidate(evidence_text="Not in source")])
+        self.assertEqual(accepted, [])
+        self.assertEqual(summary["rejection_reason_counts"], {"stage_a_invalid_evidence_text_missing": 1})
+
+    def test_luna_stage_a_entity_must_be_exactly_inside_true_claim(self):
+        source = self._luna_source()
+        accepted, summary = v24.ground_luna_factual_slots(source, [self._luna_candidate(original_entity="Bob")])
+        self.assertEqual(accepted, [])
+        self.assertIn("stage_a_original_entity_not_exact_claim_span", summary["rejection_reason_counts"])
+        support = [{"text": "Alice", "supports": "a different slot"}]
+        accepted, summary = v24.ground_luna_factual_slots(source, [self._luna_candidate(supporting_evidence=support)])
+        self.assertEqual(accepted[0]["original_entity"], "Alice")
+        self.assertEqual(accepted[0]["construction_evidence"][-1]["quote"], "Alice")
+        self.assertEqual(summary["grounded_fact_count"], 1)
+        self.assertTrue(summary["semantic_review_required"])
+
+    def test_luna_stage_a_canonical_has_one_slot_and_supporting_context_only(self):
+        source = self._luna_source()
+        accepted, summary = v24.ground_luna_factual_slots(source, [self._luna_candidate(canonical_fact="{ENTITY} and {ENTITY}")])
+        self.assertEqual(accepted, [])
+        self.assertIn("stage_a_canonical_slot_count", summary["rejection_reason_counts"])
+        accepted, _ = v24.ground_luna_factual_slots(
+            source,
+            [self._luna_candidate(supporting_evidence=[{"text": "The record", "supports": "study identity"}])],
+        )
+        self.assertEqual(accepted[0]["canonical_true_fact"], "The record identifies Alice as the designated representative.")
+        self.assertEqual(accepted[0]["fact_order"], 0)
+
+    def test_luna_stage_a_candidate_budget_is_hard_and_empty_response_is_allowed(self):
+        source = self._luna_source()
+        candidate = self._luna_candidate()
+        with self.assertRaisesRegex(ValueError, "stage_a_candidate_budget_exceeded"):
+            v24.ground_luna_factual_slots(source, [candidate] * 9)
+        provider = v24.LunaCandidateProvider(
+            client=Mock(chat_with_metadata=Mock(return_value=Mock(content=json.dumps({"candidates": []}), retry_count=0))),
+            profile={"model": "mock"},
+        )
+        self.assertEqual(provider.construct_factual_slots(source), [])
+
     def test_config_removes_nli_contradiction_gate(self):
         config = load_v24_config()
         self.assertFalse(config["eligibility"]["nli_contradiction_required"])
@@ -1729,6 +1812,70 @@ class V24EligibilityTests(unittest.TestCase):
 
 
 class V24QueryQualityTests(unittest.TestCase):
+    def test_ab_grounded_title_keeps_terminal_punctuation_inside_quotes(self):
+        title = "Fetal facial profile markers of Down syndrome in the second and third trimesters of pregnancy."
+        source = title + "\nThe study measured fetal facial profiles."
+        for quoted in (title, title.rstrip(".")):
+            claim = f"The study titled '{quoted}' was registered in Delaware."
+            query = f"Was the study titled '{quoted}' registered in Delaware?"
+            self.assertNotIn("canonical_unresolved_reference", _canonical_proposition_quality_reasons(claim, claim, source_text=source))
+            self.assertNotIn("q_plus_unresolved_reference", self._query_reasons(claim, query, source_text=source))
+        for wrong in (title.replace("markers", "measures"), title + " Handbook", "Fetal facial."):
+            query = f"Was the study titled '{wrong}' registered in Delaware?"
+            self.assertIn("q_plus_unresolved_reference", self._query_reasons(query, query, source_text=source))
+
+    def test_ab_explicit_that_clauses_preserve_reference_rejections(self):
+        for query in (
+            "Did measurements during a Valsalva maneuver show that during straining (phase II), pressure was reduced and that following release (phase IV), pressure was increased?",
+            "Was a deep architecture that aggregates local contextualized interactions proposed for ranking?",
+        ):
+            self.assertFalse(v24._has_unresolved_reference(query), query)
+        for query in (
+            "Did that study show an effect?", "Does that learn from annotations?",
+            "Did measurements show that during straining, it was reduced?",
+            "Did measurements show that during straining, that study was successful?",
+            "Did measurements increase and that following release, pressure was increased?",
+        ):
+            self.assertTrue(v24._has_unresolved_reference(query), query)
+
+    def test_ab_causal_since_is_not_a_time_anchor(self):
+        claim = "Since the missing data points can adversely affect downstream analysis, many algorithms have been proposed to impute missing values."
+        query = "Have many algorithms been proposed to impute missing values because missing data points can adversely affect downstream analysis?"
+        self.assertEqual(v24._temporal_markers(claim), v24._temporal_markers(query))
+        causal_tail = "Have many algorithms been proposed to impute missing values since missing data points can adversely affect downstream analysis?"
+        self.assertEqual(v24._temporal_markers(claim), v24._temporal_markers(causal_tail))
+        for temporal in (
+            "Patients have improved since 2020.", "Patients have improved since treatment began.",
+            "Patients have improved since the study started.", "Patients have improved since admission.",
+            "Since the missing values can affect analysis, algorithms developed since 2020 are used.",
+            "Since patients could walk, symptoms have improved.",
+        ):
+            self.assertIn("since", v24._temporal_markers(temporal), temporal)
+
+    def test_ab_auxiliary_errors_and_safe_multiclause_questions(self):
+        invalid = (
+            "Had Eleven patients with defecation syncope had had one episode?",
+            "Does dynamic symbolic execution (DSE) have been proposed for analysis?",
+            "Was weight loss observed on the 7th day, but gradual weight gain was observed later, and the weight changes were similar?",
+            "Was weight loss observed on 7th day after treatment?",
+        )
+        valid = (
+            "Had Eleven patients with defecation syncope had one episode?",
+            "Has dynamic symbolic execution (DSE) been proposed for analysis?",
+            "Does the analysis show that patients have been treated?",
+            "Does the analysis include patients reported to have been treated?",
+            "Does the analysis report patients have been treated?",
+            "Had the clinician reported that Eleven patients had had one episode?",
+            "Was weight loss observed on the 7th day and gradual weight gain observed later?",
+            "Was weight loss observed on the 7th day, and was gradual weight gain observed later?",
+            "Was the clinician aware that weight loss was observed, but gradual weight gain was observed later?",
+            "Is it correct that weight loss was observed on the 7th day, but gradual weight gain was observed later?",
+        )
+        for query in invalid:
+            self.assertIn("not_natural_question", v24._query_surface_reasons(query, ""), query)
+        for query in valid:
+            self.assertNotIn("not_natural_question", v24._query_surface_reasons(query, ""), query)
+
     def _query_reasons(
         self, claim: str, q_plus: str, *, original: str = "Delaware",
         replacement: str = "Nevada", source_text: str = "",
@@ -2628,6 +2775,753 @@ class V24CanaryResumeTests(unittest.TestCase):
         ), patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(self.runner.main(), 0)
         self.assertTrue(run.call_args.kwargs["resume"])
+
+
+class V24FactAblationTests(unittest.TestCase):
+    def setUp(self):
+        self.runner = _load_v24_capacity_runner()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.input_path = self.root / "references.jsonl"
+        self.output = self.root / "ablation"
+        self.config = load_v24_config(Path(__file__).resolve().parents[1])
+        self.sources, self.facts, self.records, pools = {}, {}, [], {}
+        for dataset in v24.DATASET_ORDER:
+            reader = Mock()
+            reader.manifest = {"scope": "development_subset"}
+            reader.binding.return_value = {"dataset": dataset, "pool_sha256": dataset}
+            reader.facts_for_source.side_effect = lambda source: [self.facts[source["source_key"]]]
+            pools[(dataset, dataset)] = reader
+            for index in range(6):
+                number = len(self.records)
+                original = f"Person{number}"
+                claim = f"The record identifies {original} as the designated representative."
+                text = "The record concerns the ACCORD trial. " + claim
+                source = {"dataset": dataset, "source_key": f"{dataset}::{index}",
+                          "source_order_rank": str(index), "full_text": text}
+                fact = {**v24._source_identity(source), "upstream_pair_id": f"fact-{number}",
+                        "true_claim": claim, "original_entity": original, "fact_order": 0,
+                        "original_span": [text.index(original), text.index(original) + len(original)],
+                        "proposition_span": [text.index(claim), len(text)],
+                        "slotted_true_claim": claim.replace(original, "{ENTITY}")}
+                self.sources[(dataset, source["source_key"])] = source
+                self.facts[source["source_key"]] = fact
+                positive = index >= 4
+                reference = {
+                    "annotation_type": "assistant_reference", "status": "as_is" if positive else "completed",
+                    "standalone_claim": claim if positive else claim.replace("The record", "The ACCORD trial record"),
+                    "reason": "保持对照原句" if positive else "补足记录所属试验",
+                    "evidence": [{"span": [0, len(text)], "quote": text, "supports": "原句与记录范围"}],
+                }
+                self.records.append({
+                    "kind": "v24_fact_ablation_reference", "sample_id": f"sample-{number}",
+                    "stratum": "positive_control" if positive else "context_failure",
+                    "candidate_pool": dataset, "reference_fact": reference,
+                    "raw_fact": {**fact, "pair_id": fact["upstream_pair_id"],
+                                 "candidate_pool_sha256": dataset, "canary_pair_index": number},
+                })
+        write_jsonl(self.records, self.input_path)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for target, replacement in (("load_v24_config", self.config), ("_source_lookup", self.sources),
+                                    ("_load_canary_candidate_pools", pools), ("_canary_llm_identity", {"model": "mock-luna"})):
+            self.stack.enter_context(patch.object(self.runner, target, return_value=replacement))
+        self.scorer = Mock(side_effect=_semantic_similarity)
+        self.scorer.identity.return_value = {"kind": "mock", "revision": "r1"}
+        self.scorer_builder = self.stack.enter_context(patch.object(self.runner, "build_v24_semantic_similarity", return_value=self.scorer))
+        self.provider_builder = self.stack.enter_context(patch.object(self.runner, "build_luna_candidate_provider"))
+
+    def _provider(self, *, interrupt_call=None, reject_key=None):
+        stats = {"logical_api_calls": 0, "physical_attempts": 0, "transport_retry_count": 0,
+                 "provider_model_ids": ["mock-luna"], "profile_name": "mock", "configured_model": "mock-luna", "failures": []}
+
+        def provide(fact, *unused):
+            stats["logical_api_calls"] += 1
+            if stats["logical_api_calls"] == interrupt_call:
+                raise KeyboardInterrupt()
+            stats["physical_attempts"] += 1
+            claim, original = fact["true_claim"], fact["original_entity"]
+            subject = "the ACCORD trial record" if "ACCORD" in claim else "the record"
+            plus = f"Does {subject} identify {original} as the designated representative?"
+            packages = []
+            for index in range(3):
+                replacement = f"Alternative{index}"
+                package = _package(replacement, claim.replace(original, "{ENTITY}"),
+                                   plus if fact["source_key"] != reject_key else "",
+                                   plus.replace(original, replacement))
+                package.update({"contextual_role_compatibility": {"compatible": True, "plausibility": "strong"},
+                                "correction_eligibility": {"correction_eligible": True}, "provider_model_id": "mock-luna"})
+                packages.append(package)
+            return packages
+
+        provider = Mock(side_effect=provide)
+        provider.correct.side_effect = provide
+        provider.stats.side_effect = lambda: copy.deepcopy(stats)
+        self.provider_builder.return_value = provider
+        return provider
+
+    def _run(self, *, resume=False, preview=False):
+        return self.runner.run_canary(self.root, input_path=self.input_path, output_dir=self.output,
+                                     fact_ablation=True, resume=resume, preview_only=preview, show_progress=False)
+
+    def test_reference_evidence_and_original_slot_are_checked_without_forged_spans(self):
+        record = self.records[0]
+        raw = copy.deepcopy(record["raw_fact"])
+        source = self.sources[(raw["dataset"], raw["source_key"])]["full_text"]
+        view = v24.reference_fact_view(raw, record["reference_fact"], source)
+        self.assertEqual(raw, record["raw_fact"])
+        self.assertEqual(view["original_entity"], raw["original_entity"])
+        self.assertEqual(view["slotted_true_claim"].count("{ENTITY}"), 1)
+        self.assertNotIn("original_span", view)
+        self.assertNotIn("proposition_span", view)
+        for kind in ("quote", "span", "target", "duplicate", "annotation", "membership"):
+            with self.subTest(kind=kind):
+                changed = copy.deepcopy(record["reference_fact"])
+                if kind == "quote":
+                    changed["evidence"][0]["quote"] = "Unsupported text"
+                elif kind == "span":
+                    changed["evidence"][0]["span"][0] = -1
+                elif kind == "target":
+                    changed["standalone_claim"] = changed["standalone_claim"].replace("Person0", "Person999")
+                elif kind == "duplicate":
+                    changed["standalone_claim"] += " Person0"
+                elif kind == "annotation":
+                    changed["annotation_type"] = "human_gold"
+                else:
+                    changed["membership"] = True
+                with self.assertRaises(ValueError):
+                    v24.reference_fact_view(raw, changed, source)
+
+    def test_preview_is_offline_and_balances_paired_order(self):
+        preview = self._run(preview=True)
+        self.assertEqual(preview["source_count"], 18)
+        self.assertEqual(preview["condition_count"], 36)
+        self.assertEqual(preview["maximum_logical_generation_calls"], 72)
+        for dataset in v24.DATASET_ORDER:
+            first = [row["condition"] for row in preview["conditions"][::2] if row["dataset"] == dataset]
+            self.assertEqual(first.count("A"), 3)
+            self.assertEqual(first.count("B"), 3)
+        self.assertFalse(self.output.exists())
+        self.provider_builder.assert_not_called()
+        self.scorer_builder.assert_not_called()
+
+    def test_both_arms_use_same_prompt_rules_context_target_and_budget(self):
+        provider = self._provider()
+        summary = self._run()
+        self.assertEqual(summary["status"], "completed_diagnostic")
+        self.assertEqual(summary["provider"]["logical_api_calls"], 36)
+        self.assertFalse(summary["capacity_sample_allowed"])
+        self.assertEqual(provider.correct.call_count, 0)
+        calls = [call.args[0] for call in provider.call_args_list]
+        for offset in range(0, 36, 2):
+            left, right = calls[offset:offset + 2]
+            self.assertEqual(left["source_context"], right["source_context"])
+            self.assertEqual(left["original_entity"], right["original_entity"])
+            self.assertEqual(build_candidate_prompt(left).split("Input:\n")[0], build_candidate_prompt(right).split("Input:\n")[0])
+            for fact in (left, right):
+                payload = json.loads(build_candidate_prompt(fact).split("Input:\n")[1])
+                self.assertEqual(set(payload), {"upstream_pair_id", "true_claim", "original_entity", "slotted_true_claim", "source_context"})
+        for row in read_jsonl(self.output / "canary_results.jsonl"):
+            self.assertEqual(len(row["candidate_evidence"]), 3)
+            self.assertIn("true_grounding", row["candidate_evidence"][0]["candidate"])
+            self.assertIn("original_span", row["raw_fact"])
+
+    def test_unusable_reference_keeps_source_without_a_b_generation_call(self):
+        self.records[0]["reference_fact"].update(status="unusable", standalone_claim=None, reason="缺失比较人群")
+        write_jsonl(self.records, self.input_path)
+        self._provider()
+        summary = self._run()
+        self.assertEqual(summary["reference_unusable_source_count"], 1)
+        self.assertEqual(summary["provider"]["logical_api_calls"], 35)
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        self.assertEqual(len(rows), 36)
+        rejected = next(row for row in rows if row["sample_id"] == "sample-0" and row["condition"] == "B")
+        self.assertEqual(rejected["rejection_reason_counts"], {"reference_fact_unusable": 1})
+        self.assertEqual(rejected["candidate_evidence"], [])
+
+    def test_rejected_candidates_and_corrections_are_retained_without_passing_canary(self):
+        key = self.records[0]["raw_fact"]["source_key"]
+        provider = self._provider(reject_key=key)
+        summary = self._run()
+        self.assertEqual(summary["status"], "completed_diagnostic")
+        self.assertEqual(summary["passed_pair_count"], 34)
+        self.assertEqual(provider.correct.call_count, 2)
+        rejected = [row for row in read_jsonl(self.output / "canary_results.jsonl") if row["source_key"] == key]
+        self.assertTrue(all(len(row["candidate_evidence"]) == 6 for row in rejected))
+        self.assertTrue(all(row["selected_pair"] is None for row in rejected))
+
+    def test_resume_preserves_completed_conditions_and_rejects_reference_drift(self):
+        self._provider(interrupt_call=2)
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        path = self.output / "canary_results.jsonl"
+        saved = list(read_jsonl(path))
+        self.assertEqual(len(saved), 1)
+        original = self.input_path.read_bytes()
+        self.records[0]["reference_fact"]["reason"] += "changed"
+        write_jsonl(self.records, self.input_path)
+        provider = self._provider()
+        with self.assertRaisesRegex(RuntimeError, "checkpoint_identity_drift"):
+            self._run(resume=True)
+        self.assertEqual(provider.call_count, 0)
+        self.input_path.write_bytes(original)
+        summary = self._run(resume=True)
+        self.assertEqual(summary["status"], "completed_diagnostic")
+        self.assertEqual(provider.call_count, 34)
+        self.assertEqual(provider.correct.call_count, 1)
+        interrupted = list(read_jsonl(path))[1]
+        self.assertEqual(interrupted["generation_drafts"][0]["status"], "response_unavailable_after_interruption")
+        self.assertFalse(summary["external_call_counts_complete"])
+        self.assertEqual(list(read_jsonl(path))[0], saved[0])
+        self.provider_builder.side_effect = AssertionError("no_model_on_completed_resume")
+        self.scorer_builder.side_effect = AssertionError("no_gpu_on_completed_resume")
+        self.assertEqual(self._run(resume=True), summary)
+
+    def test_initial_drafts_survive_interruption_during_correction_without_regeneration(self):
+        key = self.records[0]["raw_fact"]["source_key"]
+        self._provider(interrupt_call=2, reject_key=key)
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        progress = read_json(self.output / "canary_summary.json")
+        self.assertEqual(progress["completed_pair_count"], 0)
+        self.assertEqual([stage["status"] for stage in progress["active_generation"]], ["completed", "started"])
+        original_drafts = progress["active_generation"][0]["candidates"]
+        provider = self._provider(reject_key=key)
+        summary = self._run(resume=True)
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        self.assertEqual(rows[0]["generation_drafts"][0]["candidates"], original_drafts)
+        self.assertEqual(rows[0]["generation_drafts"][1]["status"], "response_unavailable_after_interruption")
+        self.assertEqual(len(rows[0]["candidate_evidence"]), 3)
+        self.assertEqual(provider.call_count, 35)
+        self.assertEqual(provider.correct.call_count, 1)
+        self.assertLessEqual(summary["provider"]["logical_api_calls"], 72)
+
+    def test_resume_rejects_modified_inflight_drafts_before_loading_models(self):
+        key = self.records[0]["raw_fact"]["source_key"]
+        self._provider(interrupt_call=2, reject_key=key)
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        path = self.output / "canary_summary.json"
+        progress = read_json(path)
+        progress["active_generation"][0]["candidates"][0]["q_plus_text"] = "Changed?"
+        write_json(progress, path)
+        self.provider_builder.side_effect = AssertionError("no_api_for_draft_drift")
+        self.scorer_builder.side_effect = AssertionError("no_gpu_for_draft_drift")
+        with self.assertRaisesRegex(RuntimeError, "checkpoint_drafts_invalid"):
+            self._run(resume=True)
+
+    def test_changed_sampling_and_labels_are_rejected_before_model_calls(self):
+        for kind in ("count", "stratum", "identity", "membership"):
+            with self.subTest(kind=kind):
+                records = copy.deepcopy(self.records)
+                if kind == "count":
+                    records.pop()
+                elif kind == "stratum":
+                    records[0]["stratum"] = "positive_control"
+                elif kind == "identity":
+                    records[0]["raw_fact"]["source_hash"] = records[1]["raw_fact"]["source_hash"]
+                else:
+                    records[0]["membership_label"] = True
+                write_jsonl(records, self.input_path)
+                with self.assertRaises(ValueError):
+                    self._run(preview=True)
+        self.provider_builder.assert_not_called()
+        self.scorer_builder.assert_not_called()
+
+    def test_report_separates_good_rejected_drafts_from_bad_accepted_drafts(self):
+        self._provider(reject_key=self.records[0]["raw_fact"]["source_key"])
+        self._run()
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        reviews = []
+        criteria = {key: "pass" for key in ("semantic_fidelity", "naturalness", "self_containedness", "stealth", "entity_binding", "polar_question")}
+        for row in rows:
+            for candidate in row["candidate_evidence"]:
+                reviews.append({
+                    "annotation_type": "assistant_only", "source_result_sha256": row["result_content_sha256"],
+                    "input_index": row["input_index"], "candidate_index": candidate["candidate_index"],
+                    "canonical_supported": True, "canonical_complete": row["input_index"] != 2,
+                    "q_plus": dict(criteria), "q_minus": dict(criteria), "reason": "仅用于验证报告分母与归因的 mock 标注",
+                })
+        pending = v24.summarize_fact_ablation(rows, [])
+        self.assertEqual(pending["status"], "awaiting_assistant_review")
+        self.assertIsNone(pending["macro_paired_source_rates"]["initial_good"]["A"])
+        report = v24.summarize_fact_ablation(rows, reviews)
+        self.assertEqual(report["status"], "completed_diagnostic_review")
+        self.assertEqual(report["source_count"], 18)
+        self.assertEqual(report["candidate_error_counts"]["good_candidate_automatically_rejected"], 12)
+        self.assertEqual(report["candidate_error_counts"]["bad_candidate_automatically_accepted"], 3)
+        self.assertEqual(report["candidate_error_counts"]["canonical_missing_context"], 3)
+        self.assertEqual(report["by_dataset"]["nfcorpus"]["paired_comparison_count"], 6)
+        self.assertFalse(report["capacity_sample_allowed"])
+        for changed in (reviews + [reviews[0]], [{**reviews[0], "source_result_sha256": "wrong"}],
+                        [{**reviews[0], "q_plus": {}}]):
+            with self.assertRaises(ValueError):
+                v24.summarize_fact_ablation(rows, changed)
+
+    def test_report_includes_saved_drafts_even_when_evaluation_failed(self):
+        self._provider()
+        self._run()
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        rows[0].update(candidate_evidence=[], eligible=False, selected_pair=None,
+                       rejection_reason_counts={"execution_error:ValueError": 1})
+        rows[0]["result_content_sha256"] = sha256_obj({key: value for key, value in rows[0].items() if key != "result_content_sha256"})
+        report = v24.summarize_fact_ablation(rows, [])
+        self.assertEqual(report["candidate_count"], 108)
+        self.assertEqual(report["status"], "incomplete_execution")
+        self.assertFalse(report["generation_complete"])
+
+
+class V24TwoStageTests(unittest.TestCase):
+    def test_invalid_json_response_is_saved_before_parsing(self):
+        provider = self._provider()
+        chat = provider.client.chat_with_metadata.side_effect
+
+        def invalid_first(prompt, **kwargs):
+            if not self.events:
+                self.events.append(("invalid_response", {}))
+                return Mock(content='{"candidates":[', retry_count=2, provider_model_id="mock-luna",
+                            finish_reason="length", input_tokens=23, output_tokens=2048)
+            return chat(prompt, **kwargs)
+
+        provider.client.chat_with_metadata.side_effect = invalid_first
+        summary = self._run()
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        stage = rows[0]["generation_drafts"][0]
+        self.assertEqual(stage["status"], "response_invalid")
+        self.assertEqual(stage["response"]["finish_reason"], "length")
+        self.assertEqual(stage["response"]["output_tokens"], 2048)
+        self.assertEqual(stage["response"]["content"], '{"candidates":[')
+        self.assertEqual(stage["error_type"], "JSONDecodeError")
+        self.assertTrue(rows[0]["execution_incomplete"])
+        self.assertTrue(summary["external_call_counts_complete"])
+        self.assertEqual(summary["provider"]["physical_attempts"], 1 + 2 + 17 * 4)
+        self.provider_builder.side_effect = AssertionError("completed_invalid_response_must_not_retry")
+        self._run(resume=True)
+
+    def test_response_evidence_redacts_credentials_and_omits_exception_messages(self):
+        secret = "unit-test-secret-never-store"
+        observed = []
+        provider = v24.LunaCandidateProvider(
+            client=Mock(api_key_env="PCV_SIBLING_API_KEY"), profile={}, response_observer=observed.append,
+        )
+        provider.client.chat_with_metadata.return_value = Mock(
+            content='{"candidates":[{"reason":"' + secret + '"}]}', retry_count=0,
+            provider_model_id="mock-luna", headers={"Authorization": secret},
+        )
+        with patch.dict("os.environ", {"PCV_SIBLING_API_KEY": secret}), self.assertRaisesRegex(ValueError, "response_redacted"):
+            provider._request_candidates("mock input")
+        self.assertIn("[REDACTED]", observed[0]["content"])
+        self.assertNotIn(secret, json.dumps([observed, provider.stats()]))
+        self.assertNotIn("headers", observed[0])
+        provider.client.chat_with_metadata.side_effect = RuntimeError(secret)
+        with self.assertRaises(RuntimeError):
+            provider._request_candidates("mock input")
+        self.assertEqual(provider.stats()["failures"], ["ValueError", "RuntimeError"])
+        self.assertEqual(len(observed), 1)
+
+    def test_saved_invalid_response_and_request_failure_never_retry(self):
+        for received in (True, False):
+            with self.subTest(received=received):
+                self.output = self.root / ("invalid" if received else "request_failed")
+                self.events.clear()
+                provider = self._provider()
+                if received:
+                    provider.client.chat_with_metadata.return_value = Mock(content="", retry_count=0, provider_model_id="mock-luna")
+                    provider.client.chat_with_metadata.side_effect = None
+                else:
+                    provider.client.chat_with_metadata.side_effect = RuntimeError("private-transport-message")
+                write = self.runner.write_json
+
+                def interrupt_after_failure(payload, path):
+                    write(payload, path)
+                    stages = payload.get("active_generation", [])
+                    if payload["status"] == "running" and stages and stages[-1]["status"] in {"response_invalid", "request_failed"}:
+                        raise KeyboardInterrupt()
+
+                with patch.object(self.runner, "write_json", side_effect=interrupt_after_failure), self.assertRaises(KeyboardInterrupt):
+                    self._run()
+                saved = read_json(self.output / "canary_summary.json")["active_generation"][0]
+                self.assertEqual(saved["status"], "response_invalid" if received else "request_failed")
+                self.assertNotIn("private-transport-message", json.dumps(saved))
+                provider = self._provider()
+                summary = self._run(resume=True)
+                rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+                self.assertEqual(rows[0]["generation_drafts"][0], saved)
+                self.assertEqual(summary["execution_incomplete_source_count"], 1)
+                self.assertEqual(provider.stats()["logical_api_calls"], 17 * 4)
+
+    def test_response_received_checkpoint_replays_json_without_repeating_request(self):
+        self._provider()
+        write = self.runner.write_json
+
+        def interrupt_after_response(payload, path):
+            write(payload, path)
+            stages = payload.get("active_generation", [])
+            if stages and stages[-1]["status"] == "response_received":
+                raise KeyboardInterrupt()
+
+        with patch.object(self.runner, "write_json", side_effect=interrupt_after_response), self.assertRaises(KeyboardInterrupt):
+            self._run()
+        saved = read_json(self.output / "canary_summary.json")["active_generation"][0]
+        self.assertEqual(saved["status"], "response_received")
+        summary_path = self.output / "canary_summary.json"
+        intact = read_json(summary_path)
+        altered = copy.deepcopy(intact)
+        altered["active_generation"][0]["response"]["content"] = "tampered"
+        write_json(altered, summary_path)
+        with patch.object(self.runner, "build_luna_candidate_provider", side_effect=AssertionError("no_api")), \
+                patch.object(self.runner, "build_v24_semantic_similarity", side_effect=AssertionError("no_gpu")), \
+                self.assertRaisesRegex(RuntimeError, "drafts_invalid"):
+            self._run(resume=True)
+        write_json(intact, summary_path)
+        self.events.clear()
+        provider = self._provider()
+        summary = self._run(resume=True)
+        self.assertTrue(summary["automatic_quality_pass"])
+        self.assertEqual(self.events[0][0], "fact_verification")
+        self.assertEqual(provider.stats()["logical_api_calls"], 3 + 17 * 4)
+
+    def test_response_save_error_is_not_a_quality_rejection(self):
+        self._provider()
+        write = self.runner.write_json
+
+        def fail_response_save(payload, path):
+            stages = payload.get("active_generation", [])
+            if stages and stages[-1]["status"] == "response_received":
+                raise OSError("simulated_response_disk_error")
+            write(payload, path)
+
+        with patch.object(self.runner, "write_json", side_effect=fail_response_save), self.assertRaises(RuntimeError):
+            self._run()
+        self.assertEqual(list(read_jsonl(self.output / "canary_results.jsonl")), [])
+        self.assertEqual(len(self.events), 1)
+
+    def setUp(self):
+        V24FactAblationTests.setUp(self)
+        self.config["development"]["canary_pair_count"] = len(self.records)
+        write_jsonl([record["raw_fact"] for record in self.records], self.input_path)
+        self.source = next(iter(self.sources.values()))
+        self.raw = self.facts[self.source["source_key"]]
+        self.events = []
+
+    @staticmethod
+    def _construction(fact):
+        return {"status": "completed", "standalone_claim": fact["true_claim"].replace("The record", "The ACCORD trial record"),
+                "evidence": [{"quote": fact["source_context"], "supports": "原句和试验范围"}],
+                "target_aliases": [], "reason": "补足记录所属试验"}
+
+    @staticmethod
+    def _fact_verdict(**changes):
+        return {"supported": True, "complete": True, "aliases_complete": True, "reason": "逐项核对原文范围", **changes}
+
+    @staticmethod
+    def _query_verdicts(**changes):
+        return [{"candidate_index": index, "q_plus_faithful": True, "q_minus_faithful": True,
+                 "natural_polar": True, "alias_consistent": True, "role_compatible": True,
+                 "correction_eligible": True, "reason": "逐项核对固定命题及两问", **changes} for index in range(3)]
+
+    def _provider(self, *, interrupt_stage=None, reject_fact=None, reject_initial=False):
+        def chat(prompt, **kwargs):
+            payload = json.loads(prompt.split("\nInput:\n", 1)[1])
+            if prompt.startswith("Construct one"):
+                stage, result = "fact_construction", [self._construction(payload)]
+            elif prompt.startswith("Verify a proposed"):
+                stage = "fact_verification"
+                result = [self._fact_verdict(**({reject_fact: False} if reject_fact else {}))]
+            elif prompt.startswith("Realize an already"):
+                stage = "semantic_correction" if "rejected_candidates" in payload else "initial"
+                template = "Does the ACCORD trial record identify {ENTITY} as the designated representative?"
+                if reject_initial and stage == "initial":
+                    template = "Does the record identify {ENTITY} as the designated representative?"
+                result = [{"replacement_entity": f"Alternative{index}", "question_template": template} for index in range(3)]
+            else:
+                self.assertTrue(prompt.startswith("Verify each candidate"))
+                corrected = bool(self.events) and self.events[-1][0] == "semantic_correction"
+                stage = "semantic_correction_verification" if corrected else "initial_verification"
+                result = self._query_verdicts(q_plus_faithful=not reject_initial or corrected,
+                                              q_minus_faithful=not reject_initial or corrected)
+            self.events.append((stage, payload))
+            if stage == interrupt_stage:
+                raise KeyboardInterrupt()
+            return Mock(content=json.dumps({"candidates": result}), retry_count=0, provider_model_id="mock-luna")
+
+        provider = v24.LunaCandidateProvider(client=Mock(chat_with_metadata=Mock(side_effect=chat)), profile={"model": "mock-luna"})
+        self.provider_builder.return_value = provider
+        return provider
+
+    def _run(self, *, resume=False, preview=False):
+        return self.runner.run_canary(self.root, input_path=self.input_path, output_dir=self.output,
+                                     two_stage=True, resume=resume, preview_only=preview, show_progress=False)
+
+    def _screen(self, provider, *, facts=None, source=None):
+        return screen_source(source or self.source, facts=facts or [self.raw], candidate_provider=provider,
+                             minimum_pairs=1, two_stage=True, similarity_fn=_semantic_similarity,
+                             include_candidate_evidence=True, include_full_candidate_evidence=True)
+
+    def _verified_fact(self):
+        raw = {**self.raw, "source_context": self.source["full_text"]}
+        fact = v24.constructed_fact_view(raw, self._construction(raw), self.source["full_text"])
+        return v24.bind_fact_verification(fact, self._fact_verdict())
+
+    def test_full_execution_constructs_and_verifies_before_shared_questions(self):
+        provider = self._provider()
+        result = self._screen(provider)
+        self.assertTrue(result["eligible"], result["rejection_reason_counts"])
+        self.assertEqual([stage for stage, _ in self.events], list(self.runner.TWO_STAGE_ATTEMPTS[:4]))
+        fact = result["fact_evidence"][0]["constructed_fact"]
+        self.assertNotIn("proposition_span", fact)
+        self.assertEqual(result["fact_evidence"][0]["raw_fact"], self.raw)
+        self.assertIn("ACCORD trial", fact["true_claim"])
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["canonical_proposition_template"].replace("{ENTITY}", pair["original_entity"]), fact["true_claim"])
+        self.assertEqual(pair["q_plus_text"].replace(pair["original_entity"], "{ENTITY}"),
+                         pair["q_minus_text"].replace(pair["replacement_entity"], "{ENTITY}"))
+        self.assertEqual(pair["generation_mode"], "fixed_fact_shared_question")
+        self.assertNotIn("entailment_probability", pair["true_grounding"])
+        self.assertEqual(len(result["candidate_evidence"]), 3)
+        self.assertTrue(all(row["candidate"]["q_plus_text"] for row in result["candidate_evidence"]))
+        self.assertEqual(provider.stats()["logical_api_calls"], 4)
+
+    def test_fact_verification_failures_never_reach_query_generation(self):
+        for field in ("supported", "complete", "aliases_complete"):
+            with self.subTest(field=field):
+                self.events.clear()
+                result = self._screen(self._provider(reject_fact=field))
+                self.assertFalse(result["eligible"])
+                self.assertIn("v24_fact_verification_" + field, result["rejection_reason_counts"])
+                self.assertEqual([stage for stage, _ in self.events], list(self.runner.TWO_STAGE_ATTEMPTS[:2]))
+
+    def test_query_correction_keeps_fact_and_runs_at_most_once(self):
+        provider = self._provider(reject_initial=True)
+        result = self._screen(provider)
+        self.assertTrue(result["eligible"], result["rejection_reason_counts"])
+        self.assertEqual([stage for stage, _ in self.events], list(self.runner.TWO_STAGE_ATTEMPTS))
+        self.assertEqual(self.events[2][1]["true_claim"], self.events[4][1]["true_claim"])
+        self.assertEqual(len(result["candidate_evidence"]), 6)
+        self.assertTrue(all(not row["accepted"] for row in result["candidate_evidence"][:3]))
+        self.assertEqual(provider.stats()["logical_api_calls"], 6)
+        self.events.clear()
+        provider = self._provider(reject_initial=True)
+        provider.verify_queries = Mock(return_value=self._query_verdicts(natural_polar=False))
+        result = self._screen(provider)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(sum(stage == "semantic_correction" for stage, _ in self.events), 1)
+
+    def test_fixed_canonical_alias_and_query_overrides_are_rejected(self):
+        fact = self._verified_fact()
+        package = {"replacement_entity": "Alternative", "question_template": "Does the ACCORD trial record identify {ENTITY} as the designated representative?"}
+        for change in (
+            {"canonical_proposition_template": "{ENTITY} is a representative."},
+            {"q_plus_text": "Is Person0 a representative?"},
+            {"question_template": "Does Person0 identify {ENTITY}?"},
+            {"question_template": "Does {ENTITY} identify {ENTITY}?"},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                v24.materialize_fixed_query(fact, {**package, **change})
+        altered = {**fact, "target_aliases": ["P0"]}
+        with self.assertRaisesRegex(ValueError, "alias_outside_slot"):
+            v24.materialize_fixed_query(altered, {**package, "question_template": "Does {ENTITY} (P0) represent the trial?"})
+
+    def test_self_scores_cannot_replace_verification_and_source_drift_is_rejected(self):
+        fact = self._verified_fact()
+        packages = [{"replacement_entity": f"Alternative{index}",
+                     "question_template": "Does the ACCORD trial record identify {ENTITY} as the designated representative?",
+                     "true_grounding": {"entailment_probability": 0.99, "top_label": "entailment"}} for index in range(3)]
+        self.assertFalse(evaluate_candidate(fact, self.source["full_text"], packages[0], similarity_fn=_semantic_similarity)["accepted"])
+        bound = v24.bind_query_verifications(fact, packages, self._query_verdicts(q_minus_faithful=False))
+        result = evaluate_candidate(fact, self.source["full_text"], bound[0], similarity_fn=_semantic_similarity)
+        self.assertIn("fixed_query_q_minus_faithful", result["rejection_reasons"])
+        bound = v24.bind_query_verifications(fact, packages, self._query_verdicts())
+        result = evaluate_candidate(fact, self.source["full_text"] + " Changed.", bound[0], similarity_fn=_semantic_similarity)
+        self.assertIn("fixed_fact_verification_missing_or_drift", result["rejection_reasons"])
+        for verdicts in (self._query_verdicts()[:2], [self._query_verdicts()[0]] * 3):
+            with self.assertRaisesRegex(ValueError, "verification_coverage"):
+                v24.bind_query_verifications(fact, packages, verdicts)
+
+    def test_target_aliases_require_source_support_and_acronym_target_is_rejected(self):
+        claim = "The National Science Foundation funded the research."
+        text = "The National Science Foundation (NSF) provided funding. " + claim
+        raw = _fact(claim, "National Science Foundation")
+        raw.update(proposition_span=[text.index(claim), len(text)],
+                   original_span=[text.index(claim) + 4, text.index(claim) + 4 + len(raw["original_entity"])])
+        construction = {"status": "as_is", "standalone_claim": claim, "target_aliases": [],
+                        "evidence": [{"quote": text, "supports": "原句和定义"}], "reason": "完整声明"}
+        view = v24.constructed_fact_view(raw, construction, text)
+        self.assertEqual(view["target_aliases"], ["NSF"])
+        other_target = {**raw, "original_entity": "research",
+                        "original_span": [text.rindex("research"), text.rindex("research") + len("research")]}
+        self.assertEqual(v24.constructed_fact_view(other_target, construction, text)["target_aliases"], [])
+        with self.assertRaisesRegex(ValueError, "alias_outside_slot"):
+            v24.constructed_fact_view(raw, {**construction, "status": "completed", "standalone_claim": claim.replace(" funded", " (NSF) funded")}, text)
+        with self.assertRaisesRegex(ValueError, "alias_not_source_defined"):
+            v24.constructed_fact_view(raw, {**construction, "target_aliases": [{"text": "Fake", "quote": text}]}, text)
+        acronym_claim = "The NSF funded the research."
+        acronym_text = text + " " + acronym_claim
+        acronym_raw = _fact(acronym_claim, "NSF")
+        acronym_raw.update(proposition_span=[acronym_text.index(acronym_claim), len(acronym_text)],
+                           original_span=[acronym_text.index(acronym_claim) + 4, acronym_text.index(acronym_claim) + 7])
+        with self.assertRaisesRegex(ValueError, "target_requires_expansion"):
+            v24.constructed_fact_view(acronym_raw, {**construction, "standalone_claim": acronym_claim,
+                                                  "evidence": [{"quote": acronym_text, "supports": "原文"}]}, acronym_text)
+
+    def test_bad_input_can_be_rejected_without_discarding_other_source_facts(self):
+        for claim in ("Wake Forest University School of Medicine", "The quantity $\\frac{x}{ is damaged."):
+            with self.subTest(claim=claim):
+                raw = _fact(claim, "Wake Forest" if claim.startswith("Wake") else "quantity")
+                raw.update(proposition_span=[0, len(claim)], fact_order=0)
+                good = copy.deepcopy(self.raw)
+                text = claim + " " + self.source["full_text"]
+                source = {**self.source, "full_text": text}
+                offset = len(claim) + 1
+                good.update(proposition_span=[n + offset for n in good["proposition_span"]],
+                            original_span=[n + offset for n in good["original_span"]], fact_order=1)
+                for fact in (raw, good):
+                    fact.update(v24._source_identity(source))
+                provider = self._provider()
+                provider.construct_fact = Mock(side_effect=lambda fact: [{
+                    "status": "unusable", "standalone_claim": None, "target_aliases": [],
+                    "evidence": [{"quote": claim, "supports": "不可恢复片段"}], "reason": "原文不足以构造命题",
+                }] if fact["fact_order"] == 0 else [self._construction(fact)])
+                result = self._screen(provider, facts=[raw, good], source=source)
+                self.assertTrue(result["eligible"], result["rejection_reason_counts"])
+                self.assertEqual([row["status"] for row in result["fact_evidence"]], ["rejected", "verified"])
+                self.assertIn("v24_fact_unusable", result["rejection_reason_counts"])
+
+    def test_raw_span_and_identity_drift_fail_before_any_model_request(self):
+        provider = self._provider()
+        for change in ({"source_hash": "wrong"}, {"proposition_span": [0, 1]}, {"membership_label": True}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self._screen(provider, facts=[{**self.raw, **change}])
+        provider.client.chat_with_metadata.assert_not_called()
+
+    def test_cli_and_preview_keep_ablation_separate_and_call_no_models(self):
+        preview = self._run(preview=True)
+        self.assertEqual(preview["run_kind"], "two_stage_fact_query_canary")
+        self.assertEqual(preview["maximum_logical_api_calls"], 108)
+        self.assertFalse(preview["capacity_sample_allowed"])
+        self.assertFalse(self.output.exists())
+        self.provider_builder.assert_not_called()
+        self.scorer_builder.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "must_keep_original_generation"):
+            self.runner.run_canary(self.root, input_path=self.input_path, output_dir=self.output, fact_ablation=True, two_stage=True)
+        with patch.object(self.runner, "run_canary", return_value={}) as run, patch("sys.stdout", new_callable=io.StringIO):
+            with patch("sys.argv", ["53", "run-two-stage-canary", "--input", "input", "--output-dir", "new", "--candidate-pool", "pool"]):
+                self.runner.main()
+            self.assertTrue(run.call_args.kwargs["two_stage"])
+            self.assertEqual(run.call_args.kwargs["candidate_pools"], ["pool"])
+
+    def test_runner_saves_each_stage_and_completed_resume_is_offline(self):
+        self._provider()
+        summary = self._run()
+        self.assertEqual(summary["status"], "completed_two_stage_diagnostic")
+        self.assertTrue(summary["automatic_quality_pass"])
+        self.assertFalse(summary["assistant_review_completed"])
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        self.assertEqual(len(rows), 18)
+        self.assertTrue(all(len(row["generation_drafts"]) == 4 and len(row["candidate_evidence"]) == 3 for row in rows))
+        self.assertEqual(summary["provider"]["logical_api_calls"], 72)
+        self.provider_builder.side_effect = AssertionError("no_api")
+        self.scorer_builder.side_effect = AssertionError("no_gpu")
+        self.assertEqual(self._run(resume=True), summary)
+
+    def test_interrupted_fact_or_query_verification_never_regenerates_saved_responses(self):
+        for stage in ("fact_verification", "initial_verification", "semantic_correction_verification"):
+            with self.subTest(stage=stage):
+                self.output = self.root / stage
+                self._provider(interrupt_stage=stage, reject_initial=stage.startswith("semantic"))
+                with self.assertRaises(KeyboardInterrupt):
+                    self._run()
+                progress = read_json(self.output / "canary_summary.json")
+                saved = copy.deepcopy(progress["active_generation"])
+                self.assertEqual(saved[-1]["status"], "started")
+                self.events.clear()
+                provider = self._provider()
+                summary = self._run(resume=True)
+                rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+                self.assertEqual(rows[0]["generation_drafts"][:-1], saved[:-1])
+                self.assertEqual(rows[0]["generation_drafts"][-1]["status"], "response_unavailable_after_interruption")
+                self.assertTrue(rows[0]["execution_incomplete"])
+                self.assertEqual(summary["execution_incomplete_source_count"], 1)
+                self.assertFalse(summary["external_call_counts_complete"])
+                self.assertEqual(provider.stats()["logical_api_calls"], 17 * 4)
+
+    def test_transport_failure_is_not_mislabeled_as_fact_quality_rejection(self):
+        provider = self._provider()
+        provider.verify_fact = Mock(side_effect=ValueError("v24_luna_candidates_missing"))
+        with self.assertRaisesRegex(ValueError, "luna_candidates_missing"):
+            self._screen(provider)
+
+    def test_saved_query_response_resumes_at_verification_without_repeating_generation(self):
+        self._provider()
+        write = self.runner.write_json
+
+        def interrupt_after_save(payload, path):
+            write(payload, path)
+            stages = payload.get("active_generation", [])
+            if payload["status"] == "running" and stages and stages[-1]["attempt"] == "initial" and stages[-1]["status"] == "completed":
+                raise KeyboardInterrupt()
+
+        with patch.object(self.runner, "write_json", side_effect=interrupt_after_save), self.assertRaises(KeyboardInterrupt):
+            self._run()
+        saved = read_json(self.output / "canary_summary.json")["active_generation"]
+        self.assertEqual(len(saved), 3)
+        self.events.clear()
+        provider = self._provider()
+        summary = self._run(resume=True)
+        rows = list(read_jsonl(self.output / "canary_results.jsonl"))
+        self.assertEqual(rows[0]["generation_drafts"][:3], saved)
+        self.assertEqual(self.events[0][0], "initial_verification")
+        self.assertFalse(rows[0]["execution_incomplete"])
+        self.assertTrue(summary["automatic_quality_pass"])
+        self.assertEqual(provider.stats()["logical_api_calls"], 1 + 17 * 4)
+
+    def test_quoted_titles_and_preserved_that_clauses_only_use_new_validation_in_fixed_mode(self):
+        title = "3D Human Pose Estimation via Deep Learning from 2D Annotations"
+        raw_claim = "The proposed network learns from 2D joint annotations."
+        source = title + "\n\n" + raw_claim
+        claim = f"The paper titled '{title}' proposes a network that learns from 2D joint annotations."
+        raw = _fact(raw_claim, "2D joint annotations")
+        raw.update(proposition_span=[source.index(raw_claim), len(source)],
+                   original_span=[source.index(raw["original_entity"]), source.index(raw["original_entity"]) + len(raw["original_entity"])])
+        construction = {"status": "completed", "standalone_claim": claim, "target_aliases": [],
+                        "evidence": [{"quote": source, "supports": "题名与网络学习目标"}], "reason": "补足文献名"}
+        fact = v24.bind_fact_verification(v24.constructed_fact_view(raw, construction, source), self._fact_verdict())
+        template = f"Does the paper titled '{title}' propose a network that learns from {{ENTITY}}?"
+        packages = [{"replacement_entity": f"alternative annotations {index}", "question_template": template} for index in range(3)]
+        bound = v24.bind_query_verifications(fact, packages, self._query_verdicts())
+        evaluated = evaluate_candidate(fact, source, bound[0], similarity_fn=_semantic_similarity)
+        self.assertTrue(evaluated["accepted"], evaluated["rejection_reasons"])
+        self.assertFalse(v24._has_unresolved_reference("Does the paper report findings that the protocols may fail?",
+                                                       fixed_proposition="The paper reports findings that the protocols may fail."))
+        self.assertTrue(v24._has_unresolved_reference("Does the paper report findings that the protocols may fail?"))
+        for query in ("Does that learn from annotations?", "Does it learn from annotations?", "Do images that changed improve predictions?"):
+            self.assertTrue(v24._has_unresolved_reference(query, fixed_proposition=claim), query)
+        self.assertNotIn("o'neill", v24._question_entities("O'Neill", strip_outer_quotes=False) ^ v24._question_entities("O'Neill", strip_outer_quotes=True))
+        wrong = {**bound[0], "question_template": template.replace("Annotations'", "Annotations Handbook'")}
+        wrong_bound = v24.bind_query_verifications(fact, [wrong, *packages[1:]], self._query_verdicts())[0]
+        self.assertFalse(evaluate_candidate(fact, source, wrong_bound, similarity_fn=_semantic_similarity)["accepted"])
+
+    def test_pool_scope_and_inflight_draft_drift_fail_before_loading_models(self):
+        pools = self.runner._load_canary_candidate_pools.return_value
+        reader = next(iter(pools.values()))
+        reader.manifest["scope"] = "formal"
+        with self.assertRaisesRegex(ValueError, "development_pool_required"):
+            self._run(preview=True)
+        self.provider_builder.assert_not_called()
+        self.scorer_builder.assert_not_called()
+        reader.manifest["scope"] = "development_subset"
+        self._provider(interrupt_stage="fact_verification")
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        path = self.output / "canary_summary.json"
+        progress = read_json(path)
+        progress["active_generation"][0]["candidates"][0]["standalone_claim"] = "Tampered fact."
+        write_json(progress, path)
+        self.provider_builder.side_effect = AssertionError("no_api")
+        self.scorer_builder.side_effect = AssertionError("no_gpu")
+        with self.assertRaisesRegex(RuntimeError, "checkpoint_drafts_invalid"):
+            self._run(resume=True)
 
 
 class V24CapacityRunnerTests(unittest.TestCase):
@@ -4199,6 +5093,541 @@ class V24CandidateFactPoolTests(unittest.TestCase):
                                   "--candidate-pool", "nfcorpus.json", "--candidate-pool", "trec-covid.json"]), patch("sys.stdout", new_callable=io.StringIO):
                 self.assertEqual(runner.main(), 0)
                 self.assertEqual(capacity.call_args.kwargs["candidate_pools"], ["nfcorpus.json", "trec-covid.json"])
+
+
+class V24LunaOnlyABTests(unittest.TestCase):
+    def setUp(self):
+        self.runner = _load_v24_capacity_runner()
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.config = load_v24_config()
+        self.sources = {}
+        self.pools = {}
+        for dataset in v24.DATASET_ORDER:
+            for index in range(10):
+                source = {"dataset": dataset, "source_key": f"{dataset}-{index}", "source_order_rank": str(index),
+                          "full_text": f"Record {dataset} {index} identifies Alice as the designated representative."}
+                self.sources[(dataset, source["source_key"])] = source
+            reader = Mock(dataset=dataset)
+            reader.manifest = {"scope": "development_subset", "pool_sha256": dataset}
+            reader.offsets = {key[1]: i for i, key in enumerate(self.sources) if key[0] == dataset}
+            reader.binding.return_value = {"dataset": dataset, "pool_sha256": dataset}
+            reader.facts_for_source.return_value = []
+            self.pools[(dataset, dataset)] = reader
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for name, value in (("load_v24_config", self.config), ("source_pool_bindings", {"mock": "source-pools"}),
+                            ("_source_lookup", self.sources), ("_load_canary_candidate_pools", self.pools),
+                            ("_canary_llm_identity", {"model": "gpt-5.6-luna", "profile_hash": "mock"})):
+            self.stack.enter_context(patch.object(self.runner, name, return_value=value))
+        self.exclusions = self.stack.enter_context(patch.object(self.runner, "collect_development_identities", return_value=[]))
+        self.stack.enter_context(patch.object(self.runner, "iter_frozen_source_pool",
+                                             side_effect=lambda root, ds: iter(s for (d, _), s in self.sources.items() if d == ds)))
+        self.output = "artifacts/v24/development/ab/run"
+        self.input = "artifacts/v24/development/ab/input/luna_only_ab_inputs.json"
+        self.scorer = Mock(side_effect=_semantic_similarity)
+        self.scorer.identity.return_value = {"kind": "mock", "revision": "r1"}
+        self.scorer_builder = self.stack.enter_context(patch.object(self.runner, "build_v24_semantic_similarity", return_value=self.scorer))
+        self.provider_builder = self.stack.enter_context(patch.object(self.runner, "build_luna_candidate_provider"))
+        self.runner.prepare_luna_only_ab(self.root, output_dir=Path(self.input).parent)
+
+    def _provider(self, callback=None):
+        def chat(prompt, **kwargs):
+            if callback:
+                callback(prompt)
+            return Mock(content='{"candidates":[]}', retry_count=0, provider_model_id="gpt-5.6-luna",
+                        input_tokens=10, output_tokens=2)
+        provider = v24.LunaCandidateProvider(client=Mock(chat_with_metadata=Mock(side_effect=chat)),
+                                             profile={"model": "gpt-5.6-luna"})
+        self.provider_builder.return_value = provider
+        return provider
+
+    def _run(self, **kwargs):
+        return self.runner.run_luna_only_ab(self.root, input_path=self.input, candidate_pools=["mock"],
+                                            output_dir=self.output, show_progress=False, **kwargs)
+
+    def test_source_first_selection_excludes_keys_and_normalized_text_without_extraction(self):
+        self.assertEqual(len(read_json(self.root / self.input)["sources"]), 30)
+        for reader in self.pools.values():
+            reader.facts_for_source.assert_not_called()
+        first = self.sources[("nfcorpus", "nfcorpus-0")]
+        extra = {**first, "source_key": "extra", "source_order_rank": "10", "full_text": "An extra independent source."}
+        self.sources[("nfcorpus", "extra")] = extra
+        self.exclusions.return_value = [{"dataset": "scidocs", "source_key": "renamed",
+                                         "normalized_text_hash": v24._source_identity(first)["normalized_text_hash"]}]
+        selected = self.runner.prepare_luna_only_ab(self.root, output_dir="artifacts/v24/development/second")
+        rows = read_json(self.root / selected["inputs_path"])["sources"]
+        self.assertNotIn("nfcorpus-0", [r["source_key"] for r in rows])
+        self.assertIn("extra", [r["source_key"] for r in rows])
+
+    def test_preview_and_zero_candidate_sources_keep_identical_source_order(self):
+        preview = self._run(preview_only=True)
+        self.assertEqual(preview["condition_count"], 120)
+        self.assertEqual(preview["maximum_logical_api_calls"], 5340)
+        self.assertFalse((self.root / self.output).exists())
+        self.provider_builder.assert_not_called()
+        self.scorer_builder.assert_not_called()
+        jobs = self.runner._luna_ab_jobs(preview["inputs"])
+        for repeat in range(2):
+            orders = [[j["source_key"] for j in jobs if j["repeat"] == repeat and j["arm"] == arm]
+                      for arm in ("GLiNER2+Luna", "Luna-only")]
+            self.assertEqual(orders[0], orders[1])
+
+    def test_zero_candidate_run_and_completed_resume_are_offline(self):
+        provider = self._provider()
+        result = self._run()
+        self.assertEqual(result["status"], "completed_diagnostic")
+        self.assertEqual(result["report"]["condition_count"], 120)
+        self.assertEqual(provider.logical_api_calls, 60)
+        self.assertEqual(result["report"]["provider"]["input_tokens"], 600)
+        self.assertFalse(result["report"]["formal_switch_allowed"])
+        self.provider_builder.side_effect = AssertionError("no_api")
+        self.scorer_builder.side_effect = AssertionError("no_gpu")
+        self.assertEqual(self._run(resume=True), result)
+        with self.assertRaisesRegex(ValueError, "output_exists"):
+            self._run()
+        report = self.runner.summarize_luna_only_ab(self.root, self.output + "/luna_only_ab_results.jsonl")
+        self.assertEqual(report, result["report"])
+
+    def test_saved_response_resume_never_reissues_stage_a(self):
+        provider = self._provider()
+        parse = provider.parse_response
+        provider.parse_response = Mock(side_effect=KeyboardInterrupt)
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        self.assertEqual(provider.logical_api_calls, 1)
+        progress = read_json(self.root / self.output / "luna_only_ab_summary.json")
+        self.assertEqual(progress["active_generation"][0]["status"], "response_received")
+        provider = self._provider()
+        result = self._run(resume=True)
+        self.assertEqual(provider.logical_api_calls, 59)
+        self.assertEqual(result["report"]["execution_incomplete_count"], 0)
+
+    def test_missing_response_is_missing_execution_not_quality_failure(self):
+        self._provider(lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+        provider = self._provider()
+        result = self._run(resume=True)
+        self.assertEqual(provider.logical_api_calls, 59)
+        self.assertEqual(result["report"]["execution_incomplete_count"], 1)
+        self.assertFalse(result["report"]["provider"]["external_call_counts_complete"])
+        row = list(read_jsonl(self.root / self.output / "luna_only_ab_results.jsonl"))[1]
+        self.assertIsNone(row["screen_result"])
+        self.assertIsNone(result["report"]["arms"]["Luna-only"]["stability_rates"]["source_has_ge_3_usable_facts"])
+
+    def test_source_or_config_drift_rejected_before_api(self):
+        self._provider()
+        self._run()
+        self.config["selection_seed"] += 1
+        self.provider_builder.side_effect = AssertionError("no_api")
+        with self.assertRaisesRegex(ValueError, "checkpoint_drift"):
+            self._run(resume=True)
+        self.sources[("nfcorpus", "nfcorpus-0")]["full_text"] += " changed"
+        with self.assertRaisesRegex(ValueError, "source_identity_drift"):
+            self._run(preview_only=True)
+
+    def test_repeatability_is_source_usability_not_exact_candidate_overlap(self):
+        manifest = read_json(self.root / self.input)
+        rows = []
+        for job in self.runner._luna_ab_jobs(manifest):
+            candidates = [{"true_claim": f"Claim {job['repeat']} {i}", "original_entity": f"Target{job['repeat']}{i}"}
+                          for i in range(3)]
+            rows.append({**job, "execution_incomplete": False, "generation_drafts": [], "screen_result": {
+                "usable_fact_count": 3, "eligible_pair_count": 3, "source_has_ge_1_usable_fact": True,
+                "source_has_ge_3_usable_facts": True, "source_has_ge_3_eligible_pairs": True,
+                "stage_a": {"grounded_facts": candidates}}})
+        report = self.runner._luna_ab_summary(rows, manifest=manifest)
+        stability = report["arms"]["Luna-only"]["source_repeatability"][0]
+        self.assertEqual(stability["overlap_diagnostic"]["candidate_exact_overlap"], 0)
+        self.assertTrue(stability["source_has_ge_3_usable_facts"]["stable"])
+        self.assertEqual(report["arms"]["Luna-only"]["stability_rates"]["source_has_ge_3_eligible_pairs"], 1)
+        self.assertFalse(report["candidate_overlap_is_hard_gate"])
+        self.assertIsNone(report["promotion_thresholds"])
+        manifest["settings"]["repeatability_runs"] = 1
+        report = self.runner._luna_ab_summary(rows[:60], manifest=manifest)
+        self.assertIsNone(report["arms"]["Luna-only"]["stability_rates"]["source_has_ge_3_eligible_pairs"])
+
+    def test_luna_screen_preserves_verbatim_claim_and_code_instantiated_questions(self):
+        claim = "The record identifies Alice as the designated representative."
+        source = {"dataset": "nfcorpus", "source_key": "closure", "source_order_rank": "0",
+                  "full_text": "The record concerns the ACCORD trial. " + claim}
+        slot = {"evidence_text": claim, "true_claim": claim, "original_entity": "Alice",
+                "canonical_fact": "The ACCORD trial record identifies {ENTITY} as the designated representative.",
+                "supporting_evidence": [{"text": "The record concerns the ACCORD trial.", "supports": "record referent"}]}
+        provider = Mock()
+        provider.construct_factual_slots.return_value = [slot]
+        provider.verify_fact.return_value = [{"supported": True, "complete": True, "aliases_complete": True, "reason": "mock"}]
+        provider.return_value = [{"replacement_entity": f"Alternative{i}",
+                                  "question_template": "Does the ACCORD trial record identify {ENTITY} as the designated representative?"}
+                                 for i in range(3)]
+        provider.verify_queries.return_value = V24TwoStageTests._query_verdicts()
+        result = screen_source(source, candidate_provider=provider, luna_only=True, two_stage=True,
+                               minimum_pairs=1, similarity_fn=_semantic_similarity)
+        self.assertTrue(result["eligible"], result["rejection_reason_counts"])
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["true_claim"], claim)
+        self.assertIn("ACCORD trial", pair["canonical_true"])
+        self.assertEqual(pair["q_plus_text"].replace("Alice", "{ENTITY}"),
+                         pair["q_minus_text"].replace(pair["replacement_entity"], "{ENTITY}"))
+        provider.construct_fact.assert_not_called()
+        grounded = result["stage_a"]["grounded_facts"][0]
+        self.assertNotIn("fact_verification", grounded)
+        self.assertEqual(source["full_text"][slice(*grounded["original_span"])], "Alice")
+        provider.verify_fact.return_value[0]["supported"] = False
+        provider.reset_mock()
+        result = screen_source(source, candidate_provider=provider, luna_only=True, two_stage=True,
+                               minimum_pairs=1, similarity_fn=_semantic_similarity)
+        self.assertFalse(result["eligible"])
+        provider.assert_not_called()
+
+
+class V24LunaDirectTests(unittest.TestCase):
+    CLAIM = "Alder Robotics acquired Cedar Systems for $7.5 billion on 5 June 2021."
+
+    @staticmethod
+    def source(text: str, key: str = "direct-fixture") -> dict[str, object]:
+        return {"source_key": key, "chunk_text": text, "chunk_sha256": sha256_text(text),
+                "input_kind": "development_fixture"}
+
+    @classmethod
+    def candidates(cls) -> list[dict[str, str]]:
+        return [
+            {"true_claim": cls.CLAIM, "original_entity": "Cedar Systems", "counter_entity": "Birch Systems",
+             "question_template": "Did Alder Robotics acquire {ENTITY} for $7.5 billion on 5 June 2021?"},
+            {"true_claim": cls.CLAIM, "original_entity": "$7.5 billion", "counter_entity": "$6.5 billion",
+             "question_template": "Did Alder Robotics acquire Cedar Systems for {ENTITY} on 5 June 2021?"},
+            {"true_claim": cls.CLAIM, "original_entity": "5 June 2021", "counter_entity": "5 June 2022",
+             "question_template": "Did Alder Robotics acquire Cedar Systems for $7.5 billion on {ENTITY}?"},
+        ]
+
+    @staticmethod
+    def provider(content: str) -> v24.LunaDirectCandidateProvider:
+        response = Mock(content=content, provider_model_id="gpt-5.6-luna", retry_count=0,
+                        finish_reason="stop", input_tokens=11, output_tokens=23)
+        client = Mock(chat_with_metadata=Mock(return_value=response))
+        return v24.LunaDirectCandidateProvider(client=client, profile={"model": "gpt-5.6-luna"})
+
+    def test_shared_template_entity_numeric_date_and_same_claim_different_slots(self):
+        source = self.source(self.CLAIM)
+        result = v24.select_luna_direct_pairs(source, self.candidates())
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["selected_pair_count"], 3)
+        for candidate, pair in zip(self.candidates(), result["selected_pairs"]):
+            self.assertEqual(pair["true_claim"], self.CLAIM)
+            self.assertEqual(pair["q_plus_text"], candidate["question_template"].replace("{ENTITY}", candidate["original_entity"]))
+            self.assertEqual(pair["q_minus_text"], candidate["question_template"].replace("{ENTITY}", candidate["counter_entity"]))
+            self.assertEqual(source["chunk_text"][slice(*pair["original_span"])], candidate["original_entity"])
+            self.assertFalse({"canonical_fact", "canonical_true", "supporting_evidence", "correction_eligibility"} & set(pair))
+
+    def test_return_order_dedup_and_stop_after_three_without_ranking(self):
+        candidates = self.candidates()
+        duplicate = {**candidates[0], "counter_entity": "Oak Systems"}
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidates[0], duplicate, *candidates[1:], {}])
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 2, 3])
+        self.assertEqual(result["rejection_reason_counts"], {"duplicate_claim_slot": 1})
+        self.assertEqual(result["processed_candidate_count"], 4)
+        self.assertEqual(result["unprocessed_candidate_count"], 1)
+
+    def test_normalized_claim_slot_duplicates_and_rejected_candidate_does_not_claim_slot(self):
+        first = self.candidates()[0]
+        lower = {k: v.lower() for k, v in first.items()}
+        lower["question_template"] = lower["question_template"].replace("{entity}", "{ENTITY}")
+        source = self.source(self.CLAIM + "\n" + self.CLAIM.lower())
+        result = v24.select_luna_direct_pairs(source, [first, lower])
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(result["candidate_decisions"][1]["rejection_reasons"], ["duplicate_claim_slot"])
+        bad = {**first, "question_template": "Missing placeholder?"}
+        result = v24.select_luna_direct_pairs(source, [bad, first])
+        self.assertEqual(result["selected_pairs"][0]["candidate_index"], 1)
+
+    def test_exact_match_slot_and_schema_rejections(self):
+        source, candidate = self.source(self.CLAIM), self.candidates()[0]
+        cases = [
+            ({**candidate, "true_claim": self.CLAIM.lower()}, "claim_not_exact_chunk_span"),
+            ({**candidate, "original_entity": "Missing"}, "original_not_exact_claim_substring"),
+            ({**candidate, "counter_entity": " cedar   systems "}, "counter_equals_original"),
+            ({**candidate, "question_template": "Did {ENTITY} acquire {ENTITY}?"}, "question_template_slot_count"),
+            ({**candidate, "question_template": ""}, "candidate_schema"),
+            ({**candidate, "canonical_fact": self.CLAIM}, "candidate_schema"),
+            ({**candidate, "q_plus": "Did something happen?"}, "candidate_schema"),
+            ({**candidate, "counter_entity": 123}, "candidate_schema"),
+            (None, "candidate_schema"),
+        ]
+        for value, reason in cases:
+            with self.subTest(reason=reason, candidate=value):
+                result = v24.select_luna_direct_pairs(source, [value])
+                self.assertFalse(result["eligible"])
+                self.assertIn(reason, result["candidate_decisions"][0]["rejection_reasons"])
+        repeated = "Alice met Alice in 2020."
+        bad_slot = {**candidate, "true_claim": repeated, "original_entity": "Alice"}
+        self.assertIn("ambiguous_target_slot", v24.select_luna_direct_pairs(self.source(repeated), [bad_slot])["candidate_decisions"][0]["rejection_reasons"])
+
+    def test_counter_presence_is_diagnostic_and_absence_is_not_truth_verification(self):
+        source = self.source(self.CLAIM + " Birch Systems was not acquired in that transaction.")
+        result = v24.select_luna_direct_pairs(source, [self.candidates()[0]])
+        self.assertTrue(result["selected_pairs"][0]["counter_entity_literal_in_chunk"])
+        self.assertIn("not_independent_verification", result["semantic_validity_basis"])
+        self.assertNotIn("counterfactual_verified", result)
+
+    def test_no_restoration_gate_verifiers_similarity_or_repairs_and_one_call(self):
+        provider = self.provider(json.dumps({"candidates": self.candidates()}))
+        for method in ("construct_fact", "construct_factual_slots", "verify_fact", "verify_queries", "correct"):
+            setattr(provider, method, Mock(side_effect=AssertionError("legacy_method_called")))
+        with patch.object(v24, "deterministic_correction_eligibility_judge", side_effect=AssertionError("restoration_gate")), \
+             patch.object(v24, "evaluate_candidate", side_effect=AssertionError("legacy_gate")), \
+             patch.object(v24, "build_v24_semantic_similarity", side_effect=AssertionError("similarity_model")):
+            result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertTrue(result["eligible"])
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_empty_output_for_pronoun_list_or_uncertain_truth_uses_no_repair(self):
+        # Mock 只验证空结果和调用契约；真实语义是否被跳过由八例 smoke 检查。
+        for text in ("It was founded in 2018.", "The committee includes Alice, Bob, and Carol.",
+                     "Aspirin can relieve pain."):
+            with self.subTest(chunk=text):
+                provider = self.provider('{"candidates": []}')
+                result = v24.construct_luna_direct_pairs(self.source(text), provider)
+                self.assertEqual(result["status"], "source_eligibility_insufficient")
+                self.assertEqual(result["candidate_count"], 0)
+                self.assertEqual(provider.logical_api_calls, 1)
+
+    def test_prompt_has_chunk_only_and_explicit_counterfactual_validity_requirement(self):
+        source = {**self.source(self.CLAIM), "scenario": "PRIVATE_SCENARIO_LABEL"}
+        prompt = v24.build_luna_direct_prompt(source)
+        self.assertNotIn("PRIVATE_SCENARIO_LABEL", prompt)
+        self.assertIn("clearly false or contradictory, supported by the chunk", prompt)
+        self.assertIn("Counter absence alone proves nothing", prompt)
+        self.assertIn("Do not predict victim behavior or require a unique restoration target", prompt)
+        for key in ("membership", "retriever_output", "victim_response", "pvs", "auc", "formal_result"):
+            with self.assertRaises(ValueError):
+                v24.build_luna_direct_prompt({**source, key: "private"})
+
+    def test_outgoing_prompt_requires_claim_local_context_without_repair(self):
+        claim = "The promising results indicate the effectiveness of our proposed framework, with the precision of 98.4%."
+        chunk = "Efficient Road Detection and Tracking for Unmanned Aerial Vehicle\n\n" + claim
+        source = self.source(chunk)
+        provider = self.provider('{"candidates":[]}')
+        result = v24.construct_luna_direct_pairs(source, provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        instructions, payload = prompt.split("\nFrozen chunk:\n", 1)
+        self.assertEqual(json.loads(payload), {"chunk_text": chunk})
+        for requirement in (
+            "Without adjacent sentences, can a reader understand who or what does what?",
+            "no paper, model, method, or study name is required",
+            "Skip incomplete claims and unresolved references",
+            "our proposed framework, our method, this approach, we achieve, or the latter method",
+            "Never repair, add names from titles, or join sentences",
+            "Do not introduce unresolved references",
+        ):
+            self.assertIn(requirement, instructions)
+        self.assertNotIn("any study, experiment, population or conditions needed", instructions)
+        self.assertNotIn("A precise number does not identify an unnamed framework or study", instructions)
+        # Mock 只验证实际发送的构造要求和空结果处理，不证明 Luna 已学会跳过坏事实。
+        self.assertEqual(result["candidate_count"], 0)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_local_antecedent_and_explicit_subject_are_not_blanket_rejected(self):
+        claim = "The Atlas road-tracking framework processed its single test video at exactly 34 frames per second."
+        candidate = {
+            "true_claim": claim, "original_entity": "34 frames per second",
+            "counter_entity": "30 frames per second",
+            "question_template": "Did the Atlas road-tracking framework process its single test video at exactly {ENTITY}?",
+        }
+        source = self.source(claim)
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(source, provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("Pronouns resolved within the claim are allowed", prompt)
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(result["selected_pairs"][0]["true_claim"], claim)
+        self.assertIn("Atlas road-tracking framework", result["selected_pairs"][0]["q_minus_text"])
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_descriptive_subjects_and_ordinary_oppositions_survive_mock_construction(self):
+        cases = (
+            ("A graph-cut-based detection approach processes 181 video frames per batch.",
+             "181", "281", "Does a graph-cut-based detection approach process {ENTITY} video frames per batch?"),
+            ("The parent-child relationships are modeled with a hierarchical prior.",
+             "hierarchical prior", "flat prior", "Are the parent-child relationships modeled with a {ENTITY}?"),
+            ("Excessive inflammation is a major cause of pathology.",
+             "major", "minor", "Is excessive inflammation a {ENTITY} cause of pathology?"),
+            ("An unmanned aerial vehicle (UAV) has many applications in a variety of fields.",
+             "many applications", "no applications", "Does an unmanned aerial vehicle (UAV) have {ENTITY} in a variety of fields?"),
+        )
+        for claim, original, counter, template in cases:
+            with self.subTest(original=original):
+                candidate = {"true_claim": claim, "original_entity": original,
+                             "counter_entity": counter, "question_template": template}
+                provider = self.provider(json.dumps({"candidates": [candidate]}))
+                result = v24.construct_luna_direct_pairs(self.source(claim), provider)
+                prompt = provider.client.chat_with_metadata.call_args.args[0]
+                self.assertIn("Complete graph-cut or parent-child modeling statements are allowed", prompt)
+                self.assertIn("many applications -> no applications", prompt)
+                self.assertIn("Do not invent remote interpretations", prompt)
+                # 这里只验证模型草稿按原样实例化，不把 Mock 当作自然语义筛选器。
+                self.assertEqual(result["selected_pair_count"], 1)
+                self.assertEqual(result["status"], "source_eligibility_insufficient")
+                pair = result["selected_pairs"][0]
+                self.assertEqual(pair["true_claim"], claim)
+                self.assertEqual(pair["q_plus_text"], template.replace("{ENTITY}", original))
+                self.assertEqual(pair["q_minus_text"], template.replace("{ENTITY}", counter))
+                provider.client.chat_with_metadata.assert_called_once()
+
+    def test_relative_time_and_nonexclusive_rules_are_sent_without_an_extra_call(self):
+        chunk = "Currently, most patients receive supportive care including breathing assistance."
+        provider = self.provider('{"candidates":[]}')
+        result = v24.construct_luna_direct_pairs(self.source(chunk), provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        instructions, payload = prompt.split("\nFrozen chunk:\n", 1)
+        self.assertEqual(json.loads(payload), {"chunk_text": chunk})
+        for requirement in (
+            "currently, recently, recent, today, now, or past N years/decades",
+            "unless true_claim itself gives an explicit absolute reference time",
+            "Do not recover time from context or metadata",
+            "Including A -> including B, uses A -> uses B, extracts road -> extracts vehicle",
+            "associated with A -> associated with B may both be true",
+            "Skip unless the chunk clearly rules out the replacement",
+            "Counter absence alone proves nothing",
+        ):
+            self.assertIn(requirement, instructions)
+        self.assertEqual(result["candidate_count"], 0)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_source_identity_and_single_chunk_are_checked_before_request(self):
+        provider = self.provider('{"candidates":[]}')
+        source = self.source(self.CLAIM)
+        for change in ({"chunk_text": "Changed."}, {"source_hash": "wrong"}, {"chunk_rank": 1}):
+            with self.assertRaises(ValueError):
+                v24.construct_luna_direct_pairs({**source, **change}, provider)
+        provider.client.chat_with_metadata.assert_not_called()
+
+    def test_strict_response_budget_and_no_json_repair(self):
+        self.assertEqual(v24.parse_luna_direct_candidates('{"candidates":[]}'), [])
+        self.assertEqual(len(v24.parse_luna_direct_candidates(json.dumps({"candidates": [{}] * 8}))), 8)
+        for raw in ('```json\n{"candidates":[]}\n```', '{"candidates":[],"extra":1}',
+                    '{"candidates":[],"candidates":[]}', '{"candidates":[NaN]}',
+                    '{"candidates":', json.dumps({"candidates": [{}] * 9})):
+            with self.subTest(response=raw), self.assertRaises(ValueError):
+                v24.parse_luna_direct_candidates(raw)
+        with self.assertRaises(ValueError):
+            v24.select_luna_direct_pairs(self.source(self.CLAIM), self.candidates() * 3)
+
+    def test_response_saved_before_parse_error_and_metadata_not_in_candidate_schema(self):
+        provider = self.provider('{"candidates":')
+        observed = []
+        provider.response_observer = observed.append
+        with self.assertRaises(ValueError):
+            provider.construct_paired_candidates(self.source(self.CLAIM))
+        self.assertEqual(observed[0]["input_tokens"], 11)
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider = self.provider(json.dumps({"candidates": self.candidates()}))
+        candidates = provider.construct_paired_candidates(self.source(self.CLAIM))
+        self.assertEqual(set(candidates[0]), v24.LUNA_DIRECT_FIELDS)
+
+
+class V24LunaDirectSmokeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.runner = _load_v24_capacity_runner()
+        self.config = load_v24_config(Path(__file__).resolve().parents[1])
+        self.input = self.root / "artifacts/v24/development/direct/input.jsonl"
+        self.output = self.root / "artifacts/v24/development/direct/attempt1"
+        self.sources = [V24LunaDirectTests.source(V24LunaDirectTests.CLAIM, "first")]
+        write_jsonl(self.sources, self.input)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(self.runner, "load_v24_config", return_value=self.config))
+        self.stack.enter_context(patch.object(self.runner, "_canary_llm_identity", return_value={"model": "gpt-5.6-luna", "profile_hash": "test"}))
+        self.provider = V24LunaDirectTests.provider(json.dumps({"candidates": V24LunaDirectTests.candidates()}))
+        self.builder = self.stack.enter_context(patch.object(self.runner, "build_luna_candidate_provider", return_value=self.provider))
+        self.stack.enter_context(patch.object(self.runner, "build_v24_semantic_similarity", side_effect=AssertionError("GPU_not_allowed")))
+
+    def run_smoke(self, **kwargs):
+        return self.runner.run_luna_only_smoke(self.root, input_path=self.input, output_dir=self.output,
+                                             show_progress=False, **kwargs)
+
+    def test_preview_is_read_only_and_budget_is_eight_sources(self):
+        result = self.run_smoke(preview_only=True)
+        self.assertEqual(result["maximum_logical_api_calls"], 1)
+        self.assertFalse(self.output.exists())
+        self.builder.assert_not_called()
+        write_jsonl([V24LunaDirectTests.source(f"Record {i} has code {i}.", str(i)) for i in range(9)], self.input)
+        with self.assertRaisesRegex(ValueError, "source_budget"):
+            self.run_smoke(preview_only=True)
+
+    def test_complete_run_records_only_one_response_and_resume_is_offline(self):
+        result = self.run_smoke()
+        self.assertEqual(result["selected_pair_count"], 3)
+        self.assertEqual(result["provider"]["logical_api_calls"], 1)
+        self.assertEqual(result["provider"]["physical_attempts"], 1)
+        self.assertEqual(result["provider"]["input_tokens"], 11)
+        self.assertFalse(result["semantic_quality_review_completed"])
+        self.assertFalse(result["capacity_sample_allowed"])
+        self.assertFalse(self.provider.client.retry_until_success)
+        row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
+        self.assertIn("content", row["response"])
+        self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
+        self.assertEqual(self.run_smoke(resume=True), result)
+        with self.assertRaisesRegex(ValueError, "output_exists"):
+            self.run_smoke()
+
+    def test_invalid_json_retains_response_and_does_not_retry(self):
+        self.provider.client.chat_with_metadata.return_value.content = '{"candidates":'
+        result = self.run_smoke()
+        self.assertEqual(result["invalid_output_count"], 1)
+        self.assertTrue(result["provider"]["external_call_counts_complete"])
+        self.assertEqual(self.provider.logical_api_calls, 1)
+        self.run_smoke(resume=True)
+        self.assertEqual(self.provider.logical_api_calls, 1)
+
+    def test_received_response_resumes_without_regeneration(self):
+        self.provider.parse_response = Mock(side_effect=KeyboardInterrupt)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_smoke()
+        self.provider = V24LunaDirectTests.provider('{"candidates":[]}')
+        self.builder.return_value = self.provider
+        result = self.run_smoke(resume=True)
+        self.assertEqual(result["selected_pair_count"], 3)
+        self.provider.client.chat_with_metadata.assert_not_called()
+
+    def test_started_request_without_response_is_not_repeated(self):
+        self.provider.client.chat_with_metadata.side_effect = KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_smoke()
+        self.builder.side_effect = AssertionError("must_not_reissue_unknown_request")
+        result = self.run_smoke(resume=True)
+        self.assertEqual(result["execution_incomplete_count"], 1)
+        self.assertFalse(result["provider"]["external_call_counts_complete"])
+
+    def test_checkpoint_source_model_and_response_drift_fail_before_api(self):
+        self.run_smoke()
+        saved = read_json(self.output / "smoke_summary.json")
+        saved["selected_pair_count"] = 8
+        write_json(saved, self.output / "smoke_summary.json")
+        self.builder.reset_mock()
+        with self.assertRaisesRegex(ValueError, "checkpoint_drift"):
+            self.run_smoke(resume=True)
+        self.builder.assert_not_called()
+
+    def test_response_save_failure_is_not_a_quality_rejection(self):
+        original_write = self.runner.write_json
+
+        def fail_on_response(payload, path):
+            if (payload.get("active_request") or {}).get("response") is not None:
+                raise OSError("simulated_disk_error")
+            return original_write(payload, path)
+
+        with patch.object(self.runner, "write_json", side_effect=fail_on_response), \
+             self.assertRaises(self.runner.LunaABPersistenceError):
+            self.run_smoke()
+        self.assertEqual(list(read_jsonl(self.output / "smoke_results.jsonl")), [])
 
 
 if __name__ == "__main__":

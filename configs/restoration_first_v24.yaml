@@ -24,6 +24,17 @@ development:
   canary_zero_candidate_policy: skip_and_replace_in_frozen_order
   allow_fallback: false
   capacity_sample_sources: 30
+  luna_only_direct:
+    adapter: luna_direct_paired_candidates
+    max_candidates_per_source: 8
+    pairs_per_source: 3
+    smoke_max_sources: 8
+  luna_only_ab:
+    stage_a_max_facts: 8
+    screening_sources_per_dataset: 10
+    repeatability_runs: 2
+    generalization_source_count: 90
+    promotion_thresholds: null
 
 datasets:
   - nfcorpus
@@ -58,6 +69,9 @@ candidate_fact_adapter:
     enabled: true
     policy: surface_tiers_claim_round_robin_unique_entity_v2
   development_identity_patterns:
+    - artifacts/v24/development/**/luna_only_ab_inputs.json
+    - artifacts/v24/development/**/luna_only_ab_results.jsonl
+    - artifacts/v24/development/**/reference_facts.jsonl
     - artifacts/v*/development/**/canary_inputs.jsonl
     - artifacts/v*/development/**/canary_results.jsonl
     - artifacts/v24/development/**/pool_manifest.json

@@ -3404,3 +3404,206 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 修复后使用新开发样本和新输出目录验收；不原地重试本批失败。canary 通过后再修复并进入 capacity，v24 → RAG/PVS 接口和长文策略仍待后续处理。
 
 当前唯一下一步（待开发）：依据本批完整证据进行最小修复与离线回归。真实 canary 和逐问复核均已结束且未通过，不再等待进程，不进入 capacity。
+
+
+### 2026-09-08：原始 fact / 完整 fact 的 18 篇对照准备完成（superseding）
+
+- [x] 将下一步从不断叠加文本规则改为固定旧开发样本的受控归因；A/B 仅改变 fact 输入，原模型、prompt、目标实体、校验器、候选/纠正预算保持一致。
+- [x] 18 篇按数据集各 4 个上下文失败与 2 个历史合格对照固定；普通输入位于 `artifacts/v24/development/fact_context_ablation_20260908/reference_facts.jsonl`，保留原文 span、池身份、Assistant 参考命题和逐段证据。
+- [x] 11 条完成补全，6 条对照保持原句；S7/MED-1051 因摘要没有明确比较人群而不可可靠补全，保留其 A，B 明确拒绝且零生成调用。仍报告 18 篇/36 条件，可完整配对上限 17 篇，不换 source 补齐结果。
+- [x] 4 个已见坏输入完成离线检查：C27、C12、R4 被现有预检拒绝；S23/Wake Forest 标题仍漏过。记录问题，不在同一 A/B 中调整门禁。
+- [x] 53 号脚本支持 `preview-fact-ablation`、`run-fact-ablation` 与 `summarize-fact-ablation`；复用现有保存/恢复，保存所有草稿，恢复不重新抽取已尝试轮次；诊断完成不标为正常 canary passed。
+- [x] 分层报告覆盖 canonical 来源支持/完整性、问句六项标准、自动误报/漏报、首次生成可用性与最终选择质量，并按 source 配对、逐数据集及 macro 报告；Assistant 标注不冒充独立人工审核。
+- [x] 定向 unittest `210` 项：200 passed、10 skipped legacy；AST、CLI 与 diff check 通过，8 个关键 prompt/gate/抽取函数与 HEAD 一致。
+- [ ] 执行真实固定 A/B：设计最多 72 次逻辑生成，本套输入因不可补全 B 条件最多 70 次；传输重试另计。API/GPU/正式调用当前均为 0，`luna_attempt1/` 尚未启动。
+- [ ] 对所有初始和纠正候选做 Assistant-only 分层复核，区分合理拒绝、语义问题和校验误报；按对照证据决定后续事实补全或共享模板改造。
+
+当前唯一下一步：取得本批真实 API 执行的明确许可后，检查 CUDA 并运行已固定对照和分层复核。自动两阶段构造、共享模板、别名策略及新样本验收等待对照结果；不改变正式三对六问、chunk、scoring 或科学协议版本。
+
+### 2026-09-08：按用户要求补齐真正两阶段开发路径（superseding）
+
+- [x] 核查实际代码：此前的 A/B 诊断入口不等于自动两阶段流水线；将这一区别明确记录，不回写历史完成状态。
+- [x] 在现有 v24 模块接通原始 source/span 校验、完整事实构造与逐字证据、单独原文支持/完整性核验，再固定 canonical 和目标槽。
+- [x] 问句阶段只选择替换实体和一个共享模板，由代码填出 Q+/Q−；逐问单独核验，最多一次纠正，纠正不得重构事实。自报 grounding 不能替代两层核验。
+- [x] 明确别名单槽拒绝；补齐外层题名引号与固定命题中已有 `that` 从句误报修正，新路径开启、旧 A/B 行为保持。
+- [x] 53 号脚本新增 `preview-two-stage-canary` / `run-two-stage-canary`，限定开发池、新输出目录、每篇一个指定 fact；当前 30 篇最多 180 次逻辑请求，传输重试另计。终态与自动质量、执行不完整分别报告，capacity 始终不放行。
+- [x] 复用现有保存/恢复机制保存构造、两层核验及全部问句草稿；初始/纠正候选保存展开后的两问。已存响应恢复复用，已开始但无持久响应的阶段不重抽，执行问题不伪装成科学质量拒绝。
+- [x] 新增 15 项两阶段离线测试；完整 v24/BEIR/rate-limit 定向回归 `225` 项，`215 passed / 10 skipped legacy`。AST、CLI 与 diff check 通过；原 18 篇 A/B 输入只读核查通过，原 prompt 和默认校验路径保留。
+- [x] 同步 README 和两份总表，不新增协议/治理文件，不修改正式配置、chunk、scoring、历史产物、AGENTS.md 或既有 v23 用户资产；未提交/推送。
+- [ ] 执行原方案第一轮固定 18 篇/36 条件 A/B，并复核全部初始/纠正草稿，分别报告首次质量、最终选择、合理拒绝、校验误报及逐数据集/source 配对归因。该轮尚未调用真实模型，当前输入最多 70 次逻辑生成。
+- [ ] 根据受控对照审视新两阶段实现，再用新开发样本、新输出目录运行其真实 canary 与 Assistant-only 逐问验收；当前代码测试不作效果改善结论，也没有独立人工盲审。
+
+当前唯一下一步：在对应真实 API/GPU 运行获得明确授权后，先执行固定 18 篇 A/B 和分层复核；随后才进入新样本两阶段验收。本轮真实 API、GPU 推理、Retriever、victim、membership/AUC 和正式实验调用均为 0，不进入 capacity/formal。
+
+### 2026-09-08：固定 18 篇 A/B 已启动（superseding，运行中）
+
+- [x] 用户明确要求开始已说明的下一步；执行范围为固定 A/B 生成及全部候选复核。
+- [x] 输入预检通过：18 篇、36 条件、10 套开发候选池，原始身份与参考证据一致；1 个 B 不可补全，完整配对上限 17 篇，最多 70 次逻辑生成，传输重试另计。
+- [x] 确认 Conda `mia_model`、CUDA PyTorch `2.11.0+cu130` 与 RTX 4060 Laptop GPU；启动前无其他 Python 实验进程，有效 Luna 模型为 `gpt-5.6-luna`。
+- [x] `20:36:58` 启动 PID=`42604`，输出为 `fact_context_ablation_20260908/luna_attempt1/`，未使用 `--resume`；首条结果已保存。代码、配置、固定输入和历史产物不修改。
+- [ ] 完成全部 36 条件，核验模型 ID、原始与逐条 hash、候选预算、完整请求/重试统计及终态。
+- [ ] 复核全部初始/纠正候选并保存 Assistant-only 分层标注；按 source 配对、逐数据集与 macro 区分首次候选可用性、最终选择质量和校验器误差。
+- [ ] 依据对照证据决定后续开发方向；本批不自动进入两阶段 fresh canary、capacity 或正式实验。
+
+当前唯一下一步：完成本批真实 A/B 与全部候选复核，再保存归因报告及最终状态；不根据运行中结果调整任何实验因素。
+
+### 2026-09-09：固定 A/B 离线复核与归因已完成（superseding，原执行缺失保留）
+
+- [x] 核验本批已结束：36 条件结果行、29 个自动 selected、34 次成功初始生成和11次纠正，保存135候选/270问句。原运行终态 `completed_diagnostic`，无在途输入，未补跑/重试。
+- [x] 核验 S7/B 参考不可补全、R21/A 初始 `JSONDecodeError` 无可解析草稿；保留18篇完整清单，主配对仅16篇（5/6/5）。R21/A 不记质量失败，S7/B 不猜测比较人群。
+- [x] 复检全部135条既有 Assistant-only 标注，待评已保存候选=0，原标签未改写。source/span/first-8、10套开发池、输入/配置/代码/profile/fingerprint、阶段与结果hash通过；现有汇总函数重算与原报告完全一致，原文件前后hash不变。
+- [x] 分开保存离线完成与原执行缺失：原 `incomplete_execution`、`generation_complete=false`、整批 macro=null 和 `external_call_counts_complete=false` 保留。记录逻辑/物理/重试=`46/46/0`，增量自洽但不宣称独立审计确认完整。
+- [x] 保存逐数据集与source配对分析：首次可用性 `8/16→16/16`，最终质量 `9/16→14/16`；完整配对macro分别 `50.00%→100.00%`、`55.56%→88.89%`。首次精确p=`0.0078125`（两指标Holm=`0.015625`），最终p=`0.125`；有区间、缺失敏感性与小样本限制。
+- [x] 区分补全与生成波动：上下文失败层n=10，首次 `3→10`、最终 `4→8`；输入不变控制n=6，首次/最终 `5→6`，C16差异不算补全收益。不宣称自动两阶段、容量、泛化或AUC已获验证。
+- [x] 完成归因：39个质量失败候选按互斥层次为原文不支持3、支持但不完整27、canonical好但query失败9；30个质量通过却自动拒绝分为纯文本误报20、混合1、其他构造约束9，不一律放行。另15个候选自动接受却质量失败，对应5个坏selected；4个条件有好候选却被门禁完全拦截。
+- [x] 保存[分析报告](../artifacts/v24/development/fact_context_ablation_20260908/offline_review_20260909/analysis-report.md)、统计附录、两张真实图、图目录、机器统计和可复算离线配方；同步README与两份总表。未修改实验源码/配置/历史产物，未新建协议，未提交/推送，本轮新增真实调用=0。
+- [ ] 依据明确归因最小修复：R16题名末句点，C8/S12合法that从句，C10因果since，R0/C16/R24助动词和并列问句，以及JSON解析失败原响应安全持久化；先复用现有两阶段能力，完成定向离线回归。
+- [ ] 开发回归完成后，用新开发source和新输出目录真实验收两阶段全链路与Assistant-only问句质量；本轮没有授权或启动该真实执行，不把同模型核验称为独立人工盲审。
+
+当前唯一下一步：在现有实现内完成上述最小开发修复及离线回归。本批A/B离线工作已结束，不再等待、不原地重试为通过，不进入capacity/formal；后续新样本真实模型/API/GPU执行须对应明确授权，容量取数和v24→RAG/PVS接口仍为后续待办。
+
+### 2026-09-09：A/B 归因修复完成，等待新样本质量验收（superseding）
+
+- [x] 在现有校验器修复 R16 题名末标点、C8/S12 合法 that 从句、C10 因果 since；保留改词/任意截短题名、外指代、日期/事件时间起点等拒绝边界。
+- [x] 在现有生成/纠正/核验 prompt 与表面门禁修复 R0/C16/R24 助动词及并列语法；保留完整事实、单槽约束和固定预算，兼容合法嵌套从句与省略并列。
+- [x] 在既有 summary 中先保存允许的响应正文/元数据再解析；凭据脱敏、异常只记类型，解析前中断可离线恢复，已保存失败不重发，磁盘错误中止运行。原 R21/A 缺失响应不补填。
+- [x] 新增 9 个正式回归方法；最终 234 项定向测试完成（224 通过、10 项既有跳过），CLI help、配置校验、内存 AST 与空白检查通过。mock 调用不计真实运行。
+- [x] 135 个旧候选只读文本回放：消除 21 个候选的文本误报，新增拦截 12 个语法缺陷候选，对原合格 96 个候选无新增文本误拒；不放宽其他角色/构造约束，不重算 selected 或修改旧标签。
+- [x] 保存可匹配旧 A/B hash 的两份源码 ZIP；原有 14 个实验/分析文件 hash 不变。修复后 runner/screening hash=`389526a5b98844ac4547c01b2f398cc064901b167c1a61f7337d2f218b043e7a`，配置未变；源码快照与详细验证见研究总表本日条目。
+- [x] 同步 README 与两份总表；无新协议、freeze、manifest 或治理层，无 API/GPU/Retriever/victim 真实调用，无提交/推送。
+- [ ] 获得对应真实模型/API/GPU 授权后，以新开发 source、新输出目录运行两阶段完整链路及 Assistant-only 逐问复核。当前代码回归不表示自动事实补全或最终 query 质量已经通过真实验收。
+
+当前唯一下一步：新开发样本的两阶段真实质量验收（尚未启动）；本轮本地修复和离线回归已完成。旧 A/B 不原地重试，不进入 capacity/formal；capacity 总量取数和 v24→RAG/PVS 接口仍待后续开发。
+
+
+### 2026-09-09：新开发两阶段真实 canary 已获授权并开始准备（superseding）
+
+- [x] 用户明确授权本批新样本两阶段真实验收，并要求继续；本次无需再次请求同一 API/GPU 授权。
+- [x] 确认固定配置/代码、Luna 模型身份与 CUDA 环境，使用新目录 `query_quality_canary_two_stage_fresh_20260909/`；保留既有未提交资产。
+- [x] 建立新开发候选池：NFCorpus 20 篇池只取前 10，SCIDOCS 10；TREC-COVID 10+2+1，3 篇零候选按原规则顺序补选，第一次不足的预检保留。
+- [ ] 固定三数据集各 10 篇输入并通过两阶段 preview，核验 source/text 排除、候选池及模型/代码身份。
+- [ ] 执行一次两阶段真实 canary，保存完整阶段响应、失败/缺失及请求统计；不因质量失败增加轮次或换样本。
+- [ ] 完成 60 个目标问句槽位的 Assistant-only 复核，区分事实支持/完整性、问句忠实性和构造约束，汇总逐数据集及 macro。
+
+当前唯一下一步：完成预检并执行本批两阶段真实 canary 与逐问复核；不进入 capacity/formal，不将自动或 Assistant 标注称为独立人工盲审。
+
+
+2026-09-09 启动补记：第二次预检与两阶段 preview 已通过，固定输入 30 篇（每数据集 10），SHA-256=`2bdcf77720525f1aca5d06f11829f2630d999f66be05df972ba73476f27b40d2`。本批检查了 TREC-COVID 13 篇，其中 3 篇零候选；按顺序得到 10 篇非空输入。5 个候选池共构建 43 篇、GLiNER2 推理尝试 342 次；NFCorpus 额外 10 篇不进入本批 Luna。真实运行于 10:27:34（Asia/Shanghai）以隐藏后台 PID=102136 启动，输出 `luna_attempt1/`，日志位于本批根目录。首条结果和阶段响应已逐条保存，实际返回模型为 `gpt-5.6-luna`。当前唯一下一步：完成这一个运行并逐问复核；中途不改代码/配置、不重抽失败输入。
+
+
+### 2026-09-09：新开发两阶段真实 canary 与复核完成（superseding，验收未通过）
+
+- [x] 完成30篇固定输入、5个候选池与预检；保留TREC-COVID三篇零候选及首次不足的预检，未替换生成/质量失败。
+- [x] 完成一次真实两阶段运行，10:49:14终态completed_two_stage_diagnostic；30/30输入完成、12/30自动通过、执行缺失0、计数完整、后台进程结束。
+- [x] 核验84逻辑/85物理请求/1传输重试；30构造+18事实核验+15初始生成+15问句核验+3纠正+3纠正核验。模型唯一gpt-5.6-luna，全部阶段/结果hash正确，84响应离线重解析一致。
+- [x] 完成30 source复核及60目标槽位登记：交付24问句，16通过/8失败；36槽位未交付，其中6有草稿、30未进入生成，待复核0。完整pair质量8/30（NFCorpus3/10、SCIDOCS4/10、TREC-COVID1/10），自动分别5/10、5/10、2/10。
+- [x] 区分9篇别名/缩写结构阻断、3篇不可用事实、3篇事实核验拒绝、3篇query阶段拒绝；自动选中后4篇失败来自实验上下文遗漏或删掉固定事实属性。德语门禁与目标别名分歧单独记录，不无条件放松构造约束。
+- [x] 保存[验收归因报告](../artifacts/v24/development/query_quality_canary_two_stage_fresh_20260909/luna_attempt1/canary_acceptance_report.md)、逐source/逐query表及汇总；记录source层面区间与非随机开发样本限制，不与旧批次作因果比较。
+- [x] 原生完成态resume只读身份校验通过，代码/配置快照未变，旧A/B保持原样；同步README及两份总表。无源码修改、提交/推送、Retriever/victim或正式调用。
+- [ ] 依据本批证据修复目标别名/指代约定、事实范围核验、canonical属性保留和语言支持，先做离线回归。
+
+当前唯一下一步：上述开发修复及离线回归（尚未开始）；本批真实canary和Assistant-only复核已全部完成且未通过。不原地重试，不进入capacity/formal；后续新样本真实验收另行明确，不把本次授权扩大为无界重跑。
+### 2026-09-09：Luna-only fresh A/B 开发实现
+
+- [x] 接通 Luna-only Stage A：全文 source 输入、最多 8 个 slot、不补满、exact-span deterministic grounding、严格单槽与 supporting-evidence 边界。
+- [x] 接通现有 fixed-fact/shared-question Stage B；保留 GLiNER2 comparator 和默认 v24 adapter，不创建 v25。
+- [x] 增加 fresh 30 source-first A/B 的准备、preview、运行、恢复与汇总入口；输入按三数据集各 10 篇固定，两臂共享 source order，历史 source key/hash 排除，零候选保留。
+- [x] 增加 source-level usability repeatability 汇总；candidate overlap 仅 diagnostic；promotion threshold 暂为空。
+- [x] 定向回归 `tests.test_restoration_first_v24`：226 passed、10 skipped legacy；无真实 Luna/Retriever/victim/formal 调用。
+- [ ] 待单独授权后运行 fresh 30 A/B；运行前先完成三套 fixed-source GLiNER2 pool 构建，再执行 preview 和真实 Luna。结果不得据此自动 promotion 或进入 formal。
+
+### 2026-09-09：Luna-only 实现回归计数更正（superseding）
+
+- [x] 修复 53 号 runner 的 `_luna_ab_settings` 缩进导入错误；`tests.test_restoration_first_v24` 最终为 224 passed、10 skipped legacy（共 234 项），v23 fact-layer 定向测试 7 passed。
+- [x] AST、CLI `--help`、`validate-config`、`git diff --check` 通过；本轮只做代码/文档回归，没有真实 Luna、GPU、Retriever、victim 或 formal 调用。
+- [ ] 待单独授权后运行 fresh 30 A/B；先完成三套 fixed-source GLiNER2 pool 构建，再执行 preview 和真实 Luna。结果不得据此自动 promotion 或进入 formal。
+
+### 2026-09-09：fresh 30-source Luna-only A/B 已启动
+
+- [x] 固定 source-first 输入 30 篇（三数据集各 10），输入 hash=`97bac55a4e8adb7d1f57f8823777f2ff16e5aa1588e3ef7d9f357ab2bbec46e9`；repeatability runs=2，共 120 个条件。
+- [x] 完成三套 fixed-source GLiNER2 pool 与离线校验；pool hash 分别为 NFCorpus=`8398d2d1f199fe25d2569a74d0ecc3fd3ca6a55ab271b5b6c6f269812a4bdbb1`、SCIDOCS=`b5eea20e97d577b3c3bb9016a88b3366b9cc746ec54531e44c4bc601957390f2`、TREC-COVID=`92070f5b9d3a32135fe4f107e93d2121fe55e72c28caac515a9e84ee10e53299`。
+- [x] Preview 通过，run fingerprint=`8015ee85b2ec48cd480d88538a76f8b66304ed48cb96f1f103311df1c740cc65`；后台输出为 `artifacts/v24/development/luna_only_ab_fresh30/attempt1/`，支持 checkpoint/resume。
+- [ ] 等待 A/B 运行终态与 source-level usability stability 汇总；candidate overlap 只作 diagnostic，promotion threshold 仍为空，不进入 capacity/formal。
+
+### 2026-09-09：fresh 30-source A/B 交接到用户续跑
+
+- [x] 后台已保存 77/120 条结果后停止，保留原 attempt1 checkpoint、结果和阶段草稿；无新 attempt、无换样本、无配置/代码变更。
+- [x] 确认第 78 条在途 `verify_fact` 没有持久化响应；resume 不重发该请求，保守记录为 `execution_incomplete` 后继续后续条件。
+- [ ] 用户使用同一 input、三套 candidate pool、同一 output-dir 加 `--resume` 完成剩余条件；终态需报告 execution-incomplete count，不得把缺失条件当作完整 A/B。
+
+### 2026-09-10：Luna-only PCV 简化方案 B 本轮完成（superseding）
+
+- [x] 依据用户冻结的方案，在现有 v24 模块/config/53 号脚本中实现独立 direct 路径；本条替代历史事实补全、多阶段核验和旧 A/B 续跑待办，历史代码与结果保留。
+- [x] 每 source 一个 frozen chunk、一次 Luna 调用、0–8 个四字段候选；prompt 不读取 membership/检索/victim/PVS/AUC/formal，明确要求 chunk 足以确定反事实为假，不能以 counter 未出现代替真值判断。
+- [x] 实现 exact claim/original、明确单槽、counter 不同、唯一模板占位符、代码实例化和 schema/预算/source identity gates；按规范化 claim/slot 去重，允许同 claim 多 slot，按返回顺序前三对停止。不足三对记录不足，不补抽、不 repair。
+- [x] 新路径绕过 canonical/evidence 扩展、完整事实修复、独立 fact/query verifier、semantic correction retry、correction_eligible 和 unique restoration gate；GLiNER2/ranking v2 与旧入口保留。
+- [x] 新增 18 项测试通过；定向回归 266 项（256 passed、10 项既有 legacy skipped），AST、validate-config、preview 和 diff 空白检查通过。
+- [x] 完成一次真实 8-chunk fixture smoke：6 候选/6 pair，按 source 为 1/1/1/2/0/0/0/1；eligible=0/8，全部保留三对不足。代词、列表、真假无法确定三个负例返回空列表，无额外生成；不是 BEIR 通过率或容量估计。
+- [x] 完成 8-source、6-candidate Assistant-only 诊断，保存[报告](../artifacts/v24/development/luna_only_direct_smoke_20260910/attempt1/implementation_smoke_report.md)与[逐条诊断](../artifacts/v24/development/luna_only_direct_smoke_20260910/attempt1/assistant_diagnostic_review.json)，展示实体/数值/日期/同 claim 多 slot/三类 skip/无 restoration 构造门槛。原 summary 未回写质量通过。
+- [x] 核验 8 个原始响应的解析、构造回放、prompt/source/模型/代码配置身份和结果 hash；完成态 resume 在 API client 禁用条件下通过。逻辑/物理/重试=8/8/0；token=6,052 input、1,627 output；累计请求耗时126.973秒；执行缺失与无效输出均0。
+- [x] 明确现有 PVS 的 exact correction/非空 correction parser/字符串布尔评分局限；本轮只移出 construction 职责，主公式不改，连续语义恢复留作后续独立评分事项。
+- [x] 同步 README 和两份总表，保留全部旧资产；PVS 三份源码与旧 fresh30 两份结果的保护 hash 未变。未新增 v25、修改正式约束、提交或推送；收尾新增 API=0，GPU/Retriever/victim/formal 调用=0。
+
+当前唯一下一步：本轮完成并停止，等待新的任务指令。不自动继续 fresh30、capacity 或 formal；正式 2250 target、3 对/6 问、数据集、split 与 AUC/TPR@1%FPR 保持。
+
+### 2026-09-10：六篇真实 BEIR 验证与上下文依赖修复完成（superseding）
+
+- [x] 按用户授权固定三个数据集各两篇未使用source；保留原chunk、冻结顺序及零候选，不根据质量补选。输入source_records.jsonl已纳入现有开发身份发现规则，未修改源池或formal split。
+- [x] 完成一次真实Luna运行：6/6 source、16候选、9个自动pair、2/6自动达到三对；6/6/0次逻辑/物理/重试，5,871 input及10,200 output tokens，累计197.766秒。无执行缺失、无效JSON或额外生成。
+- [x] 完成全部16候选的Assistant-only复核，包括6个早停后未处理草稿。已选9对中6个明确上下文失败、3个反事实/时间语义unconfirmed；确认满足三对的source为0/6。原自动状态保留，不将unconfirmed当作独立人工真值。
+- [x] 保存[验证与修复报告](../artifacts/v24/development/luna_only_direct_beir6_20260910/offline_review_20260910/beir6_validation_and_context_fix_report.md)、[逐条诊断](../artifacts/v24/development/luna_only_direct_beir6_20260910/offline_review_20260910/assistant_diagnostic_review.json)与修复前代码快照。旧响应/summary、选择顺序、失败与不确定性均保留。
+- [x] 仅收紧现有build_luna_direct_prompt的自包含要求：隐藏标题/前后文仍须明确主体，our→the不能当消解指代，不完整claim全部slot跳过，禁止借标题或拼句修复；保留同claim局部先行词及模板中的明确主体。
+- [x] 新增两项定向测试，direct路径20/20通过；定向回归268项（258 passed、10项既有legacy skipped），40.096秒，AST/配置/空白检查通过。确定性gates、schema、返回顺序、预算、PVS和历史路径未改，无新版本或verifier。
+- [x] 同步README和两份总表。本轮修复新增真实API=0，没有提交、推送、fresh30或formal。新prompt尚未有真实效果证据；prompt/code身份已变，旧attempt不使用新代码原地resume。
+- [ ] 另行明确新prompt小规模真实验收的范围后执行；保持三对预算和反事实有效性要求，不将mock或旧输出当作修复后生成结果。
+
+当前唯一下一步：修复后prompt的小规模真实验收（尚未启动）；本轮代码修复、本地测试及六篇旧批复核已经完成。
+
+### 2026-09-10：同批六篇修复后真实复测完成（superseding，质量未通过）
+
+- [x] 按用户授权复用同一六篇frozen chunk和顺序；预检确认input/config/profile一致、使用修复后Prompt，输出到新的context_fix_attempt1，保留旧attempt。
+- [x] 六次Luna请求全部完成；候选0/1/2/3/0/4，共10个，自动pair0/1/2/3/0/3，共9对；自动eligible=2/6。9个候选处理、拒绝0、早停草稿1，无执行缺失或无效JSON。
+- [x] 核验logical/physical/retry=6/6/0，实际gpt-5.6-luna，tokens=7,275 input/9,229 output，累计181.685秒。用户中断后的续作只有离线复核，没有重复调用。
+- [x] 复核全部10候选及两个空输出；已选9对6 failed、3 unconfirmed，全部候选7 failed、3 unconfirmed，确认三对source=0/6，待复核0。unconfirmed明确为证据不足，不当作独立人工标签。
+- [x] 对比旧症状：our proposed framework数值候选及MED-1114 OR候选未重现；隐式方法范围、相对时间、开放集合/替换错误性和一个量词范围歧义仍在。保留同claim多slot和句内有先行词的代词；未增加语义gate或restoration要求。
+- [x] 完成source/prompt/model/结果身份、六响应重解析与选择回放、九对shared-template及禁用client完成态resume检查，新旧原始结果hash不变；代码与配置快照保存。
+- [x] 保存[完整复测报告](../artifacts/v24/development/luna_only_direct_beir6_20260910/context_fix_attempt1/context_fix_retest_report.md)和[逐条Assistant诊断](../artifacts/v24/development/luna_only_direct_beir6_20260910/context_fix_attempt1/assistant_diagnostic_review.json)，同步README与研究总表。原summary和旧证据未回写语义通过。
+
+当前唯一下一步：交付本批未通过结论与失败证据，本批到此停止。后续是否继续修复现有Prompt由新的任务指令确定；本轮没有修改代码/Prompt/PVS、增加generation、运行fresh30/capacity/formal或创建v25。
+
+### 2026-09-10：简化自然语义与句内自包含判据（superseding，仅设计）
+
+- [x] 按用户要求只整理方案和Prompt文本：自包含回归“句内能理解谁/什么做了什么”，不因缺少论文/方法/模型/研究专名拒绝。
+- [x] 更正上一轮过严口径：句内完整的graph-cut或parent-child关系可作为claim；many applications→no applications按正常语义是明确对立，不再寻找极端scope解释。旧复核标签、原始响应和报告保留，不重写历史通过数。
+- [x] 保留明显未解析话语指代和无绝对时间锚点的相对时间skip；不repair、不补标题、不拼句。主要检查同角色slot替换是否在该claim自然语义下明确为假；非穷尽uses/including/association/extracts关系不能仅凭A成立判B为假。
+- [x] 在研究总表追加完整固定Prompt设计、最小语义/结构责任和数据流；仍为一次Luna、0–8候选、返回顺序、claim/slot去重、前三对停止，不足不补抽。
+- [x] 明确construction与PVS职责：不预测victim恢复、不加入unique restoration或第二个verifier；PVS与正式评估保持。README区分新设计、现有运行时及旧复测结果。
+- [ ] 后续实现时替换现有build_luna_direct_prompt的相关文字并更新对应测试；本轮按用户范围不执行。
+
+当前状态：方案与Prompt设计完成，运行时尚未更新。旧批0/6只属于旧口径，不代表新设计已验证；本轮新增API=0，不启动新实验、不修改PVS、不创建v25。当前工作到此停止。
+
+### 2026-09-10：自然语义 Prompt 接入与本地验证完成（superseding）
+
+- [x] 完成上一条待办：在现有 `build_luna_direct_prompt` 接入定稿 Prompt。只改 Prompt 文字，不新增架构、配置、语义 gate、verifier、repair 或 restoration requirement。
+- [x] 在既有测试文件更新三个 Prompt 测试并新增两个 mock 测试，覆盖描述性主体、正常程度/方向/数量对立，以及无锚点时间和非排他关系要求；明确 mock 不代表实际语义筛选效果。
+- [x] direct/smoke 22/22通过；定向回归270项中260 passed、10项既有 legacy skipped。22项是270项的子集，不累加计数。
+- [x] `validate-config` 通过；六个旧响应可解析，九对旧选择结构回放一致。新 Prompt hash 均改变；新代码在 API 客户端初始化前拒绝 resume 旧 attempt，旧产物不变。preview 仅为 prepared_diagnostic，没有新生成。
+- [x] 另存十个旧候选的新口径 Assistant-only 复核：全部4有效/4不合格/2未确认，原选中九对4/3/2，1/6 source具备三对确认有效 pair；保留原自动九对/2 source eligible及旧复核，不以重评变化声称新 Prompt 改善。
+- [x] 保存[本地验证报告与实际问句](../artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_local_review/local_validation_report.md)、[逐候选诊断](../artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_local_review/assistant_diagnostic_review.json)，同步 README 和研究总表。
+- [x] 本轮新增 API/tokens/latency 均为0，不修改PVS、正式划分、2250目标、三对/六问或AUC/TPR@1%FPR；无v25、fresh30/formal、GPU/Retriever/victim调用、提交/推送。
+- [ ] 后续真实验证：用已接入的新 Prompt 对同六篇 frozen source 在新输出目录重新生成一次并诊断；本轮仅授权本地验证，不执行此项。
+
+当前状态：接入和本地验证全部完成，本轮停止。唯一后续验证点是新 Prompt 在同六篇真实文档上的生成效果；旧输出的新口径复核不能替代重新生成，也不作为总体容量或正式实验结论。
+
+### 2026-09-10：同六篇新 Prompt 真实复测全部完成（superseding）
+
+- [x] 用户授权同六篇真实复测；核对原source/chunk、模型/profile和新Prompt，沿用既有smoke入口，输出到新目录`natural_semantics_attempt1`。
+- [x] 每篇一次Luna、共6次，无重试；16:55:52完成6/6篇，返回14候选、自动选中12对，3/6 source自动达到三对；未补抽或追加generation。
+- [x] 全部14候选完成Assistant-only诊断：2有效/8不合格/4未确认；原选中12对为2/7/3，0/6 source具备三对确认有效pair。两个早停后草稿仅离线检查，不替补。
+- [x] 保持自然语义口径，记录模板丢失固定内容、未解析指代、their重复、全称/缩写冲突、recent无锚点及反事实错误性不足；未恢复缺论文名或unique restoration门槛。
+- [x] 与旧输出同口径的4有效pair、1/6有效source比较；本批只有2有效pair、0/6有效source。仅描述已知六篇开发样本，不做显著性或总体容量结论。
+- [x] 六条真实响应身份、重解析、选择回放和禁用客户端的完成态resume通过，原response/summary不变；保存代码快照。未重复上一轮单元测试。
+- [x] 保存[完整复测报告与实际问句](../artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_attempt1/natural_semantics_retest_report.md)和[逐候选诊断](../artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_attempt1/assistant_diagnostic_review.json)，同步README与研究总表。
+- [x] API logical/physical/retry=6/6/0，tokens=6,585/9,275，累计latency=196.735秒；复核追加API=0。未改代码/Prompt/PVS/正式约束，未创建v25，无fresh30/formal、GPU/Retriever/victim或提交/推送。
+
+当前状态：本批执行、全部复核与报告完成并停止。新Prompt仍有明确漏检，后续先讨论已有要求的遵循问题；本轮不继续改Prompt或运行下一批。
