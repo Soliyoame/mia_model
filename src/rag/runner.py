@@ -28,18 +28,18 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
-from .retriever import RagRetriever, RetrievedChunk
+from .retriever import HybridRagRetriever, RagRetriever, RetrievedChunk
 from .context_controls import GroundTruthContextController
 from ..llm.response_validation import (
     generator_response_error,
     response_record_is_success,
 )
 from ..llm.victim_client import VictimClient
-from ..utils.hash import sha256_file, sha256_obj
-from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl, write_jsonl_atomic
+from ..utils.hash import sha256_file, sha256_obj, sha256_text
+from ..utils.io import ensure_dir, load_yaml, read_json, read_jsonl, write_json, write_jsonl, write_jsonl_atomic
 from ..utils.logger import get_logger
 from ..utils.rate_limit import TokenBucket
-from ..utils.run_context import git_snapshot
+from ..utils.run_context import git_snapshot, require_clean_release_commit
 
 
 LOGGER = get_logger(__name__)
@@ -120,6 +120,7 @@ def validate_fixed_query_budget(
     pairs_per_source: int,
     *,
     expected_source_keys: set[str] | None = None,
+    allow_shared_q_plus: bool = False,
 ) -> dict[str, Any]:
     """Fail closed unless every source has exactly N complete Q+/Q- pairs."""
 
@@ -157,8 +158,15 @@ def validate_fixed_query_budget(
         query_texts = [str(member.get("query") or "") for members in pairs.values() for member in members]
         if any(not query for query in query_texts):
             failures.append(f"{source_key}:empty_query_text")
-        elif len(set(query_texts)) != required * 2:
+        elif not allow_shared_q_plus and len(set(query_texts)) != required * 2:
             failures.append(f"{source_key}:duplicate_query_text")
+        if allow_shared_q_plus:
+            plus_texts = {member["query"] for members in pairs.values() for member in members
+                          if member.get("claim_type") == "true"}
+            minus_texts = [member["query"] for members in pairs.values() for member in members
+                           if member.get("claim_type") == "counterfactual"]
+            if len(set(minus_texts)) != required or plus_texts.intersection(minus_texts):
+                failures.append(f"{source_key}:duplicate_counterfactual_query_text")
         for pair_key, members in pairs.items():
             claim_types = sorted(str(member.get("claim_type")) for member in members)
             if claim_types != ["counterfactual", "true"]:
@@ -177,6 +185,257 @@ def validate_fixed_query_budget(
         "source_plan_hash": sha256_obj(source_keys),
         "query_plan_hash": sha256_obj(sorted(query_ids)),
     }
+
+
+def _validate_v24_main_index(
+    index_dir: Path, *, dataset: str, backend: str,
+    expected_manifest_hash: str, member_hashes: dict[str, str],
+) -> dict[str, Any]:
+    """在加载模型前核对已有索引文件与主库 source 边界，不重建索引。"""
+    manifest_path = index_dir / "index_manifest.json"
+    manifest = read_json(manifest_path)
+    if (not expected_manifest_hash or sha256_file(manifest_path) != expected_manifest_hash
+            or manifest.get("dataset") != dataset or manifest.get("retriever_backend") != backend):
+        raise ValueError("v24_index_identity_mismatch")
+    boundary = manifest.get("security_boundary") or {}
+    if boundary.get("allowed_groups") != ["KB_Member"] or boundary.get("is_shadow_index") is not False:
+        raise ValueError("v24_index_not_main_member_only")
+    if backend == "dense" and (not manifest.get("embedding_revision")
+                               or manifest.get("embedding_local_files_only") is not True):
+        raise ValueError("v24_index_requires_fixed_local_embedding")
+    docstore_path = index_dir / "docstore.jsonl"
+    index_path = (index_dir / str(manifest.get("index_filename") or "")).resolve()
+    if not index_path.is_relative_to(index_dir.resolve()):
+        raise ValueError("v24_index_path_outside_directory")
+    if (sha256_file(docstore_path) != manifest.get("docstore_hash")
+            or sha256_file(index_path) != manifest.get("index_hash")):
+        raise ValueError("v24_index_content_hash_mismatch")
+    seen: set[str] = set()
+    chunk_ids: set[str] = set()
+    for row in read_jsonl(docstore_path):
+        key, chunk_id = row.get("source_key"), row.get("chunk_id")
+        metadata = row.get("metadata") or {}
+        if (row.get("dataset") != dataset or row.get("group") != "KB_Member"
+                or key not in member_hashes or metadata.get("source_key") != key
+                or metadata.get("source_text_hash") != member_hashes[key]):
+            raise ValueError("v24_index_split_source_mismatch")
+        if (not chunk_id or chunk_id in chunk_ids or not isinstance(row.get("text"), str)
+                or sha256_text(row["text"]) != row.get("text_hash")):
+            raise ValueError("v24_index_chunk_identity_mismatch")
+        seen.add(key)
+        chunk_ids.add(chunk_id)
+    if seen != set(member_hashes):
+        raise ValueError("v24_index_member_coverage_mismatch")
+    return manifest
+
+
+def run_v24_formal_cell(
+    *, dataset: str, config_path: str | Path, project_root: str | Path = ".",
+    dry_run: bool = False, resume: bool = True,
+) -> dict[str, Any]:
+    """显式 V24 主 cell：固定 pairs/split/index → 现有 RAG 循环 → hybrid PVS。"""
+    from ..llm.factory import build_victim_client, llm_profile_identity, resolve_effective_llm_profile
+    from ..prepare.restoration_first_v24 import GROUP_COUNTS, build_luna_direct_run_plan
+    from ..scoring.pcv_scorer import (
+        build_hybrid_pvs_nli, prepare_hybrid_pvs_inputs,
+        run_hybrid_pvs_scoring, validate_hybrid_pvs_config,
+    )
+    from ..utils.seed import set_seed
+
+    root = Path(project_root).resolve()
+    config_file = (root / config_path).resolve()
+    config = load_yaml(config_file)
+    if config.get("protocol_version") != "pcv-mia-v24" or dataset not in config.get("datasets", []):
+        raise ValueError("v24_formal_config_required")
+    formal = config.get("formal") or {}
+    if (config.get("eligibility", {}).get("target_sources") != 2250
+            or config.get("split", {}).get("counts") != GROUP_COUNTS
+            or formal.get("queries_per_source") != 6
+            or formal.get("victim_queries_per_dataset") != 12000
+            or formal.get("reserve_in_main_victim_budget") is not False):
+        raise ValueError("v24_formal_budget_or_split_drift")
+    validate_hybrid_pvs_config(config, root)
+    runtime = formal.get("runtime")
+    required = ("selected_pairs_path", "split_manifest_path", "output_dir", "llm_profiles_path",
+                "victim_profile", "generator_family", "concrete_model", "generator_version")
+    if not isinstance(runtime, dict) or any(
+        not isinstance(runtime.get(key), str) or not runtime[key].strip() for key in required
+    ):
+        raise ValueError("v24_formal_runtime_bindings_required")
+    retrieval, generation = runtime.get("retrieval") or {}, runtime.get("generation") or {}
+    backend = retrieval.get("backend")
+    if (backend not in {"dense", "bm25", "hybrid"} or not retrieval.get("retriever_id")
+            or not retrieval.get("index_dir") or not retrieval.get("index_manifest_sha256")
+            or not isinstance(retrieval.get("top_k"), int) or retrieval["top_k"] < 1):
+        raise ValueError("v24_formal_retriever_bindings_required")
+    generation_keys = {"temperature", "max_tokens", "timeout", "retries", "retry_backoff_base",
+                       "retry_backoff_max", "retry_until_success", "retry_cooldown_seconds",
+                       "request_interval_seconds", "max_workers", "requests_per_minute", "checkpoint_every"}
+    if (not isinstance(generation, dict) or set(generation) != generation_keys
+            or generation["max_tokens"] < 1 or generation["max_workers"] < 1
+            or generation["timeout"] <= 0 or generation["checkpoint_every"] < 1):
+        raise ValueError("v24_formal_generation_config_required")
+    pairs_path = (root / runtime["selected_pairs_path"]).resolve()
+    split_path = (root / runtime["split_manifest_path"]).resolve()
+    output = (root / runtime["output_dir"]).resolve()
+    split = read_json(split_path)
+    if split.get("selection_seed") != config.get("selection_seed"):
+        raise ValueError("v24_formal_split_seed_mismatch")
+    plan = build_luna_direct_run_plan(list(read_jsonl(pairs_path)), split, dataset=dataset)
+    budget = validate_fixed_query_budget(
+        plan["queries"], 3, expected_source_keys={row["source_key"] for row in plan["benchmark"]},
+        allow_shared_q_plus=True,
+    )
+    member_hashes = {row["source_key"]: row["source_hash"] for row in split["rows"] if row["group"] == "KB_Member"}
+    index_dir = (root / retrieval["index_dir"]).resolve()
+    index_manifest = _validate_v24_main_index(
+        index_dir, dataset=dataset, backend="dense" if backend == "hybrid" else backend,
+        expected_manifest_hash=retrieval["index_manifest_sha256"], member_hashes=member_hashes,
+    )
+    hybrid = retrieval.get("hybrid") or {}
+    bm25_dir = None
+    if backend == "hybrid":
+        if (not retrieval.get("bm25_index_dir") or not retrieval.get("bm25_index_manifest_sha256")
+                or not hybrid.get("reranker_revision") or hybrid.get("reranker_local_files_only") is not True
+                or hybrid.get("final_top_k") != retrieval["top_k"]):
+            raise ValueError("v24_formal_hybrid_bindings_required")
+        bm25_dir = (root / retrieval["bm25_index_dir"]).resolve()
+        sparse = _validate_v24_main_index(
+            bm25_dir, dataset=dataset, backend="bm25",
+            expected_manifest_hash=retrieval["bm25_index_manifest_sha256"], member_hashes=member_hashes,
+        )
+        if sparse["docstore_hash"] != index_manifest["docstore_hash"]:
+            raise ValueError("v24_formal_hybrid_docstore_mismatch")
+        expected_retriever_id = f"{index_manifest['retriever_id']}+bm25+rrf+bge-reranker"
+    else:
+        expected_retriever_id = index_manifest.get("retriever_id")
+    if retrieval["retriever_id"] != expected_retriever_id:
+        raise ValueError("v24_formal_retriever_id_mismatch")
+    profiles_path = root / runtime["llm_profiles_path"]
+    profiles = load_yaml(profiles_path)
+    profile = resolve_effective_llm_profile(profiles, "victim", profile_name=runtime["victim_profile"])
+    if (profile.get("model") != runtime["concrete_model"]
+            or profile.get("model_version") != runtime["generator_version"]):
+        raise ValueError("v24_formal_generator_identity_mismatch")
+    profile_hash = llm_profile_identity(profile)["profile_hash"]
+    git = git_snapshot()
+    cell = {key: runtime[key] for key in ("generator_family", "concrete_model", "generator_version")}
+    cell.update(mode="rag", variant_id="full_pvs", context_control="retrieved",
+                retriever_backend=backend, retriever_id=retrieval["retriever_id"])
+    binding = {
+        "protocol_version": "pcv-mia-v24", "run_role": "main", "cell": cell,
+        "config_sha256": sha256_file(config_file), "selected_pairs_sha256": sha256_file(pairs_path),
+        "split_sha256": sha256_file(split_path), "profile_sha256": profile_hash,
+        "profiles_sha256": sha256_file(profiles_path),
+        "code_commit": git.get("commit"), "selection_seed": config["selection_seed"],
+        "allow_shared_q_plus": True,
+    }
+    summary = {
+        "run_kind": "v24_formal_cell", "status": "prepared_inputs_only", "binding": binding,
+        "split": plan["split"], "fixed_budget": budget, "planned_victim_queries": len(plan["queries"]),
+        "reserve_victim_queries": 0, "git": git, "artifacts": {},
+    }
+    if dry_run:
+        return summary
+    code_commit = require_clean_release_commit(git)
+    summary_path, raw_path = output / "run_summary.json", output / "rag_responses.jsonl"
+    exports = {"selected_main_pairs.jsonl": plan["pairs"], "query_plan.jsonl": plan["queries"],
+               "benchmark.jsonl": plan["benchmark"]}
+    if output.exists():
+        if not resume or not summary_path.is_file():
+            raise FileExistsError("v24_formal_output_exists_use_resume_or_new_directory")
+        previous = read_json(summary_path)
+        if previous.get("binding") != binding:
+            raise ValueError("v24_formal_resume_binding_drift")
+        for name, expected_hash in previous["artifacts"].items():
+            if sha256_file(output / name) != expected_hash:
+                raise ValueError("v24_formal_resume_artifact_drift")
+        for name, rows in exports.items():
+            if list(read_jsonl(output / name)) != rows:
+                raise ValueError("v24_formal_resume_plan_drift")
+        if previous["status"] == "completed":
+            return {**previous, "resumed_completed": True}
+        summary = previous
+
+    def bound_responses() -> list[dict[str, Any]]:
+        rows = compact_response_rows(list(read_jsonl(raw_path)))[0] if raw_path.exists() else []
+        prepare_hybrid_pvs_inputs(plan["pairs"], rows, dataset=dataset)
+        for row in rows:
+            if any(row.get(key) != value for key, value in cell.items()):
+                raise ValueError("v24_formal_response_cell_drift")
+        if raw_path.exists():
+            identity = read_json(raw_path.with_suffix(".identity.json"))
+            if (identity.get("execution_binding") != binding or identity.get("allow_shared_q_plus") is not True
+                    or identity.get("query_hash") != sha256_file(output / "query_plan.jsonl")
+                    or identity.get("benchmark_hash") != sha256_file(output / "benchmark.jsonl")):
+                raise ValueError("v24_formal_response_identity_drift")
+        return rows
+
+    rows = bound_responses()
+    pending = len(plan["queries"]) - sum(response_is_success(row) for row in rows)
+    score_dir = output / "scores"
+    # 恢复已写完的评分时只核对输入和输出 hash，不重复调用模型。
+    if score_dir.exists():
+        scored = read_json(score_dir / "scoring_summary.json")
+        if (pending or scored.get("run_kind") != "v24_formal_hybrid_pvs"
+                or scored.get("config_sha256") != binding["config_sha256"]
+                or scored.get("pairs_sha256") != sha256_file(output / "selected_main_pairs.jsonl")
+                or scored.get("responses_sha256") != sha256_file(raw_path)):
+            raise ValueError("v24_formal_scoring_resume_drift")
+        for name in ("pair_scores", "source_scores"):
+            if sha256_file(score_dir / f"{name}.jsonl") != scored.get(f"{name}_sha256"):
+                raise ValueError("v24_formal_scoring_output_drift")
+    else:
+        # 固定 NLI 在第一次 victim 调用前加载，缺权重/CUDA 时不会先花费查询预算。
+        nli = build_hybrid_pvs_nli(config, root)
+        if pending:
+            set_seed(int(config["selection_seed"]))
+            retriever = (HybridRagRetriever(index_dir, bm25_dir, **hybrid)
+                         if backend == "hybrid" else RagRetriever(index_dir))
+            if (retriever.retriever_backend != backend
+                    or retriever.manifest.get("retriever_id") != retrieval["retriever_id"]):
+                raise ValueError("v24_formal_loaded_retriever_drift")
+            client, loaded_profile = build_victim_client(profiles, profile_name=runtime["victim_profile"])
+            if llm_profile_identity(loaded_profile)["profile_hash"] != profile_hash:
+                raise ValueError("v24_formal_loaded_profile_drift")
+            if not output.exists():
+                output.mkdir(parents=True, exist_ok=False)
+                for name, content in exports.items():
+                    write_jsonl(content, output / name)
+                summary["artifacts"] = {name: sha256_file(output / name) for name in exports}
+            summary["status"] = "running"
+            write_json(summary, summary_path)
+            run_rag_and_llm_only(
+                dataset=dataset, queries_path=output / "query_plan.jsonl", benchmark_path=output / "benchmark.jsonl",
+                index_dir=index_dir, rag_output_path=raw_path, llm_output_path=output / "unused_llm_only.jsonl",
+                client=client, top_k=retrieval["top_k"], **generation,
+                resume=resume, force=False, config_snapshot={"v24_binding": binding},
+                run_rag=True, run_llm_only=False, pairs_per_source=3, allow_shared_q_plus=True,
+                generator_id=runtime["concrete_model"], generator_version=runtime["generator_version"],
+                generator_family=runtime["generator_family"], concrete_model=runtime["concrete_model"],
+                code_commit=code_commit, retriever_override=retriever,
+                retriever_identity_override=retrieval["retriever_id"], execution_binding=binding,
+            )
+            rows = bound_responses()
+        succeeded = sum(response_is_success(row) for row in rows)
+        summary.update(response_count=len(rows), succeeded_queries=succeeded,
+                       missing_or_failed_queries=len(plan["queries"]) - succeeded)
+        if succeeded != len(plan["queries"]):
+            summary["status"] = "rag_incomplete"
+            write_json(summary, summary_path)
+            return summary
+        scored = run_hybrid_pvs_scoring(
+            dataset=dataset, config_path=config_file, pairs_path=output / "selected_main_pairs.jsonl",
+            responses_path=raw_path, output_dir=score_dir, project_root=root, run_role="formal", nli=nli,
+        )
+    summary.update(status="completed" if scored["status"] == "scored" else "scoring_incomplete",
+                   scoring_status=scored["status"], scored_pair_count=scored["scored_pair_count"],
+                   scored_source_count=scored["scored_source_count"])
+    for path in (raw_path, raw_path.with_suffix(".identity.json"), raw_path.with_suffix(".manifest.json"),
+                 score_dir / "pair_scores.jsonl", score_dir / "source_scores.jsonl", score_dir / "scoring_summary.json"):
+        summary["artifacts"][path.relative_to(output).as_posix()] = sha256_file(path)
+    write_json(summary, summary_path)
+    return summary
 
 
 def build_rag_prompt(query: str, contexts: list[str]) -> str:
@@ -324,6 +583,8 @@ def run_rag_and_llm_only(
     rate_limiter_override: Any | None = None,
     schedule_ordinals_override: dict[str, int] | None = None,
     schedule_block_query_ids_override: set[str] | None = None,
+    allow_shared_q_plus: bool = False,
+    execution_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """对 accepted query 同时运行 RAG 和 LLM-only。
 
@@ -452,6 +713,11 @@ def run_rag_and_llm_only(
         "schedule_hash": str(schedule_hash or ""),
         "schedule_cell": str(schedule_cell or ""),
     }
+    # 只在显式新入口记录扩展绑定，历史运行身份保持原样。
+    if allow_shared_q_plus:
+        resume_identity["allow_shared_q_plus"] = True
+    if execution_binding is not None:
+        resume_identity["execution_binding"] = execution_binding
     identity_targets: list[tuple[Path, Path]] = []
     if run_rag:
         identity_targets.append(
@@ -620,11 +886,14 @@ def run_rag_and_llm_only(
             accepted_queries,
             pairs_per_source,
             expected_source_keys=benchmark_source_keys,
+            allow_shared_q_plus=allow_shared_q_plus,
         )
         if pairs_per_source is not None and schedule_block_id is None
         else {"enabled": False}
     )
     fixed_budget["enabled"] = pairs_per_source is not None
+    if allow_shared_q_plus:
+        fixed_budget["allow_shared_q_plus"] = True
     if schedule_block_id is not None:
         fixed_budget["deferred_to_full_schedule_finalize"] = True
     pending: list[dict[str, Any]] = []

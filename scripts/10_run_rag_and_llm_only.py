@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -31,7 +32,7 @@ from src.llm.generator_registry import (
 )
 from src.rag.paths import retriever_id_from_config, retriever_index_dir
 from src.rag.retriever import HybridRagRetriever
-from src.rag.runner import run_rag_and_llm_only
+from src.rag.runner import run_rag_and_llm_only, run_v24_formal_cell
 from src.utils.io import ensure_dir, load_yaml, read_json, read_jsonl, resolve_path, write_json
 from src.utils.run_context import (
     experiment_scoped_dir,
@@ -51,7 +52,9 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Run PCV-MIA RAG and LLM-only responses.")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--v24", action="store_true", help="运行显式绑定的 V24 主 cell，并接续 hybrid PVS")
+    parser.add_argument("--dry-run", action="store_true", help="V24 只读校验；不加载模型或写出运行产物")
     parser.add_argument("--victim-profile", default=None)
     parser.add_argument(
         "--retriever-backend",
@@ -106,7 +109,11 @@ def parse_args() -> argparse.Namespace:
     #   --primary-only  只跑 selection_tier=primary 的高质量 fact,同时砍 RAG 与 LLM-only 两路调用数。
     parser.add_argument("--primary-only", action="store_true",
                         help="只处理 selection_tier=primary 的 fact 对应的 query")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.config is None:
+        name = "restoration_first_v24.yaml" if args.v24 else "rag_config.yaml"
+        args.config = str(PROJECT_ROOT / "configs" / name)
+    return args
 
 
 def main() -> int:
@@ -116,6 +123,24 @@ def main() -> int:
         进程退出码,正常结束返回 0。
     """
     args = parse_args()
+    if args.v24:
+        if (args.force or args.llm_only or args.skip_rag or args.primary_only or args.suite_id
+                or args.queries_path or args.victim_profile or args.generator_family or args.retriever_backend
+                or args.variant_id != "full_pvs" or args.context_control != "retrieved"
+                or args.checkpoint_every != 200):
+            raise ValueError("V24 reads one frozen formal.runtime cell; legacy overrides are not supported")
+        config_path = args.config or PROJECT_ROOT / "configs/restoration_first_v24.yaml"
+        result = run_v24_formal_cell(
+            dataset=args.dataset, config_path=config_path, project_root=PROJECT_ROOT,
+            dry_run=args.dry_run, resume=not args.no_resume,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] in {"prepared_inputs_only", "completed"} else 2
+    if args.dry_run:
+        raise ValueError("--dry-run requires --v24")
+    args.config = args.config or str(PROJECT_ROOT / "configs/rag_config.yaml")
+    if load_yaml(args.config).get("protocol_version") == "pcv-mia-v24":
+        raise ValueError("V24 config requires the explicit --v24 entry")
     if (
         args.suite_id is None
         and os.getenv("PCV_ALLOW_SINGLE_CELL_FORMAL", "").strip().lower()

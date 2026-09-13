@@ -17,13 +17,17 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from copy import deepcopy
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
-from typing import Iterator
+import sys
+from typing import Any, Iterator
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 from src.llm.factory import (
@@ -34,15 +38,24 @@ from src.llm.factory import (
     resolve_llm_profile_name,
 )
 from src.paired_claims.claim_generator import generate_paired_claims_file
-from src.parsing.stance_parser import parse_stance_files
+from src.parsing.stance_parser import parse_hybrid_response, parse_stance_files
 from src.rag.embeddings import (
     SentenceTransformerEmbeddingModel,
     build_embedding_model,
 )
-from src.scoring.pcv_scorer import compute_pcv_scores
+from src.scoring.pcv_scorer import (
+    aggregate_hybrid_source,
+    build_hybrid_pvs_nli,
+    compute_pcv_scores,
+    prepare_hybrid_pvs_inputs,
+    run_hybrid_pvs_scoring,
+    score_hybrid_pair,
+    semantic_restoration_score,
+)
 from src.fact_extraction.fact_extractor import extract_facts_file
 from src.utils.env import env_str
-from src.utils.io import load_yaml, read_jsonl, write_jsonl
+from src.utils.hash import sha256_file, sha256_obj
+from src.utils.io import load_yaml, read_json, read_jsonl, write_json, write_jsonl
 
 
 WORKSPACE_TMP = Path(__file__).resolve().parents[1] / ".pytest_tmp"
@@ -538,6 +551,523 @@ class PcvMiaTests(unittest.TestCase):
             self.assertIn("coverage_by_group", manifest)
             self.assertIn("facts_by_tier", manifest)
             self.assertEqual(manifest["coverage_by_group"]["KB_Member"], 1.0)
+
+
+class HybridPvsTests(unittest.TestCase):
+    """V24 混合评分的离线契约测试；语义概率由 mock 提供，不声称验证模型质量。"""
+
+    @staticmethod
+    def _nli(forward: float = 0.9, reverse: float = 0.8) -> Mock:
+        predictor = Mock(spec=["probabilities"])
+        predictor.probabilities.return_value = [
+            {"entailment": value, "neutral": 1.0 - value, "contradiction": 0.0}
+            for value in (forward, reverse)
+        ]
+        return predictor
+
+    @staticmethod
+    def _response(stance: str, correction: str | None = None) -> str:
+        return json.dumps({"stance": stance, "correction_entity": correction})
+
+    def _pair(self, **overrides: Any) -> dict[str, Any]:
+        arguments = {
+            "dataset": "toy", "source_key": "toy::s1", "pair_id": "p0",
+            "original_entity": "43 RA patients", "plus_response": "Consistent",
+            "minus_response": "Inconsistent: 43 RA patients",
+        }
+        return score_hybrid_pair(**{**arguments, **overrides})
+
+    def test_explicit_response_formats_preserve_raw_text(self) -> None:
+        cases = [
+            ("Yes.", "supported", None),
+            ("Consistent", "supported", None),
+            ("No!", "contradicted", None),
+            ("Inconsistent: NHL", "contradicted", "NHL"),
+            ("  Inconsistent: forty-three RA patients  ", "contradicted", "forty-three RA patients"),
+            ("I don't know", "insufficient", None),
+            ("I don’t know.", "insufficient", None),
+            (self._response("supported"), "supported", None),
+            (self._response("contradicted", "NHL"), "contradicted", "NHL"),
+            (self._response("insufficient"), "insufficient", None),
+        ]
+        for raw, stance, correction in cases:
+            with self.subTest(raw=raw):
+                parsed = parse_hybrid_response(raw)
+                self.assertEqual(parsed["parse_status"], "parsed")
+                self.assertEqual(parsed["raw_response"], raw)
+                self.assertEqual((parsed["stance"], parsed["correction_entity"]), (stance, correction))
+        self.assertEqual(parse_hybrid_response(b"No.")["stance"], "contradicted")
+
+    def test_no_without_correction_is_valid_and_does_not_change_v23_parser(self) -> None:
+        from src.evaluation.restoration_first_v23 import parse_response
+
+        raw = self._response("contradicted")
+        self.assertEqual(parse_response(raw)["parse_status"], "invalid")
+        for response in (raw, self._response("contradicted", "  "), "No.", "Inconsistent:"):
+            with self.subTest(response=response):
+                nli = self._nli()
+                score = self._pair(minus_response=response, nli=nli)
+                self.assertEqual(score["score_status"], "scored")
+                self.assertEqual(score["minus_response"]["stance"], "contradicted")
+                self.assertEqual(score["counter_acceptance"], 0.0)
+                self.assertEqual(score["restoration"], 0.0)
+                self.assertEqual(score["pair_pvs"], 0.0)
+                nli.probabilities.assert_not_called()
+
+    def test_malformed_or_free_text_does_not_infer_support_from_entity_mentions(self) -> None:
+        cases = [
+            'The trial did not include 43 RA patients.',
+            'No, it did not include 43 RA patients.',
+            self._response("supported", "43 RA patients"),
+            self._response("insufficient", "43 RA patients"),
+            '{"stance":"supported","stance":"contradicted","correction_entity":null}',
+            '{"stance":"contradicted","correction_entity":43}',
+            '{"stance":"supported","correction_entity":null,"confidence":0.9}',
+            '{"stance":"unknown","correction_entity":null}',
+            '{"stance":"contradicted","correction_entity":NaN}',
+            b'\xff',
+        ]
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(parse_hybrid_response(raw)["parse_status"], "invalid")
+                score = self._pair(plus_response=raw)
+                self.assertEqual(score["score_status"], "response_error")
+                self.assertIsNone(score["pair_pvs"])
+
+    def test_positive_support_uses_stance_endpoints(self) -> None:
+        for raw, expected in [("Yes.", 1.0), ("No.", 0.0), ("I don't know", 0.0)]:
+            with self.subTest(raw=raw):
+                score = self._pair(plus_response=raw)
+                self.assertEqual(score["positive_support"], expected)
+                self.assertEqual(score["restoration"], 1.0)
+                self.assertEqual(score["pair_pvs"], expected)
+
+    def test_accepting_counter_is_one_and_negative_margin_is_clipped(self) -> None:
+        score = self._pair(minus_response=self._response("supported"))
+        self.assertEqual(score["counter_acceptance"], 1.0)
+        self.assertEqual(score["restoration"], 0.0)
+        self.assertEqual(score["restoration_margin"], 0.0)
+        self.assertEqual(score["non_acceptance"], 0.0)
+        self.assertEqual(score["pair_pvs"], 0.0)
+
+    def test_unknown_is_valid_zero_support_and_not_a_runtime_failure(self) -> None:
+        score = self._pair(plus_response="I don't know", minus_response="I don't know")
+        self.assertEqual(score["score_status"], "scored")
+        for key in ("positive_support", "counter_acceptance", "restoration", "pair_pvs"):
+            self.assertEqual(score[key], 0.0)
+        self.assertEqual(score["non_acceptance"], 1.0)
+
+    def test_exact_normalized_restoration_skips_nli(self) -> None:
+        nli = self._nli()
+        score = self._pair(minus_response=self._response("contradicted", "４３　ra\tpatients"), nli=nli)
+        self.assertEqual(score["restoration"], 1.0)
+        self.assertEqual(score["pair_pvs"], 1.0)
+        nli.probabilities.assert_not_called()
+
+    def test_fixed_ra_exact_restoration_is_one_without_nli(self) -> None:
+        original = "43 RA patients"
+        nli = self._nli()
+        score = self._pair(
+            original_entity=original,
+            minus_response=self._response("contradicted", original),
+            nli=nli,
+        )
+        self.assertEqual(score["score_status"], "scored")
+        self.assertEqual(score["restoration"], 1.0)
+        self.assertEqual(score["pair_pvs"], 1.0)
+        nli.probabilities.assert_not_called()
+
+    def test_fixed_ra_non_exact_cases_use_bidirectional_nli_without_shortcut(self) -> None:
+        original = "43 RA patients"
+        corrections = [
+            "forty-three participants with rheumatoid arthritis",
+            "43 patients",
+            "44 RA patients",
+            "43 patients without rheumatoid arthritis",
+        ]
+        # 所有非 exact case 使用相同的人工概率，只验证接口和公式，不预设真实语义排序。
+        for correction in corrections:
+            for forward, reverse in ((0.9, 0.4), (0.4, 0.9)):
+                with self.subTest(correction=correction, forward=forward, reverse=reverse):
+                    nli = self._nli(forward, reverse)
+                    score = self._pair(
+                        original_entity=original,
+                        minus_response=self._response("contradicted", correction),
+                        nli=nli,
+                    )
+                    corrected = f"The corrected value is {correction}."
+                    true = f"The corrected value is {original}."
+                    nli.probabilities.assert_called_once_with([(corrected, true), (true, corrected)])
+                    self.assertEqual(score["score_status"], "scored")
+                    self.assertEqual(score["positive_support"], 1.0)
+                    self.assertEqual(score["counter_acceptance"], 0.0)
+                    self.assertEqual(score["restoration"], min(forward, reverse))
+                    self.assertEqual(score["restoration_margin"], min(forward, reverse))
+                    self.assertEqual(score["pair_pvs"], min(forward, reverse))
+
+    def test_semantic_paraphrase_and_abbreviation_use_only_value_pairs(self) -> None:
+        cases = [
+            ("43 RA patients", "forty-three participants with rheumatoid arthritis"),
+            ("non-Hodgkin lymphoma", "NHL"),
+        ]
+        for original, correction in cases:
+            with self.subTest(original=original):
+                nli = self._nli(0.94, 0.81)
+                score = self._pair(original_entity=original,
+                                   minus_response=self._response("contradicted", correction), nli=nli)
+                self.assertAlmostEqual(score["restoration"], 0.81)
+                self.assertAlmostEqual(score["pair_pvs"], 0.81)
+                corrected = f"The corrected value is {correction}."
+                true = f"The corrected value is {original}."
+                nli.probabilities.assert_called_once_with([(corrected, true), (true, corrected)])
+
+    def test_one_way_entailment_is_not_treated_as_full_equivalence(self) -> None:
+        nli = self._nli(0.97, 0.12)
+        value = semantic_restoration_score("patients", "43 RA patients", nli=nli)
+        self.assertEqual(value, 0.12)
+
+    def test_different_numbers_diseases_and_substrings_do_not_take_exact_shortcut(self) -> None:
+        for original, correction in [("43", "44"), ("43", "143"), ("4.3", "43"),
+                                     ("rheumatoid arthritis", "osteoarthritis")]:
+            with self.subTest(original=original, correction=correction):
+                nli = self._nli(0.04, 0.02)
+                self.assertEqual(semantic_restoration_score(correction, original, nli=nli), 0.02)
+                nli.probabilities.assert_called_once()
+
+    def test_missing_and_failed_responses_are_unscored(self) -> None:
+        for changes, side, status in [
+            ({"plus_response": None}, "plus_response", "missing"),
+            ({"minus_response": "  "}, "minus_response", "missing"),
+            ({"plus_error": True}, "plus_response", "generator_error"),
+            ({"minus_error": True}, "minus_response", "generator_error"),
+        ]:
+            with self.subTest(changes=changes):
+                score = self._pair(**changes)
+                self.assertEqual(score["score_status"], "response_error")
+                self.assertEqual(score[side]["parse_status"], status)
+                self.assertIsNone(score["pair_pvs"])
+
+    def test_missing_nli_or_runtime_failure_is_not_a_zero_restoration(self) -> None:
+        nli = self._nli()
+        nli.probabilities.side_effect = RuntimeError("hidden diagnostic payload")
+        for predictor in (None, nli):
+            with self.subTest(predictor=predictor):
+                score = self._pair(minus_response="Inconsistent: NHL", nli=predictor)
+                self.assertEqual(score["score_status"], "nli_error")
+                self.assertEqual(score["positive_support"], 1.0)
+                self.assertIsNone(score["restoration"])
+                self.assertIsNone(score["pair_pvs"])
+                self.assertNotIn("hidden diagnostic payload", json.dumps(score))
+
+    def test_invalid_nli_outputs_are_unscored(self) -> None:
+        valid = {"entailment": 0.8, "neutral": 0.1, "contradiction": 0.1}
+        invalid = [
+            [], [valid], [{"entailment": 0.8}, valid],
+            [{**valid, "entailment": float("nan")}, valid],
+            [{**valid, "entailment": float("inf")}, valid],
+            [{**valid, "entailment": 1.1}, valid],
+            [{**valid, "neutral": -0.1}, valid],
+            [{**valid, "entailment": True}, valid],
+            [{**valid, "entailment": 0.2}, valid],
+        ]
+        for rows in invalid:
+            with self.subTest(rows=rows):
+                nli = self._nli()
+                nli.probabilities.return_value = rows
+                score = self._pair(minus_response="Inconsistent: forty-three RA patients", nli=nli)
+                self.assertEqual(score["score_status"], "nli_error")
+                self.assertIsNone(score["pair_pvs"])
+
+    def test_three_pairs_keep_mean_primary_and_median_diagnostic(self) -> None:
+        pairs = [self._pair(pair_id="p0"),
+                 self._pair(pair_id="p1", minus_response="Inconsistent: forty-three RA patients", nli=self._nli()),
+                 self._pair(pair_id="p2", minus_response="Consistent")]
+        source = aggregate_hybrid_source(pairs, dataset="toy", source_key="toy::s1")
+        self.assertEqual(source["score_status"], "scored")
+        self.assertAlmostEqual(source["source_pvs_mean"], 0.6)
+        self.assertEqual(source["source_pvs"], source["source_pvs_mean"])
+        self.assertEqual(source["source_pvs_median"], 0.8)
+        self.assertEqual([row["pair_id"] for row in source["pair_scores"]], ["p0", "p1", "p2"])
+
+    def test_insufficient_or_incomplete_source_does_not_average_remaining_pairs(self) -> None:
+        good = [self._pair(pair_id="p0"), self._pair(pair_id="p1")]
+        for pairs, status in [([], "insufficient_pairs"), (good, "insufficient_pairs"),
+                              (good + [self._pair(pair_id="p2", minus_response=None)], "incomplete")]:
+            with self.subTest(status=status, count=len(pairs)):
+                source = aggregate_hybrid_source(pairs, dataset="toy", source_key="toy::s1")
+                self.assertEqual(source["score_status"], status)
+                for field in ("source_pvs", "source_pvs_mean", "source_pvs_median"):
+                    self.assertIsNone(source[field])
+
+    def test_source_rejects_identity_duplicates_budget_and_invalid_scores(self) -> None:
+        good = [self._pair(pair_id=f"p{i}") for i in range(3)]
+        variants = [good + [self._pair(pair_id="p3")], [good[0], good[0], good[2]]]
+        for field, value in [("source_key", "toy::s2"), ("dataset", "other"),
+                             ("scoring_kind", "legacy"), ("pair_pvs", float("nan")),
+                             ("pair_pvs", 1.1), ("pair_pvs", True)]:
+            variants.append([good[0], good[1], {**good[2], field: value}])
+        for pairs in variants:
+            with self.subTest(pairs=pairs):
+                with self.assertRaises(ValueError):
+                    aggregate_hybrid_source(pairs, dataset="toy", source_key="toy::s1")
+        with self.assertRaises(ValueError):
+            self._pair(pair_id="")
+        with self.assertRaises(ValueError):
+            self._pair(original_entity="  ")
+
+    def test_config_builds_existing_fixed_nli_with_no_real_model_load(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = load_yaml(root / "configs" / "restoration_first_v24.yaml")
+        with patch("src.scoring.pcv_scorer.TransformersNLIPredictor") as factory:
+            predictor = build_hybrid_pvs_nli(config, root)
+        self.assertIs(predictor, factory.return_value)
+        settings = config["scoring"]["restoration"]["nli"]
+        factory.assert_called_once_with(
+            snapshot_dir=(root / settings["snapshot_dir"]).resolve(),
+            model_id=settings["model_id"], revision=settings["revision"], device="cuda",
+            require_cuda=True, batch_size=settings["batch_size"], max_length=settings["max_length"],
+        )
+
+    def test_config_rejects_mapping_formula_aggregation_or_model_drift(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = load_yaml(root / "configs" / "restoration_first_v24.yaml")
+        changes = [
+            (("support_mapping", "insufficient"), 0.5),
+            (("pair_formula",), "S+ + R-"), (("source_aggregation",), "median"),
+            (("pairs_per_source",), 4),
+            (("restoration", "value_template"), "Question: {value}"),
+            (("restoration", "nli", "model_id"), "other-model"),
+            (("restoration", "nli", "revision"), "other-revision"),
+            (("restoration", "nli", "device"), "cpu"),
+            (("restoration", "nli", "local_files_only"), False),
+        ]
+        for path, value in changes:
+            with self.subTest(path=path):
+                altered = deepcopy(config)
+                parent = altered["scoring"]
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = value
+                with patch("src.scoring.pcv_scorer.TransformersNLIPredictor") as factory:
+                    with self.assertRaises(ValueError):
+                        build_hybrid_pvs_nli(altered, root)
+                    factory.assert_not_called()
+
+
+class HybridPvsEntryTests(unittest.TestCase):
+    """现有构造产物到离线评分入口的集成测试；不调用模型或外部服务。"""
+
+    root = Path(__file__).resolve().parents[1]
+
+    @classmethod
+    def _cli(cls) -> Any:
+        spec = importlib.util.spec_from_file_location("hybrid_scoring_cli_test", cls.root / "scripts/11_parse_stance_and_score.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def _rows() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        pairs, responses = [], []
+        original = "43 RA patients"
+        for index, counter in enumerate(("44 RA patients", "45 RA patients", "46 RA patients")):
+            pair = {
+                "dataset": "nfcorpus", "source_key": "nfcorpus::synthetic", "chunk_sha256": "a" * 64,
+                "pair_id": f"p{index}", "original_entity": original, "counter_entity": counter,
+                "q_plus_text": f"Did the Atlas trial enroll {original}?",
+                "q_minus_text": f"Did the Atlas trial enroll {counter}?",
+            }
+            pairs.append(pair)
+            for polarity, claim_type, text, response in (
+                ("Q_plus", "true", pair["q_plus_text"], "Yes."),
+                ("Q_minus", "counterfactual", pair["q_minus_text"], f"Inconsistent: {original}"),
+            ):
+                responses.append({
+                    "dataset": pair["dataset"], "source_key": pair["source_key"], "pair_id": pair["pair_id"],
+                    "query_id": sha256_obj({"pair_id": pair["pair_id"], "polarity": polarity}),
+                    "claim_type": claim_type, "query": text, "response": response, "error": None,
+                    "mode": "rag", "concrete_model": "synthetic-victim", "provider_model_id": "synthetic-victim",
+                    "generator_family": "gpt", "generator_version": "synthetic-revision",
+                    "retriever_backend": "dense", "retriever_id": "synthetic-index",
+                    "variant_id": "original", "context_control": "retrieved", "system_fingerprint": "synthetic-fp",
+                })
+        return pairs, responses
+
+    def _arguments(self, tmp: Path, pairs: list, responses: list) -> dict[str, Any]:
+        write_jsonl(pairs, tmp / "pairs.jsonl")
+        write_jsonl(responses, tmp / "responses.jsonl")
+        return {
+            "dataset": "nfcorpus", "project_root": self.root,
+            "config_path": "configs/restoration_first_v24.yaml", "pairs_path": tmp / "pairs.jsonl",
+            "responses_path": tmp / "responses.jsonl", "output_dir": tmp / "scores",
+        }
+
+    def test_cli_scores_same_slot_pairs_and_preserves_query_text_and_order(self) -> None:
+        pairs, responses = self._rows()
+        responses[3]["response"] = "Inconsistent: forty-three participants with rheumatoid arthritis"
+        responses[5]["response"] = "Yes."
+        nli = HybridPvsTests._nli()
+        cli = self._cli()
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, pairs, list(reversed(responses)))
+            before = sha256_file(tmp / "pairs.jsonl")
+            argv = ["score", "--dataset", "nfcorpus", "--v24-hybrid", "--pairs", str(arguments["pairs_path"]),
+                    "--responses", str(arguments["responses_path"]), "--output-dir", str(arguments["output_dir"])]
+            with patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), \
+                    patch("src.scoring.pcv_scorer.build_hybrid_pvs_nli", return_value=nli) as factory, \
+                    patch.object(cli, "resolve_generator_from_pipeline_config", side_effect=AssertionError("legacy called")):
+                self.assertEqual(cli.main(), 0)
+            factory.assert_called_once()
+            nli.probabilities.assert_called_once()
+            scored = list(read_jsonl(tmp / "scores/pair_scores.jsonl"))
+            source = list(read_jsonl(tmp / "scores/source_scores.jsonl"))[0]
+            summary = read_json(tmp / "scores/scoring_summary.json")
+            self.assertEqual([row["pair_id"] for row in scored], ["p0", "p1", "p2"])
+            self.assertEqual([row["pair_pvs"] for row in scored], [1.0, 0.8, 0.0])
+            self.assertAlmostEqual(source["source_pvs_mean"], 0.6)
+            self.assertEqual(source["source_pvs"], source["source_pvs_mean"])
+            self.assertEqual(source["source_pvs_median"], 0.8)
+            self.assertEqual(source["concrete_model"], "synthetic-victim")
+            self.assertEqual(source["retriever_id"], "synthetic-index")
+            self.assertEqual(summary["query_count"], 6)
+            self.assertEqual(summary["pair_scores_sha256"], sha256_file(tmp / "scores/pair_scores.jsonl"))
+            self.assertEqual(summary["pairs_sha256"], before)
+            self.assertEqual(sha256_file(tmp / "pairs.jsonl"), before)
+            for pair, score in zip(pairs, scored):
+                self.assertEqual(score["q_plus_text"], pair["q_plus_text"])
+                self.assertEqual(score["q_minus_text"], pair["q_minus_text"])
+
+    def test_smoke_preflight_does_not_score_load_model_or_write_outputs(self) -> None:
+        pairs, _ = self._rows()
+        identity = {key: pairs[0][key] for key in ("dataset", "source_key", "chunk_sha256")}
+        smoke = [{"source": identity, "construction": {**identity, "selected_pairs": pairs, "selected_pair_count": 3}}]
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, smoke, [])
+            arguments.pop("responses_path")
+            with patch("src.scoring.pcv_scorer.build_hybrid_pvs_nli", side_effect=AssertionError("model loaded")), \
+                    patch("src.scoring.pcv_scorer.score_hybrid_pair", side_effect=AssertionError("scoring called")):
+                summary = run_hybrid_pvs_scoring(**arguments, dry_run=True)
+            self.assertEqual(summary["status"], "prepared_inputs_only")
+            self.assertEqual((summary["source_count"], summary["pair_count"], summary["query_count"]), (1, 3, 6))
+            self.assertEqual(summary["missing_response_count"], 6)
+            self.assertFalse(summary["nli_loaded"])
+            self.assertFalse(summary["formal_freeze_performed"])
+            self.assertFalse((tmp / "scores").exists())
+
+    def test_missing_failed_or_malformed_response_leaves_source_unscored(self) -> None:
+        pairs, responses = self._rows()
+        variants = [responses[1:], [{**responses[0], "error": "synthetic failure"}, *responses[1:]],
+                    [{**responses[0], "response": "unstructured answer"}, *responses[1:]]]
+        for rows in variants:
+            with self.subTest(first=rows[0]["response"]), temporary_dir() as tmp:
+                arguments = self._arguments(tmp, pairs, rows)
+                with patch("src.scoring.pcv_scorer.build_hybrid_pvs_nli", side_effect=AssertionError("model loaded")):
+                    summary = run_hybrid_pvs_scoring(**arguments)
+                source = list(read_jsonl(tmp / "scores/source_scores.jsonl"))[0]
+                self.assertEqual(summary["status"], "incomplete")
+                self.assertEqual(source["score_status"], "incomplete")
+                self.assertIsNone(source["source_pvs_mean"])
+                self.assertIsNone(source["source_pvs_median"])
+                self.assertIsNone(source["pair_scores"][0]["pair_pvs"])
+
+    def test_non_exact_without_local_nli_fails_before_writing_scores(self) -> None:
+        pairs, responses = self._rows()
+        responses[1]["response"] = "Inconsistent: forty-three participants with rheumatoid arthritis"
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, pairs, responses)
+            with patch("src.scoring.pcv_scorer.build_hybrid_pvs_nli", side_effect=FileNotFoundError("missing local weights")):
+                with self.assertRaises(FileNotFoundError):
+                    run_hybrid_pvs_scoring(**arguments)
+            self.assertFalse((tmp / "scores").exists())
+
+    def test_duplicate_cross_source_and_drifted_queries_are_rejected(self) -> None:
+        pairs, responses = self._rows()
+        variants = [responses + [responses[0]]]
+        for field, value in (("dataset", "scidocs"), ("source_key", "nfcorpus::other"),
+                             ("pair_id", "other"), ("claim_type", "counterfactual"),
+                             ("query_id", "other"), ("query", "Changed question?"),
+                             ("chunk_sha256", "b" * 64)):
+            variants.append([{**responses[0], field: value}, *responses[1:]])
+        for rows in variants:
+            with self.subTest(first=rows[0]):
+                with self.assertRaisesRegex(ValueError, "hybrid_pvs_"):
+                    prepare_hybrid_pvs_inputs(pairs, rows, dataset="nfcorpus")
+
+    def test_mixed_runtime_cells_or_provider_drift_are_rejected(self) -> None:
+        pairs, responses = self._rows()
+        for field in ("mode", "concrete_model", "provider_model_id", "retriever_backend", "retriever_id",
+                      "variant_id", "context_control", "generator_version", "system_fingerprint"):
+            with self.subTest(field=field):
+                rows = [*responses[:-1], {**responses[-1], field: "other"}]
+                with self.assertRaisesRegex(ValueError, "hybrid_pvs_"):
+                    prepare_hybrid_pvs_inputs(pairs, rows, dataset="nfcorpus")
+
+    def test_selected_duplicates_chunk_drift_and_excess_pairs_are_rejected(self) -> None:
+        pairs, _ = self._rows()
+        identity = {key: pairs[0][key] for key in ("dataset", "source_key", "chunk_sha256")}
+        empty_source = {**identity, "selected_pairs": []}
+        variants = [pairs + [pairs[0]], pairs + [{**pairs[0], "pair_id": "p3"}],
+                    [pairs[0], {**pairs[1], "chunk_sha256": "b" * 64}, pairs[2]],
+                    [{**pairs[0], "chunk_sha256": "invalid"}], [empty_source, empty_source],
+                    [empty_source, {**empty_source, "source_key": "nfcorpus::duplicate-chunk"}]]
+        for rows in variants:
+            with self.subTest(count=len(rows)):
+                with self.assertRaisesRegex(ValueError, "hybrid_pvs_"):
+                    prepare_hybrid_pvs_inputs(rows, [], dataset="nfcorpus")
+
+    def test_zero_and_two_pair_sources_are_preserved_as_insufficient(self) -> None:
+        pairs, _ = self._rows()
+        identity = {key: pairs[0][key] for key in ("dataset", "source_key", "chunk_sha256")}
+        rows = [{**identity, "selected_pairs": pairs[:2]},
+                {**identity, "source_key": "nfcorpus::empty", "chunk_sha256": "b" * 64, "selected_pairs": []}]
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, rows, [])
+            summary = run_hybrid_pvs_scoring(**arguments)
+            sources = list(read_jsonl(tmp / "scores/source_scores.jsonl"))
+            self.assertEqual(summary["source_count"], 2)
+            self.assertEqual(summary["pair_count"], 2)
+            self.assertEqual([row["score_status"] for row in sources], ["insufficient_pairs", "insufficient_pairs"])
+            self.assertTrue(all(row["source_pvs"] is None for row in sources))
+
+    def test_existing_output_is_never_overwritten(self) -> None:
+        pairs, responses = self._rows()
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, pairs, responses)
+            output = arguments["output_dir"]
+            output.mkdir()
+            (output / "sentinel.txt").write_text("existing result", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                run_hybrid_pvs_scoring(**arguments)
+            self.assertEqual((output / "sentinel.txt").read_text(encoding="utf-8"), "existing result")
+
+    def test_scoring_config_drift_fails_during_preflight(self) -> None:
+        pairs, responses = self._rows()
+        with temporary_dir() as tmp:
+            arguments = self._arguments(tmp, pairs, responses)
+            config = load_yaml(self.root / arguments["config_path"])
+            config["scoring"]["source_aggregation"] = "median"
+            write_json(config, tmp / "changed.yaml")
+            arguments["config_path"] = tmp / "changed.yaml"
+            with self.assertRaisesRegex(ValueError, "hybrid_pvs_config_mismatch"):
+                run_hybrid_pvs_scoring(**arguments, dry_run=True)
+            self.assertFalse((tmp / "scores").exists())
+
+    def test_legacy_defaults_remain_and_v24_never_silently_uses_legacy(self) -> None:
+        cli = self._cli()
+        with patch.object(sys, "argv", ["score", "--dataset", "nfcorpus"]):
+            args = cli.parse_args()
+        self.assertEqual(Path(args.config), self.root / "configs/pcv_attack_config.yaml")
+        self.assertFalse(args.v24_hybrid)
+        with patch.object(sys, "argv", ["score", "--dataset", "nfcorpus", "--config",
+                                        str(self.root / "configs/restoration_first_v24.yaml")]):
+            with self.assertRaisesRegex(ValueError, "explicit --v24-hybrid"):
+                cli.main()
+        for extras in (["--dry-run"], ["--v24-hybrid"], ["--v24-hybrid", "--pairs", "x", "--dry-run", "--force"],
+                       ["--v24-hybrid", "--pairs", "x", "--dry-run", "--rag-config", "other.yaml"]):
+            with patch.object(sys, "argv", ["score", "--dataset", "nfcorpus", *extras]), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    cli.parse_args()
+                self.assertEqual(error.exception.code, 2)
 
 
 if __name__ == "__main__":

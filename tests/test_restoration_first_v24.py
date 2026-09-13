@@ -5292,14 +5292,14 @@ class V24LunaDirectTests(unittest.TestCase):
                 "input_kind": "development_fixture"}
 
     @classmethod
-    def candidates(cls) -> list[dict[str, str]]:
+    def candidates(cls) -> list[dict[str, object]]:
         return [
-            {"true_claim": cls.CLAIM, "original_entity": "Cedar Systems", "counter_entity": "Birch Systems",
-             "question_template": "Did Alder Robotics acquire {ENTITY} for $7.5 billion on 5 June 2021?"},
-            {"true_claim": cls.CLAIM, "original_entity": "$7.5 billion", "counter_entity": "$6.5 billion",
-             "question_template": "Did Alder Robotics acquire Cedar Systems for {ENTITY} on 5 June 2021?"},
-            {"true_claim": cls.CLAIM, "original_entity": "5 June 2021", "counter_entity": "5 June 2022",
-             "question_template": "Did Alder Robotics acquire Cedar Systems for $7.5 billion on {ENTITY}?"},
+            {"true_claim": cls.CLAIM, "original_entity": "Cedar Systems", "counter_entities": ["Birch Systems"],
+             "q_plus": "Did Alder Robotics acquire Cedar Systems for $7.5 billion on 5 June 2021?"},
+            {"true_claim": cls.CLAIM, "original_entity": "$7.5 billion", "counter_entities": ["$6.5 billion"],
+             "q_plus": "Did Alder Robotics acquire Cedar Systems for $7.5 billion on 5 June 2021?"},
+            {"true_claim": cls.CLAIM, "original_entity": "5 June 2021", "counter_entities": ["5 June 2022"],
+             "q_plus": "Did Alder Robotics acquire Cedar Systems for $7.5 billion on 5 June 2021?"},
         ]
 
     @staticmethod
@@ -5309,36 +5309,614 @@ class V24LunaDirectTests(unittest.TestCase):
         client = Mock(chat_with_metadata=Mock(return_value=response))
         return v24.LunaDirectCandidateProvider(client=client, profile={"model": "gpt-5.6-luna"})
 
-    def test_shared_template_entity_numeric_date_and_same_claim_different_slots(self):
+    def test_exact_replacement_entity_numeric_date_and_same_claim_different_slots(self):
         source = self.source(self.CLAIM)
         result = v24.select_luna_direct_pairs(source, self.candidates())
         self.assertTrue(result["eligible"])
         self.assertEqual(result["selected_pair_count"], 3)
-        for candidate, pair in zip(self.candidates(), result["selected_pairs"]):
+        expected_minus = [
+            "Did Alder Robotics acquire Birch Systems for $7.5 billion on 5 June 2021?",
+            "Did Alder Robotics acquire Cedar Systems for $6.5 billion on 5 June 2021?",
+            "Did Alder Robotics acquire Cedar Systems for $7.5 billion on 5 June 2022?",
+        ]
+        for candidate, pair, q_minus in zip(self.candidates(), result["selected_pairs"], expected_minus):
             self.assertEqual(pair["true_claim"], self.CLAIM)
-            self.assertEqual(pair["q_plus_text"], candidate["question_template"].replace("{ENTITY}", candidate["original_entity"]))
-            self.assertEqual(pair["q_minus_text"], candidate["question_template"].replace("{ENTITY}", candidate["counter_entity"]))
-            self.assertEqual(source["chunk_text"][slice(*pair["original_span"])], candidate["original_entity"])
-            self.assertFalse({"canonical_fact", "canonical_true", "supporting_evidence", "correction_eligibility"} & set(pair))
+            self.assertEqual(pair["q_plus_text"], candidate["q_plus"])
+            self.assertEqual(pair["q_minus_text"], q_minus)
+            self.assertEqual(source["chunk_text"][slice(*pair["claim_span"])], self.CLAIM)
+            self.assertFalse({"question_template", "original_span", "canonical_fact", "canonical_true",
+                              "supporting_evidence", "correction_eligibility"} & set(pair))
 
-    def test_return_order_dedup_and_stop_after_three_without_ranking(self):
+    def test_atomic_relation_from_long_claim_allows_counter_present_in_chunk(self):
+        claim = (
+            "The odds ratio (OR) of non-Hodgkin lymphoma for ever occupational exposure to meat was 1.18 "
+            "(95% confidence interval [CI] 0.95-1.46), that for exposure to beef meat was 1.22 "
+            "(95% CI 0.90-1.67), and that for exposure to chicken meat was 1.19 (95% CI 0.91-1.55)."
+        )
+        candidate = {
+            "true_claim": claim, "original_entity": "beef meat", "counter_entities": ["chicken meat"],
+            "q_plus": "Was the odds ratio of non-Hodgkin lymphoma for ever occupational exposure to beef meat 1.22?",
+        }
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(claim), provider)
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["q_plus_text"], candidate["q_plus"])
+        self.assertEqual(pair["q_minus_text"],
+                         "Was the odds ratio of non-Hodgkin lymphoma for ever occupational exposure to chicken meat 1.22?")
+        self.assertNotIn("1.18", pair["q_plus_text"])
+        self.assertNotIn("1.19", pair["q_plus_text"])
+        self.assertTrue(pair["counter_entity_literal_in_chunk"])
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("Q+ need not repeat them", prompt)
+        self.assertIn("The counter may appear in the chunk", prompt)
+        self.assertIn("Judge falsity for the selected atomic relation", prompt)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_original_can_repeat_in_claim_when_question_slot_is_unique(self):
+        claim = ("The Atlas trial enrolled 181 patients in 2018, and the Atlas trial ended in 2020; "
+                 "the Orion trial enrolled 281 patients in 2018.")
+        candidate = {"true_claim": claim, "original_entity": "Atlas trial", "counter_entities": ["Orion trial"],
+                     "q_plus": "Did the Atlas trial enroll 181 patients in 2018?"}
+        self.assertEqual(claim.count(candidate["original_entity"]), 2)
+        result = v24.select_luna_direct_pairs(self.source(claim), [candidate])
+        self.assertEqual(result["selected_pair_count"], 1)
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["q_minus_text"], "Did the Orion trial enroll 181 patients in 2018?")
+        self.assertNotIn("original_span", pair)
+
+    def test_counter_elsewhere_in_q_plus_is_rejected_without_repair(self):
+        claim = "The Atlas trial enrolled 181 patients in 2018."
+        candidate = {"true_claim": claim, "original_entity": "181", "counter_entities": ["2018"],
+                     "q_plus": "Did the Atlas trial enroll 181 patients in 2018?"}
+        result = v24.select_luna_direct_pairs(self.source(claim), [candidate])
+        self.assertEqual(result["rejection_reason_counts"], {"q_plus_contains_counter": 1})
+        self.assertEqual(result["selected_pairs"], [])
+        self.assertEqual(candidate["q_plus"], "Did the Atlas trial enroll 181 patients in 2018?")
+
+    def test_counter_in_q_plus_is_detected_ignoring_case(self):
+        candidate = {**self.candidates()[0],
+                     "q_plus": "Did Alder Robotics acquire Cedar Systems rather than BIRCH SYSTEMS?"}
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidate])
+        self.assertEqual(result["rejection_reason_counts"], {"q_plus_contains_counter": 1})
+        self.assertEqual(result["selected_pairs"], [])
+
+    def test_slot_matching_ignores_case_but_preserves_all_original_text(self):
+        cases = (
+            ("A hierarchical prior models the parent-child relationships.",
+             "A hierarchical prior", "a flat prior",
+             "Does a hierarchical prior model the parent-child relationships?",
+             "Does a flat prior model the parent-child relationships?"),
+            ("An octagonal enclosure has eight sides.", "An octagonal enclosure", "a triangular enclosure",
+             "Does an octagonal enclosure have eight sides?", "Does a triangular enclosure have eight sides?"),
+            ("An octagonal enclosure has eight sides.", "an octagonal enclosure", "a triangular enclosure",
+             "Does an octagonal enclosure have eight sides?", "Does a triangular enclosure have eight sides?"),
+            ("No Atlas participants withdrew.", "No", "two",
+             "Did no Atlas participants withdraw?", "Did two Atlas participants withdraw?"),
+            ("Eight patients enrolled in the Atlas trial.", "Eight", "ten",
+             "Did eight patients enroll in the Atlas trial?", "Did ten patients enroll in the Atlas trial?"),
+            (self.CLAIM, "CEDAR SYSTEMS", "Birch Systems",
+             "Did Alder Robotics acquire Cedar Systems for $7.5 billion on 5 June 2021?",
+             "Did Alder Robotics acquire Birch Systems for $7.5 billion on 5 June 2021?"),
+        )
+        for claim, original, counter, q_plus, q_minus in cases:
+            with self.subTest(original=original):
+                candidate = {"true_claim": claim, "original_entity": original,
+                             "counter_entities": [counter], "q_plus": q_plus}
+                before = dict(candidate)
+                source = self.source(claim)
+                result = v24.select_luna_direct_pairs(source, [candidate])
+                self.assertEqual(result["rejection_reason_counts"], {})
+                pair = result["selected_pairs"][0]
+                self.assertEqual(pair["q_plus_text"], q_plus)
+                self.assertEqual(pair["q_minus_text"], q_minus)
+                self.assertEqual(pair["original_entity"], original)
+                self.assertEqual(source["chunk_text"][slice(*pair["claim_span"])], claim)
+                self.assertEqual(candidate, before)
+
+    def test_mixed_case_multiple_slot_mentions_are_rejected(self):
+        candidate = {**self.candidates()[0], "q_plus": "Did Cedar Systems acquire CEDAR SYSTEMS?"}
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidate])
+        self.assertEqual(result["rejection_reason_counts"], {"q_plus_slot_count": 1})
+        self.assertEqual(result["selected_pairs"], [])
+
+    def test_slot_matching_requires_whole_contiguous_text_without_fuzzy_repair(self):
+        cases = (
+            ("The Atlas trial enrolled 18 patients.", "18", "28", "Did the Atlas trial enroll 181 patients?"),
+            ("The defect is common in Atlas samples.", "common", "rare", "Is the defect uncommon in Atlas samples?"),
+            ("The Atlas trial enrolled 181 patients.", "181 patients", "281 patients",
+             "Did the Atlas trial enroll 181  patients?"),
+            ("The Atlas protein was absent from the sample.", "was absent", "was present",
+             "Was the Atlas protein absent from the sample?"),
+        )
+        for claim, original, counter, q_plus in cases:
+            with self.subTest(original=original):
+                candidate = {"true_claim": claim, "original_entity": original,
+                             "counter_entities": [counter], "q_plus": q_plus}
+                result = v24.select_luna_direct_pairs(self.source(claim), [candidate])
+                self.assertEqual(result["rejection_reason_counts"], {"q_plus_slot_count": 1})
+                self.assertEqual(result["selected_pairs"], [])
+                self.assertEqual(candidate["q_plus"], q_plus)
+
+    def test_counter_substring_inside_other_value_is_not_a_counter_mention(self):
+        cases = (
+            ("The Atlas trial enrolled 181 patients.", "181", "18",
+             "Did the Atlas trial enroll 181 patients?", "Did the Atlas trial enroll 18 patients?"),
+            ("The defect is uncommon in Atlas samples.", "uncommon", "common",
+             "Is the defect uncommon in Atlas samples?", "Is the defect common in Atlas samples?"),
+        )
+        for claim, original, counter, q_plus, q_minus in cases:
+            with self.subTest(original=original):
+                candidate = {"true_claim": claim, "original_entity": original,
+                             "counter_entities": [counter], "q_plus": q_plus}
+                result = v24.select_luna_direct_pairs(self.source(claim), [candidate])
+                self.assertEqual(result["rejection_reason_counts"], {})
+                self.assertEqual(result["selected_pairs"][0]["q_minus_text"], q_minus)
+
+    def test_direct_question_does_not_duplicate_their_at_slot_boundary(self):
+        claim = "Child nodes inherit their model parameters from their parents, not from their children."
+        candidate = {"true_claim": claim, "original_entity": "their parents", "counter_entities": ["their children"],
+                     "q_plus": "Do child nodes inherit their model parameters from their parents?"}
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(claim), provider)
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["q_minus_text"], "Do child nodes inherit their model parameters from their children?")
+        self.assertEqual(pair["q_plus_text"], candidate["q_plus"])
+        self.assertNotIn("their their", pair["q_plus_text"] + pair["q_minus_text"])
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("Do not duplicate words such as their their", prompt)
+        self.assertIn("replacement must leave a grammatical, meaningful question", prompt)
+
+    def test_target_name_or_abbreviation_does_not_leave_conflicting_full_name(self):
+        claim = "COVID-19 is caused by severe acute respiratory syndrome coronavirus 2 (SARS-CoV-2)."
+        cases = (
+            ("SARS-CoV-2", "MERS-CoV", "Is COVID-19 caused by SARS-CoV-2?", "Is COVID-19 caused by MERS-CoV?"),
+            ("severe acute respiratory syndrome coronavirus 2", "Middle East respiratory syndrome coronavirus",
+             "Is COVID-19 caused by severe acute respiratory syndrome coronavirus 2?",
+             "Is COVID-19 caused by Middle East respiratory syndrome coronavirus?"),
+        )
+        for original, counter, q_plus, expected_minus in cases:
+            with self.subTest(original=original):
+                candidate = {"true_claim": claim, "original_entity": original,
+                             "counter_entities": [counter], "q_plus": q_plus}
+                provider = self.provider(json.dumps({"candidates": [candidate]}))
+                result = v24.construct_luna_direct_pairs(self.source(claim), provider)
+                pair = result["selected_pairs"][0]
+                self.assertEqual(pair["q_plus_text"], q_plus)
+                self.assertEqual(pair["q_minus_text"], expected_minus)
+                self.assertNotIn("severe acute respiratory syndrome coronavirus 2 (MERS-CoV)", pair["q_minus_text"])
+                prompt = provider.client.chat_with_metadata.call_args.args[0]
+                self.assertIn("Use one complete name or abbreviation for the designated target", prompt)
+                self.assertIn("do not leave its other name outside the replaced span", prompt)
+                self.assertIn("do not add an alias-repair step", prompt)
+                # 只验证已给定的合格草稿与发出的 Prompt，不把 exact replacement 当作别名 verifier。
+                provider.client.chat_with_metadata.assert_called_once()
+
+    def test_return_order_and_dedup_check_every_candidate_without_ranking(self):
         candidates = self.candidates()
-        duplicate = {**candidates[0], "counter_entity": "Oak Systems"}
+        duplicate = dict(candidates[0])
         result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidates[0], duplicate, *candidates[1:], {}])
         self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 2, 3])
-        self.assertEqual(result["rejection_reason_counts"], {"duplicate_claim_slot": 1})
-        self.assertEqual(result["processed_candidate_count"], 4)
-        self.assertEqual(result["unprocessed_candidate_count"], 1)
+        self.assertEqual(result["rejection_reason_counts"], {"duplicate_claim_slot_counter": 1, "candidate_schema": 1})
+        self.assertEqual(result["valid_candidate_count"], 3)
+        self.assertEqual(result["processed_candidate_count"], 5)
+        self.assertEqual(result["unprocessed_candidate_count"], 0)
 
-    def test_normalized_claim_slot_duplicates_and_rejected_candidate_does_not_claim_slot(self):
+    def test_same_slot_distinct_counters_fill_three_pairs_in_one_call(self):
+        base = self.candidates()[1]
+        counters = ["$6.5 billion", "$8.5 billion", "$9.5 billion"]
+        candidates = [{**base, "counter_entities": counters}]
+        provider = self.provider(json.dumps({"candidates": candidates}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        pairs = result["selected_pairs"]
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["valid_candidate_count"], 1)
+        self.assertEqual(result["valid_slot_count"], 1)
+        self.assertEqual(result["valid_pair_count"], 3)
+        self.assertEqual(result["counter_candidate_count"], 3)
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in pairs], [(0, 0), (0, 1), (0, 2)])
+        self.assertEqual({p["q_plus_text"] for p in pairs}, {base["q_plus"]})
+        self.assertEqual(len({p["q_minus_text"] for p in pairs}), 3)
+        self.assertEqual(len({p["pair_id"] for p in pairs}), 3)
+        for counter, pair in zip(counters, pairs):
+            self.assertEqual(pair["q_minus_text"], base["q_plus"].replace(base["original_entity"], counter, 1))
+            self.assertEqual(pair["counter_entity"], counter)
+            self.assertNotIn("counter_entities", pair)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        for requirement in (
+            "For every valid factual slot that you choose to output, actively try to generate three "
+            "semantically distinct counterfactual values",
+            "Do not stop after finding only one valid counter",
+            "Generate these plausible counter_entities in this same call",
+            "even when other slots are available",
+            "All counters share the single true_claim, original_entity, and q_plus",
+            "Each alternative must independently meet the same falsity, semantic-role, and grammar requirements",
+            "at most 8 slot candidates, each with at most 3 counters",
+            "Code first selects the first valid counter of each different slot in slot return order",
+            "A1/B1/C1 for three slots, A1/B1/A2 for two slots, or A1/A2/A3 for one slot",
+        ):
+            self.assertIn(requirement, prompt)
+        self.assertNotIn("generate up to three", prompt)
+        self.assertNotIn("Only if fewer than three distinct valid slots qualify", prompt)
+        self.assertNotIn("do not generate backups for every slot from the start", prompt)
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_backup_prompt_forbids_synonym_padding_in_the_single_generation(self):
+        claim = "Components in distinct clusters are analyzed separately."
+        candidate = {"true_claim": claim, "original_entity": "separately", "counter_entities": ["together"],
+                     "q_plus": "Are components in distinct clusters analyzed separately?"}
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(claim), provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        for requirement in (
+            "Return fewer than three counters for that slot only when additional same-role and clearly false "
+            "counterfactual values genuinely cannot be constructed",
+            "Counters must be semantically different from one another",
+            "not synonyms, aliases, or near paraphrases",
+            "grouped together / clustered together",
+            "Each alternative must independently meet the same falsity, semantic-role, and grammar requirements",
+            "Do not pad a binary attribute with synonymous opposites just to reach three",
+            "If no clearly different false counter qualifies, leave the source short",
+        ):
+            self.assertIn(requirement, prompt)
+        # 近义判断属于同次 Luna 的语义要求；mock 不证明真实模型已遵守，也不增加本地语义 verifier。
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        self.assertIn("not_independent_verification", result["semantic_validity_basis"])
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_distinct_slots_precede_earlier_same_slot_backups(self):
+        entity, price, date = self.candidates()
+        price["counter_entities"] = ["$6.5 billion", "$8.5 billion", "$9.5 billion"]
+        date["counter_entities"] = ["5 June 2022", "5 June 2023"]
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [price, date, entity])
+        self.assertEqual(result["valid_slot_count"], 3)
+        self.assertEqual(result["valid_pair_count"], 6)
+        self.assertEqual(result["processed_candidate_count"], 3)
+        self.assertEqual(result["processed_counter_count"], 6)
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in result["selected_pairs"]],
+                         [(0, 0), (1, 0), (2, 0)])
+        self.assertTrue(result["candidate_decisions"][0]["counter_decisions"][1]["accepted"])
+        self.assertFalse(result["candidate_decisions"][0]["counter_decisions"][1]["selected"])
+
+    def test_two_distinct_slots_fill_only_remaining_place_in_return_order(self):
+        _, price, date = self.candidates()
+        candidates = [{**price, "counter_entities": ["$6.5 billion", "$8.5 billion", "$9.5 billion"]},
+                      {**date, "counter_entities": ["5 June 2022", "5 June 2023"]}]
+        before = json.dumps(candidates)
+        source = self.source(self.CLAIM)
+        result = v24.select_luna_direct_pairs(source, candidates)
+        self.assertEqual(result["valid_slot_count"], 2)
+        self.assertEqual(result["valid_pair_count"], 5)
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in result["selected_pairs"]],
+                         [(0, 0), (1, 0), (0, 1)])
+        self.assertEqual(result, v24.select_luna_direct_pairs(source, candidates))
+        self.assertEqual(json.dumps(candidates), before)
+
+    def test_eight_slot_groups_with_three_counters_each_are_all_checked_in_one_call(self):
+        candidates = [
+            {"true_claim": f"Trial {index} enrolled {181 + index} patients.",
+             "original_entity": str(181 + index),
+             "q_plus": f"Did Trial {index} enroll {181 + index} patients?",
+             "counter_entities": [str(offset + index) for offset in (281, 381, 481)]}
+            for index in range(8)
+        ]
+        before = json.dumps(candidates)
+        provider = self.provider(json.dumps({"candidates": candidates}))
+        source = self.source("\n".join(c["true_claim"] for c in candidates))
+        result = v24.construct_luna_direct_pairs(source, provider)
+        self.assertEqual(result["candidate_unit"], "factual_slot")
+        self.assertEqual(result["processed_candidate_count"], 8)
+        self.assertEqual(result["counter_candidate_count"], 24)
+        self.assertEqual(result["processed_counter_count"], 24)
+        self.assertEqual(result["valid_slot_count"], 8)
+        self.assertEqual(result["valid_pair_count"], 24)
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in result["selected_pairs"]],
+                         [(0, 0), (1, 0), (2, 0)])
+        self.assertTrue(all(c["accepted"] for d in result["candidate_decisions"] for c in d["counter_decisions"]))
+        self.assertEqual(sum(c["selected"] for d in result["candidate_decisions"] for c in d["counter_decisions"]), 3)
+        self.assertEqual(json.dumps(candidates), before)
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_q_plus_cannot_contain_any_counter_from_its_group(self):
+        for counter_index in range(3):
+            with self.subTest(counter_index=counter_index):
+                counters = ["Oak Systems", "Pine Systems"]
+                counters.insert(counter_index, "Birch Systems")
+                candidate = {**self.candidates()[0], "counter_entities": counters,
+                             "q_plus": "Did Alder Robotics acquire Cedar Systems rather than BIRCH SYSTEMS?"}
+                before = json.dumps(candidate)
+                result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidate])
+                self.assertEqual(result["selected_pairs"], [])
+                self.assertEqual(result["rejection_reason_counts"], {"q_plus_contains_counter": 1})
+                self.assertEqual(result["processed_counter_count"], 3)
+                self.assertTrue(all(not d["accepted"] for d in result["candidate_decisions"][0]["counter_decisions"]))
+                self.assertEqual(json.dumps(candidate), before)
+
+    def test_counter_duplicates_within_and_across_groups_do_not_fill_extra_pairs(self):
+        base = self.candidates()[1]
+        candidates = [
+            {**base, "counter_entities": ["$6.5 billion", "$6.5 BILLION", "$8.5 billion"]},
+            {**base, "counter_entities": ["$8.5 billion", "$9.5 billion"]},
+        ]
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), candidates)
+        self.assertEqual(result["valid_slot_count"], 1)
+        self.assertEqual(result["valid_pair_count"], 3)
+        self.assertEqual(result["rejection_reason_counts"], {"duplicate_claim_slot_counter": 2})
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in result["selected_pairs"]],
+                         [(0, 0), (0, 2), (1, 1)])
+        self.assertEqual(len({p["pair_id"] for p in result["selected_pairs"]}), 3)
+
+    def test_invalid_counter_lists_are_rejected_without_truncation_or_topup(self):
+        for counters, reason in (
+            ([], "counter_entities_count"),
+            (["281", "381", "481", "581"], "counter_entities_count"),
+            ("281", "candidate_schema"),
+            (("281", "381"), "candidate_schema"),
+            (["281", None], "candidate_schema"),
+            (["281", ""], "candidate_schema"),
+        ):
+            with self.subTest(counters=counters):
+                candidate = {**self.candidates()[1], "counter_entities": counters}
+                result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [candidate])
+                self.assertEqual(result["selected_pair_count"], 0)
+                self.assertIn(reason, result["candidate_decisions"][0]["rejection_reasons"])
+        candidate = {**self.candidates()[1], "counter_entities": ["281", "381", "481", "581"]}
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_duplicate_or_original_counters_do_not_hide_later_valid_slots(self):
+        entity, price, date = self.candidates()
+        price["counter_entities"] = [price["original_entity"], "$6.5 billion", "$6.5 BILLION"]
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [price, date, entity])
+        self.assertEqual(result["rejection_reason_counts"],
+                         {"counter_equals_original": 1, "duplicate_claim_slot_counter": 1})
+        self.assertEqual([(p["candidate_index"], p["counter_index"]) for p in result["selected_pairs"]],
+                         [(0, 1), (1, 0), (2, 0)])
+        self.assertTrue(result["eligible"])
+
+    def test_flat_counter_schema_is_rejected_without_automatic_conversion(self):
+        candidate = self.candidates()[0]
+        candidate["counter_entity"] = candidate.pop("counter_entities")[0]
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(result["rejection_reason_counts"], {"candidate_schema": 1})
+        self.assertEqual(result["selected_pair_count"], 0)
+        self.assertIn("counter_entity", candidate)
+        self.assertNotIn("counter_entities", candidate)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_repeated_slot_groups_cannot_exceed_three_valid_counters(self):
+        base = self.candidates()[1]
+        candidates = [{**base, "counter_entities": [f"${index}.5 billion"]} for index in range(8, 16)]
+        provider = self.provider(json.dumps({"candidates": candidates}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(result["processed_candidate_count"], 8)
+        self.assertEqual(result["unprocessed_candidate_count"], 0)
+        self.assertEqual(result["valid_candidate_count"], 3)
+        self.assertEqual(result["valid_slot_count"], 1)
+        self.assertEqual(result["valid_pair_count"], 3)
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 1, 2])
+        self.assertEqual(result["rejection_reason_counts"], {"slot_counter_budget_exceeded": 5})
+        self.assertEqual(result["processed_counter_count"], 8)
+        self.assertEqual(sum(d["selected"] for d in result["candidate_decisions"]), 3)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_reused_slot_requires_exact_same_q_plus_without_repair(self):
+        first = self.candidates()[1]
+        backup = {**first, "counter_entities": ["$8.5 billion"]}
+        rewritten = {**backup, "q_plus": "Was the price paid by Alder Robotics for Cedar Systems on 5 June 2021 $7.5 billion?"}
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [first, rewritten, backup])
+        self.assertEqual(result["candidate_decisions"][1]["rejection_reasons"], ["same_slot_q_plus_mismatch"])
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 2])
+        self.assertEqual(result["selected_pairs"][1]["q_plus_text"], first["q_plus"])
+        self.assertNotEqual(rewritten["q_plus"], first["q_plus"])
+
+    def test_rejected_candidates_do_not_reserve_counter_or_shared_question(self):
+        base = self.candidates()[1]
+        invalid = {**base, "q_plus": base["q_plus"].replace(base["original_entity"], base["counter_entities"][0], 1)}
+        candidates = [invalid, base, {**base, "counter_entities": ["$8.5 billion"]},
+                      {**base, "counter_entities": ["$9.5 billion"]}]
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), candidates)
+        self.assertEqual(result["candidate_decisions"][0]["rejection_reasons"],
+                         ["q_plus_slot_count", "q_plus_contains_counter"])
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [1, 2, 3])
+        self.assertTrue(result["eligible"])
+
+    def test_same_slot_fallback_preserves_existing_gates_and_no_topup(self):
+        base = self.candidates()[1]
+        candidates = [base, {**base, "counter_entities": [base["original_entity"]]},
+                      {**base, "counter_entities": ["$8.5 billion"], "q_plus": "Was the price $8.5 billion?"},
+                      {**base, "counter_entities": ["$9.5 billion"], "true_claim": self.CLAIM.lower()}]
+        provider = self.provider(json.dumps({"candidates": candidates}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(result["rejection_reason_counts"], {
+            "counter_equals_original": 1, "q_plus_slot_count": 1, "claim_not_exact_chunk_span": 1,
+            "q_plus_contains_counter": 1,
+        })
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_same_original_entity_in_different_claims_is_a_distinct_slot(self):
+        candidates = [
+            {"true_claim": f"The {name} trial enrolled 181 patients.", "original_entity": "181",
+             "counter_entities": ["281"], "q_plus": f"Did the {name} trial enroll 181 patients?"}
+            for name in ("Atlas", "Orion", "Helios")
+        ]
+        result = v24.select_luna_direct_pairs(self.source("\n".join(c["true_claim"] for c in candidates)), candidates)
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["rejection_reason_counts"], {})
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 1, 2])
+
+    def test_later_atomic_candidates_selected_after_first_three_context_rejections(self):
+        dependent_claim = "We conducted a study including 2,007 cases, 339 cases and 2,462 controls."
+        atomic_claim = "The odds ratios for meat, beef meat and chicken meat were 1.18, 1.22 and 1.19, respectively."
+        candidates = [
+            {"true_claim": dependent_claim, "original_entity": value, "counter_entities": ["999"],
+             "q_plus": f"Were {value} participants included?"}
+            for value in ("2,007", "339", "2,462")
+        ] + [
+            {"true_claim": atomic_claim, "original_entity": "1.18", "counter_entities": ["1.22"],
+             "q_plus": "Was the odds ratio for meat 1.18?"},
+            {"true_claim": atomic_claim, "original_entity": "beef meat", "counter_entities": ["chicken meat"],
+             "q_plus": "Was the odds ratio for beef meat 1.22?"},
+            {"true_claim": atomic_claim, "original_entity": "chicken meat", "counter_entities": ["beef meat"],
+             "q_plus": "Was the odds ratio for chicken meat 1.19?"},
+        ]
+        result = v24.select_luna_direct_pairs(self.source(dependent_claim + "\n" + atomic_claim), candidates)
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [3, 4, 5])
+        self.assertEqual(result["rejection_reason_counts"], {"unresolved_discourse_reference": 3})
+        self.assertEqual(result["valid_candidate_count"], 3)
+        self.assertEqual(result["processed_candidate_count"], 6)
+        self.assertTrue(result["eligible"])
+
+    def test_observed_discourse_references_rejected_without_repair(self):
+        claims = (
+            "We conducted a study including 181 patients.",
+            "We analyze 181 observations.",
+            "We study 181 video frames.",
+            "We found 181 errors.",
+            "Experiments used 181 video frames of real road scenes we captured.",
+            "Our proposed framework processes 181 frames per second.",
+            "Our framework processes 181 frames per second.",
+            "Our method processes 181 frames per second.",
+            "Our model processes 181 frames per second.",
+            "Our approach processes 181 frames per second.",
+            "This approach processes 181 frames per second.",
+            "This framework processes 181 frames per second.",
+            "This method processes 181 frames per second.",
+            "This review includes 181 reports.",
+            "The latter processes 181 frames per second.",
+            "The former processes 181 frames per second.",
+            "WE\nCONDUCTED a study including 181 patients.",
+        )
+        for claim in claims:
+            with self.subTest(claim=claim):
+                candidate = {"true_claim": claim, "original_entity": "181", "counter_entities": ["281"],
+                             "q_plus": "Were 181 observations recorded?"}
+                result = v24.select_luna_direct_pairs(self.source(claim), [candidate])
+                self.assertEqual(result["rejection_reason_counts"], {"unresolved_discourse_reference": 1})
+                self.assertEqual(result["selected_pairs"], [])
+                self.assertEqual(result["valid_candidate_count"], 0)
+                self.assertEqual(candidate["true_claim"], claim)
+
+    def test_discourse_gate_checks_claim_only_without_requiring_method_names(self):
+        claim = "A graph-cut-based detection approach is given to extract a specified road region."
+        candidate = {"true_claim": claim, "original_entity": "graph-cut-based",
+                     "counter_entities": ["homography-based"],
+                     "q_plus": "Is a graph-cut-based detection approach given to extract a specified road region?"}
+        source = self.source("We conducted a study.\n" + claim)
+        result = v24.select_luna_direct_pairs(source, [candidate])
+        self.assertEqual(result["rejection_reason_counts"], {})
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(result["selected_pairs"][0]["true_claim"], claim)
+
+    def test_q_plus_containing_counter_instead_of_original_is_rejected(self):
+        candidate = self.candidates()[0]
+        candidate["q_plus"] = candidate["q_plus"].replace(candidate["original_entity"], candidate["counter_entities"][0])
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("Q+ is the true factual question using original_entity", prompt)
+        self.assertIn("case-insensitive exact contiguous matching", prompt)
+        self.assertIn("q_plus must not contain any value from counter_entities", prompt)
+        self.assertIn("Do not pre-substitute counter_entity into that slot", prompt)
+        self.assertEqual(result["rejection_reason_counts"], {"q_plus_slot_count": 1, "q_plus_contains_counter": 1})
+        self.assertEqual(result["selected_pairs"], [])
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_eight_candidates_all_screened_but_only_first_three_selected_in_one_call(self):
+        candidates = [
+            {"true_claim": f"Trial {index} enrolled {181 + index} patients.",
+             "original_entity": str(181 + index), "counter_entities": [str(281 + index)],
+             "q_plus": f"Did Trial {index} enroll {181 + index} patients?"}
+            for index in range(8)
+        ]
+        provider = self.provider(json.dumps({"candidates": candidates}))
+        result = v24.construct_luna_direct_pairs(self.source("\n".join(c["true_claim"] for c in candidates)), provider)
+        self.assertEqual(result["processed_candidate_count"], 8)
+        self.assertEqual(result["unprocessed_candidate_count"], 0)
+        self.assertEqual(result["valid_candidate_count"], 8)
+        self.assertEqual([p["candidate_index"] for p in result["selected_pairs"]], [0, 1, 2])
+        self.assertTrue(all(d["accepted"] for d in result["candidate_decisions"]))
+        self.assertEqual([d["candidate_index"] for d in result["candidate_decisions"] if d["selected"]], [0, 1, 2])
+        self.assertEqual(provider.logical_api_calls, 1)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("In this single response, review the whole chunk for distinct claim/slot combinations", prompt)
+        self.assertIn("Do not stop after the first valid candidate", prompt)
+        self.assertIn("return all candidates that meet the requirements, up to 8", prompt)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_duplicates_of_valid_unselected_candidates_are_still_rejected(self):
+        fourth = {**self.candidates()[0], "original_entity": "Alder Robotics", "counter_entities": ["Birch Robotics"]}
+        duplicate = {**fourth, "counter_entities": [" birch   robotics "]}
+        result = v24.select_luna_direct_pairs(self.source(self.CLAIM), [*self.candidates(), fourth, duplicate])
+        self.assertEqual(result["valid_candidate_count"], 4)
+        self.assertEqual(result["selected_pair_count"], 3)
+        self.assertTrue(result["candidate_decisions"][3]["accepted"])
+        self.assertFalse(result["candidate_decisions"][3]["selected"])
+        self.assertEqual(result["candidate_decisions"][4]["rejection_reasons"], ["duplicate_claim_slot_counter"])
+
+    def test_ninth_candidate_is_rejected_without_another_generation(self):
+        provider = self.provider(json.dumps({"candidates": self.candidates() * 3}))
+        with self.assertRaisesRegex(ValueError, "luna_direct_candidate_budget_exceeded"):
+            v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(provider.logical_api_calls, 1)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_insufficient_candidates_do_not_trigger_topup(self):
+        provider = self.provider(json.dumps({"candidates": self.candidates()[:1]}))
+        result = v24.construct_luna_direct_pairs(self.source(self.CLAIM), provider)
+        self.assertEqual(result["status"], "source_eligibility_insufficient")
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["selected_pair_count"], 1)
+        self.assertEqual(provider.logical_api_calls, 1)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("If fewer qualify, return fewer; do not invent candidates", prompt)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_exact_span_case_drift_remains_rejected_without_normalization(self):
+        chunk = "Specifically, the parent-child relationships are modeled with a hierarchical prior."
+        claim = "The parent-child relationships are modeled with a hierarchical prior."
+        candidate = {"true_claim": claim, "original_entity": "hierarchical prior", "counter_entities": ["flat prior"],
+                     "q_plus": "Are the parent-child relationships modeled with a hierarchical prior?"}
+        provider = self.provider(json.dumps({"candidates": [candidate]}))
+        result = v24.construct_luna_direct_pairs(self.source(chunk), provider)
+        prompt = provider.client.chat_with_metadata.call_args.args[0]
+        self.assertIn("preserving case, spelling and punctuation", prompt)
+        self.assertIn("A valid excerpt may start with a lowercase letter; do not capitalize or rewrite it", prompt)
+        self.assertIn("Rephrase only q_plus, never true_claim", prompt)
+        self.assertEqual(result["rejection_reason_counts"], {"claim_not_exact_chunk_span": 1})
+        self.assertEqual(result["selected_pairs"], [])
+        self.assertEqual(candidate["true_claim"], claim)
+        provider.client.chat_with_metadata.assert_called_once()
+
+    def test_verbatim_lowercase_claim_allows_natural_question_case(self):
+        claim = "the parent-child relationships are modeled with a hierarchical prior."
+        candidate = {"true_claim": claim, "original_entity": "hierarchical prior", "counter_entities": ["flat prior"],
+                     "q_plus": "Are the parent-child relationships modeled with a hierarchical prior?"}
+        result = v24.select_luna_direct_pairs(self.source("Specifically, " + claim), [candidate])
+        self.assertEqual(result["selected_pair_count"], 1)
+        pair = result["selected_pairs"][0]
+        self.assertEqual(pair["true_claim"], claim)
+        self.assertEqual(pair["q_plus_text"], candidate["q_plus"])
+        self.assertEqual(pair["q_minus_text"], "Are the parent-child relationships modeled with a flat prior?")
+
+    def test_normalized_claim_slot_counter_duplicates_and_rejected_candidate_does_not_claim_slot(self):
         first = self.candidates()[0]
-        lower = {k: v.lower() for k, v in first.items()}
-        lower["question_template"] = lower["question_template"].replace("{entity}", "{ENTITY}")
+        lower = {k: v.lower() if isinstance(v, str) else [counter.lower() for counter in v]
+                 for k, v in first.items()}
         source = self.source(self.CLAIM + "\n" + self.CLAIM.lower())
         result = v24.select_luna_direct_pairs(source, [first, lower])
         self.assertEqual(result["selected_pair_count"], 1)
-        self.assertEqual(result["candidate_decisions"][1]["rejection_reasons"], ["duplicate_claim_slot"])
-        bad = {**first, "question_template": "Missing placeholder?"}
+        self.assertEqual(result["candidate_decisions"][1]["rejection_reasons"], ["duplicate_claim_slot_counter"])
+        bad = {**first, "q_plus": "Did Alder Robotics acquire a company?"}
         result = v24.select_luna_direct_pairs(source, [bad, first])
         self.assertEqual(result["selected_pairs"][0]["candidate_index"], 1)
 
@@ -5347,12 +5925,17 @@ class V24LunaDirectTests(unittest.TestCase):
         cases = [
             ({**candidate, "true_claim": self.CLAIM.lower()}, "claim_not_exact_chunk_span"),
             ({**candidate, "original_entity": "Missing"}, "original_not_exact_claim_substring"),
-            ({**candidate, "counter_entity": " cedar   systems "}, "counter_equals_original"),
-            ({**candidate, "question_template": "Did {ENTITY} acquire {ENTITY}?"}, "question_template_slot_count"),
-            ({**candidate, "question_template": ""}, "candidate_schema"),
+            ({**candidate, "counter_entities": [" cedar   systems "]}, "counter_equals_original"),
+            ({**candidate, "q_plus": "Did Cedar Systems acquire Cedar Systems?"}, "q_plus_slot_count"),
+            ({**candidate, "q_plus": "Did something happen?"}, "q_plus_slot_count"),
+            ({**candidate, "q_plus": candidate["q_plus"].replace("Cedar Systems", "Cedar  Systems")}, "q_plus_slot_count"),
+            ({**candidate, "q_plus": ""}, "candidate_schema"),
+            ({**candidate, "q_plus": "Did Cedar Systems acquire {ENTITY}?"}, "unexpected_entity_placeholder"),
+            ({**candidate, "counter_entities": ["{ENTITY}"]}, "unexpected_entity_placeholder"),
             ({**candidate, "canonical_fact": self.CLAIM}, "candidate_schema"),
-            ({**candidate, "q_plus": "Did something happen?"}, "candidate_schema"),
-            ({**candidate, "counter_entity": 123}, "candidate_schema"),
+            ({**candidate, "question_template": "Did someone acquire {ENTITY}?"}, "candidate_schema"),
+            ({**candidate, "q_minus": "Did someone acquire Birch Systems?"}, "candidate_schema"),
+            ({**candidate, "counter_entities": [123]}, "candidate_schema"),
             (None, "candidate_schema"),
         ]
         for value, reason in cases:
@@ -5360,9 +5943,6 @@ class V24LunaDirectTests(unittest.TestCase):
                 result = v24.select_luna_direct_pairs(source, [value])
                 self.assertFalse(result["eligible"])
                 self.assertIn(reason, result["candidate_decisions"][0]["rejection_reasons"])
-        repeated = "Alice met Alice in 2020."
-        bad_slot = {**candidate, "true_claim": repeated, "original_entity": "Alice"}
-        self.assertIn("ambiguous_target_slot", v24.select_luna_direct_pairs(self.source(repeated), [bad_slot])["candidate_decisions"][0]["rejection_reasons"])
 
     def test_counter_presence_is_diagnostic_and_absence_is_not_truth_verification(self):
         source = self.source(self.CLAIM + " Birch Systems was not acquired in that transaction.")
@@ -5384,23 +5964,31 @@ class V24LunaDirectTests(unittest.TestCase):
         provider.client.chat_with_metadata.assert_called_once()
 
     def test_empty_output_for_pronoun_list_or_uncertain_truth_uses_no_repair(self):
-        # Mock 只验证空结果和调用契约；真实语义是否被跳过由八例 smoke 检查。
+        # Mock 只验证空结果和调用契约，不能证明新 Prompt 实际完成语义筛选。
         for text in ("It was founded in 2018.", "The committee includes Alice, Bob, and Carol.",
-                     "Aspirin can relieve pain."):
+                     "Aspirin can relieve pain.", "We achieve 91% accuracy.", "Our method detects roads.",
+                     "This approach uses a hierarchical prior.", "The latter improves accuracy.",
+                     "The collection includes aspirin.", "The detector uses a camera.",
+                     "Smoking is associated with lung cancer.", "The detector extracts roads.",
+                     "Road Detection and Tracking"):
             with self.subTest(chunk=text):
                 provider = self.provider('{"candidates": []}')
                 result = v24.construct_luna_direct_pairs(self.source(text), provider)
                 self.assertEqual(result["status"], "source_eligibility_insufficient")
                 self.assertEqual(result["candidate_count"], 0)
                 self.assertEqual(provider.logical_api_calls, 1)
+                provider.client.chat_with_metadata.assert_called_once()
 
     def test_prompt_has_chunk_only_and_explicit_counterfactual_validity_requirement(self):
         source = {**self.source(self.CLAIM), "scenario": "PRIVATE_SCENARIO_LABEL"}
         prompt = v24.build_luna_direct_prompt(source)
         self.assertNotIn("PRIVATE_SCENARIO_LABEL", prompt)
-        self.assertIn("clearly false or contradictory, supported by the chunk", prompt)
-        self.assertIn("Counter absence alone proves nothing", prompt)
-        self.assertIn("Do not predict victim behavior or require a unique restoration target", prompt)
+        self.assertIn("If this cannot be determined confidently from the chunk, skip the candidate", prompt)
+        self.assertIn("Its absence from the chunk proves nothing", prompt)
+        self.assertIn("Do not predict victim behavior or require restoration to the original entity", prompt)
+        self.assertIn("must occur in Q+ exactly once as the complete designated target", prompt)
+        self.assertNotIn("question_template", prompt)
+        self.assertNotIn("{ENTITY}", prompt)
         for key in ("membership", "retriever_output", "victim_response", "pvs", "auc", "formal_result"):
             with self.assertRaises(ValueError):
                 v24.build_luna_direct_prompt({**source, key: "private"})
@@ -5417,10 +6005,11 @@ class V24LunaDirectTests(unittest.TestCase):
         for requirement in (
             "Without adjacent sentences, can a reader understand who or what does what?",
             "no paper, model, method, or study name is required",
-            "Skip incomplete claims and unresolved references",
-            "our proposed framework, our method, this approach, we achieve, or the latter method",
-            "Never repair, add names from titles, or join sentences",
-            "Do not introduce unresolved references",
+            "Skip incomplete claims or unresolved references",
+            "we analyze, we study, our method, our framework, our proposed framework",
+            "this approach, this method, this review, or the former/the latter",
+            "Never repair, add names from titles, join sentences, or reconstruct context",
+            "natural, complete, self-contained yes/no question",
         ):
             self.assertIn(requirement, instructions)
         self.assertNotIn("any study, experiment, population or conditions needed", instructions)
@@ -5434,14 +6023,14 @@ class V24LunaDirectTests(unittest.TestCase):
         claim = "The Atlas road-tracking framework processed its single test video at exactly 34 frames per second."
         candidate = {
             "true_claim": claim, "original_entity": "34 frames per second",
-            "counter_entity": "30 frames per second",
-            "question_template": "Did the Atlas road-tracking framework process its single test video at exactly {ENTITY}?",
+            "counter_entities": ["30 frames per second"],
+            "q_plus": "Did the Atlas road-tracking framework process its single test video at exactly 34 frames per second?",
         }
         source = self.source(claim)
         provider = self.provider(json.dumps({"candidates": [candidate]}))
         result = v24.construct_luna_direct_pairs(source, provider)
         prompt = provider.client.chat_with_metadata.call_args.args[0]
-        self.assertIn("Pronouns resolved within the claim are allowed", prompt)
+        self.assertIn("Pronouns resolved within the quoted claim are allowed", prompt)
         self.assertEqual(result["selected_pair_count"], 1)
         self.assertEqual(result["selected_pairs"][0]["true_claim"], claim)
         self.assertIn("Atlas road-tracking framework", result["selected_pairs"][0]["q_minus_text"])
@@ -5450,31 +6039,33 @@ class V24LunaDirectTests(unittest.TestCase):
     def test_descriptive_subjects_and_ordinary_oppositions_survive_mock_construction(self):
         cases = (
             ("A graph-cut-based detection approach processes 181 video frames per batch.",
-             "181", "281", "Does a graph-cut-based detection approach process {ENTITY} video frames per batch?"),
+             "181", "281", "Does a graph-cut-based detection approach process 181 video frames per batch?"),
             ("The parent-child relationships are modeled with a hierarchical prior.",
-             "hierarchical prior", "flat prior", "Are the parent-child relationships modeled with a {ENTITY}?"),
+             "hierarchical prior", "flat prior", "Are the parent-child relationships modeled with a hierarchical prior?"),
             ("Excessive inflammation is a major cause of pathology.",
-             "major", "minor", "Is excessive inflammation a {ENTITY} cause of pathology?"),
+             "major", "minor", "Is excessive inflammation a major cause of pathology?"),
             ("An unmanned aerial vehicle (UAV) has many applications in a variety of fields.",
-             "many applications", "no applications", "Does an unmanned aerial vehicle (UAV) have {ENTITY} in a variety of fields?"),
+             "many applications", "no applications", "Does an unmanned aerial vehicle (UAV) have many applications in a variety of fields?"),
+            ("The detector uses only a camera, not radar.",
+             "a camera", "radar", "Does the detector use only a camera?"),
         )
-        for claim, original, counter, template in cases:
+        for claim, original, counter, q_plus in cases:
             with self.subTest(original=original):
                 candidate = {"true_claim": claim, "original_entity": original,
-                             "counter_entity": counter, "question_template": template}
+                             "counter_entities": [counter], "q_plus": q_plus}
                 provider = self.provider(json.dumps({"candidates": [candidate]}))
                 result = v24.construct_luna_direct_pairs(self.source(claim), provider)
                 prompt = provider.client.chat_with_metadata.call_args.args[0]
-                self.assertIn("Complete graph-cut or parent-child modeling statements are allowed", prompt)
-                self.assertIn("many applications -> no applications", prompt)
-                self.assertIn("Do not invent remote interpretations", prompt)
+                self.assertIn("A descriptive subject and complete relation are enough", prompt)
+                self.assertIn("many -> no can be clear ordinary oppositions", prompt)
+                self.assertIn("do not invent remote interpretations", prompt)
                 # 这里只验证模型草稿按原样实例化，不把 Mock 当作自然语义筛选器。
                 self.assertEqual(result["selected_pair_count"], 1)
                 self.assertEqual(result["status"], "source_eligibility_insufficient")
                 pair = result["selected_pairs"][0]
                 self.assertEqual(pair["true_claim"], claim)
-                self.assertEqual(pair["q_plus_text"], template.replace("{ENTITY}", original))
-                self.assertEqual(pair["q_minus_text"], template.replace("{ENTITY}", counter))
+                self.assertEqual(pair["q_plus_text"], q_plus)
+                self.assertEqual(pair["q_minus_text"], q_plus.replace(original, counter, 1))
                 provider.client.chat_with_metadata.assert_called_once()
 
     def test_relative_time_and_nonexclusive_rules_are_sent_without_an_extra_call(self):
@@ -5485,13 +6076,13 @@ class V24LunaDirectTests(unittest.TestCase):
         instructions, payload = prompt.split("\nFrozen chunk:\n", 1)
         self.assertEqual(json.loads(payload), {"chunk_text": chunk})
         for requirement in (
-            "currently, recently, recent, today, now, or past N years/decades",
-            "unless true_claim itself gives an explicit absolute reference time",
-            "Do not recover time from context or metadata",
-            "Including A -> including B, uses A -> uses B, extracts road -> extracts vehicle",
-            "associated with A -> associated with B may both be true",
-            "Skip unless the chunk clearly rules out the replacement",
-            "Counter absence alone proves nothing",
+            "currently, recently, recent, now, today, or past N years/decades",
+            "unless the quoted claim itself supplies an explicit absolute reference time",
+            "Do not infer time from metadata or adjacent sentences",
+            "Including A -> including B, uses A -> uses B",
+            "associated with A -> associated with B",
+            "extracts A -> extracts B can both be true; skip unless the chunk rules out the replacement",
+            "Its absence from the chunk proves nothing",
         ):
             self.assertIn(requirement, instructions)
         self.assertEqual(result["candidate_count"], 0)
@@ -5556,6 +6147,9 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
     def test_preview_is_read_only_and_budget_is_eight_sources(self):
         result = self.run_smoke(preview_only=True)
         self.assertEqual(result["maximum_logical_api_calls"], 1)
+        self.assertEqual(result["settings"]["max_candidates_per_source"], 8)
+        self.assertEqual(result["settings"]["max_counters_per_slot"], 3)
+        self.assertEqual(result["candidate_unit"], "factual_slot")
         self.assertFalse(self.output.exists())
         self.builder.assert_not_called()
         write_jsonl([V24LunaDirectTests.source(f"Record {i} has code {i}.", str(i)) for i in range(9)], self.input)
@@ -5564,6 +6158,10 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
 
     def test_complete_run_records_only_one_response_and_resume_is_offline(self):
         result = self.run_smoke()
+        self.assertEqual(result["candidate_count"], 3)
+        self.assertEqual(result["counter_candidate_count"], 3)
+        self.assertEqual(result["valid_slot_count"], 3)
+        self.assertEqual(result["valid_pair_count"], 3)
         self.assertEqual(result["selected_pair_count"], 3)
         self.assertEqual(result["provider"]["logical_api_calls"], 1)
         self.assertEqual(result["provider"]["physical_attempts"], 1)
@@ -5573,10 +6171,85 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
         self.assertFalse(self.provider.client.retry_until_success)
         row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
         self.assertIn("content", row["response"])
+        self.assertTrue(all(set(candidate) == v24.LUNA_DIRECT_FIELDS for candidate in row["candidates"]))
+        self.assertEqual(row["construction"]["selected_pairs"][1]["q_minus_text"],
+                         "Did Alder Robotics acquire Cedar Systems for $6.5 billion on 5 June 2021?")
+        self.assertTrue(all("question_template" not in pair and "original_span" not in pair
+                            for pair in row["construction"]["selected_pairs"]))
         self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
         self.assertEqual(self.run_smoke(resume=True), result)
         with self.assertRaisesRegex(ValueError, "output_exists"):
             self.run_smoke()
+
+    def test_same_slot_counters_keep_three_pair_identities_and_offline_resume(self):
+        base = V24LunaDirectTests.candidates()[1]
+        candidates = [{**base, "counter_entities": ["$6.5 billion", "$8.5 billion", "$9.5 billion"]}]
+        self.provider.client.chat_with_metadata.return_value.content = json.dumps({"candidates": candidates})
+        result = self.run_smoke()
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["counter_candidate_count"], 3)
+        self.assertEqual(result["valid_slot_count"], 1)
+        self.assertEqual(result["valid_pair_count"], 3)
+        self.assertEqual(result["selected_pair_count"], 3)
+        self.assertEqual(result["eligible_source_count"], 1)
+        self.assertEqual(result["provider"]["logical_api_calls"], 1)
+        row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
+        pairs = row["construction"]["selected_pairs"]
+        self.assertEqual(len({p["pair_id"] for p in pairs}), 3)
+        queries = [p[field] for p in pairs for field in ("q_plus_text", "q_minus_text")]
+        self.assertEqual(len(queries), 6)
+        self.assertEqual(len(set(queries)), 4)
+        saved = (self.output / "smoke_results.jsonl").read_bytes()
+        self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
+        self.assertEqual(self.run_smoke(resume=True), result)
+        self.assertEqual((self.output / "smoke_results.jsonl").read_bytes(), saved)
+        self.provider.client.chat_with_metadata.assert_called_once()
+
+    def test_partial_counter_rejections_preserve_raw_payload_and_do_not_topup(self):
+        base = V24LunaDirectTests.candidates()[1]
+        candidates = [{**base, "counter_entities": ["$6.5 billion", "$6.5 BILLION", "$8.5 billion"]}]
+        self.provider.client.chat_with_metadata.return_value.content = json.dumps({"candidates": candidates})
+        result = self.run_smoke()
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["counter_candidate_count"], 3)
+        self.assertEqual(result["valid_slot_count"], 1)
+        self.assertEqual(result["valid_pair_count"], 2)
+        self.assertEqual(result["selected_pair_count"], 2)
+        self.assertEqual(result["eligible_source_count"], 0)
+        self.assertEqual(result["rejection_reason_counts"], {"duplicate_claim_slot_counter": 1})
+        row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
+        self.assertEqual(row["candidates"], candidates)
+        self.assertEqual([p["counter_index"] for p in row["construction"]["selected_pairs"]], [0, 2])
+        self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
+        self.assertEqual(self.run_smoke(resume=True), result)
+        self.provider.client.chat_with_metadata.assert_called_once()
+
+    def test_changed_per_slot_counter_budget_fails_before_client(self):
+        self.config["development"]["luna_only_direct"]["max_counters_per_slot"] = 4
+        with self.assertRaisesRegex(ValueError, "luna_direct_settings_invalid"):
+            self.run_smoke(preview_only=True)
+        self.builder.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_case_only_slot_match_preserves_payload_and_resumes_offline(self):
+        candidates = V24LunaDirectTests.candidates()
+        candidates[0]["original_entity"] = "CEDAR SYSTEMS"
+        candidates[0]["q_plus"] = candidates[0]["q_plus"].lower()
+        self.provider.client.chat_with_metadata.return_value.content = json.dumps({"candidates": candidates})
+        result = self.run_smoke()
+        self.assertEqual(result["selected_pair_count"], 3)
+        row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
+        self.assertEqual(row["candidates"], candidates)
+        pair = row["construction"]["selected_pairs"][0]
+        self.assertEqual(pair["original_entity"], "CEDAR SYSTEMS")
+        self.assertEqual(pair["q_plus_text"], candidates[0]["q_plus"])
+        self.assertEqual(pair["q_minus_text"],
+                         "did alder robotics acquire Birch Systems for $7.5 billion on 5 june 2021?")
+        saved = (self.output / "smoke_results.jsonl").read_bytes()
+        self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
+        self.assertEqual(self.run_smoke(resume=True), result)
+        self.assertEqual((self.output / "smoke_results.jsonl").read_bytes(), saved)
+        self.provider.client.chat_with_metadata.assert_called_once()
 
     def test_invalid_json_retains_response_and_does_not_retry(self):
         self.provider.client.chat_with_metadata.return_value.content = '{"candidates":'
@@ -5586,6 +6259,22 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
         self.assertEqual(self.provider.logical_api_calls, 1)
         self.run_smoke(resume=True)
         self.assertEqual(self.provider.logical_api_calls, 1)
+
+    def test_old_template_candidates_are_rejected_without_retry_or_conversion(self):
+        old_candidates = [
+            {**{key: value for key, value in candidate.items() if key != "q_plus"},
+             "question_template": "Did Alder Robotics acquire {ENTITY}?"}
+            for candidate in V24LunaDirectTests.candidates()
+        ]
+        self.provider.client.chat_with_metadata.return_value.content = json.dumps({"candidates": old_candidates})
+        result = self.run_smoke()
+        self.assertEqual(result["candidate_count"], 3)
+        self.assertEqual(result["selected_pair_count"], 0)
+        self.assertEqual(result["rejection_reason_counts"], {"candidate_schema": 3})
+        self.provider.client.chat_with_metadata.assert_called_once()
+        row = list(read_jsonl(self.output / "smoke_results.jsonl"))[0]
+        self.assertEqual(row["candidates"], old_candidates)
+        self.assertEqual(row["construction"]["status"], "source_eligibility_insufficient")
 
     def test_received_response_resumes_without_regeneration(self):
         self.provider.parse_response = Mock(side_effect=KeyboardInterrupt)
@@ -5615,6 +6304,25 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkpoint_drift"):
             self.run_smoke(resume=True)
         self.builder.assert_not_called()
+
+    def test_changed_construction_code_rejects_completed_resume_before_client(self):
+        self.run_smoke()
+        original_hash = self.runner.sha256_file
+        saved_bytes = (self.output / "smoke_summary.json").read_bytes()
+        result_bytes = (self.output / "smoke_results.jsonl").read_bytes()
+
+        def changed_hash(path: str | Path) -> str:
+            if Path(path).name == "restoration_first_v24.py":
+                return sha256_text("changed construction prompt and schema")
+            return original_hash(path)
+
+        self.builder.reset_mock()
+        with patch.object(self.runner, "sha256_file", side_effect=changed_hash), \
+             self.assertRaisesRegex(ValueError, "checkpoint_drift"):
+            self.run_smoke(resume=True)
+        self.builder.assert_not_called()
+        self.assertEqual((self.output / "smoke_summary.json").read_bytes(), saved_bytes)
+        self.assertEqual((self.output / "smoke_results.jsonl").read_bytes(), result_bytes)
 
     def test_response_save_failure_is_not_a_quality_rejection(self):
         original_write = self.runner.write_json

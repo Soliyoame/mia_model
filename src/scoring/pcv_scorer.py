@@ -26,9 +26,12 @@ CG-CVG = CVG_RAG - CVG_LLM are retained as experimental controls.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
+import math
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Any
+import unicodedata
 
 try:
     # 进度条；没装 tqdm 就用"原样返回"的替身。
@@ -36,11 +39,422 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..utils.hash import sha256_file, sha256_obj
+from ..utils.io import load_yaml, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from ..utils.run_context import git_snapshot
+from ..baselines.menta import (
+    MENTA_NLI_MODEL_ID,
+    MENTA_NLI_REVISION,
+    NLIPredictor,
+    TransformersNLIPredictor,
+    validate_nli_snapshot,
+)
+from ..parsing.stance_parser import parse_hybrid_response
 
 
 LOGGER = get_logger(__name__)
+
+
+HYBRID_PVS_SUPPORT = {"supported": 1.0, "contradicted": 0.0, "insufficient": 0.0}
+HYBRID_PVS_VALUE_TEMPLATE = "The corrected value is {value}."
+
+
+def validate_hybrid_pvs_config(
+    config: Mapping[str, Any],
+    project_root: str | Path = ".",
+) -> dict[str, Any]:
+    """复用固定评分配置校验；只返回本地 NLI 参数，不加载模型。"""
+    scoring = config.get("scoring") or {}
+    expected = {
+        "kind": "stance_semantic_restoration",
+        "support_mapping": HYBRID_PVS_SUPPORT,
+        "pair_formula": "S+ * max(0, R- - A-)",
+        "pairs_per_source": 3,
+        "source_aggregation": "mean",
+        "diagnostic_aggregation": "median",
+    }
+    for key, value in expected.items():
+        if scoring.get(key) != value:
+            raise ValueError(f"hybrid_pvs_config_mismatch:{key}")
+    restoration = scoring.get("restoration") or {}
+    if (restoration.get("kind") != "normalized_exact_then_bidirectional_nli_min"
+            or restoration.get("value_template") != HYBRID_PVS_VALUE_TEMPLATE):
+        raise ValueError("hybrid_pvs_restoration_config_mismatch")
+    settings = restoration.get("nli") or {}
+    if (settings.get("model_id") != MENTA_NLI_MODEL_ID
+            or settings.get("revision") != MENTA_NLI_REVISION):
+        raise ValueError("hybrid_pvs_nli_identity_mismatch")
+    device = str(settings.get("device") or "")
+    if (settings.get("local_files_only") is not True
+            or settings.get("require_cuda") is not True
+            or not (device == "cuda" or device.startswith("cuda:"))):
+        raise ValueError("hybrid_pvs_requires_local_cuda_nli")
+    if not settings.get("snapshot_dir"):
+        raise ValueError("hybrid_pvs_nli_snapshot_missing")
+    snapshot = Path(settings["snapshot_dir"])
+    if not snapshot.is_absolute():
+        snapshot = Path(project_root) / snapshot
+    return dict(
+        snapshot_dir=snapshot.resolve(),
+        model_id=settings["model_id"],
+        revision=settings["revision"],
+        device=device,
+        require_cuda=True,
+        batch_size=int(settings["batch_size"]),
+        max_length=int(settings["max_length"]),
+    )
+
+
+def build_hybrid_pvs_nli(
+    config: Mapping[str, Any],
+    project_root: str | Path = ".",
+) -> NLIPredictor:
+    """显式构造固定的本地 NLI；导入评分模块或跑 mock 不会加载模型。"""
+    return TransformersNLIPredictor(**validate_hybrid_pvs_config(config, project_root))
+
+
+def _normalize_hybrid_value(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def semantic_restoration_score(
+    correction_entity: str | None,
+    original_entity: str,
+    *,
+    nli: NLIPredictor | None = None,
+) -> float:
+    """只比较更正值与真实值；完整相等优先，否则取双向蕴含概率的较小值。"""
+    if not isinstance(original_entity, str) or not _normalize_hybrid_value(original_entity):
+        raise ValueError("hybrid_pvs_original_entity_invalid")
+    if correction_entity is None or not correction_entity.strip():
+        return 0.0
+    if _normalize_hybrid_value(correction_entity) == _normalize_hybrid_value(original_entity):
+        return 1.0
+    if nli is None:
+        raise RuntimeError("hybrid_pvs_nli_required")
+    corrected = HYBRID_PVS_VALUE_TEMPLATE.format(value=correction_entity.strip())
+    original = HYBRID_PVS_VALUE_TEMPLATE.format(value=original_entity.strip())
+    rows = nli.probabilities([(corrected, original), (original, corrected)])
+    labels = {"entailment", "neutral", "contradiction"}
+    if len(rows) != 2:
+        raise ValueError("hybrid_pvs_nli_output_count")
+    entailments: list[float] = []
+    for row in rows:
+        if not isinstance(row, Mapping) or set(row) != labels:
+            raise ValueError("hybrid_pvs_nli_labels")
+        if any(isinstance(value, bool) for value in row.values()):
+            raise ValueError("hybrid_pvs_nli_probabilities")
+        values = {label: float(row[label]) for label in labels}
+        if (any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in values.values())
+                or not math.isclose(sum(values.values()), 1.0, abs_tol=1e-5)):
+            raise ValueError("hybrid_pvs_nli_probabilities")
+        entailments.append(values["entailment"])
+    return min(entailments)
+
+
+def score_hybrid_pair(
+    *,
+    dataset: str,
+    source_key: str,
+    pair_id: str,
+    original_entity: str,
+    plus_response: str | bytes | None,
+    minus_response: str | bytes | None,
+    nli: NLIPredictor | None = None,
+    plus_error: bool = False,
+    minus_error: bool = False,
+) -> dict[str, Any]:
+    """独立的 V24 开发评分接口；只接受原始回答，不读取构造、检索或成员标签。"""
+    if any(not isinstance(value, str) or not value.strip() for value in (dataset, source_key, pair_id)):
+        raise ValueError("hybrid_pvs_pair_identity_missing")
+    if not isinstance(original_entity, str) or not _normalize_hybrid_value(original_entity):
+        raise ValueError("hybrid_pvs_original_entity_invalid")
+    plus = parse_hybrid_response(plus_response, generator_error=plus_error)
+    minus = parse_hybrid_response(minus_response, generator_error=minus_error)
+    support = HYBRID_PVS_SUPPORT[plus["stance"]] if plus["parse_status"] == "parsed" else None
+    acceptance = HYBRID_PVS_SUPPORT[minus["stance"]] if minus["parse_status"] == "parsed" else None
+    result: dict[str, Any] = {
+        "dataset": dataset, "source_key": source_key, "pair_id": pair_id,
+        "scoring_kind": "stance_semantic_restoration",
+        "original_entity": original_entity,
+        "plus_response": plus, "minus_response": minus,
+        "score_status": "response_error",
+        "positive_support": support, "restoration": None,
+        "counter_acceptance": acceptance, "restoration_margin": None,
+        "non_acceptance": None if acceptance is None else 1.0 - acceptance,
+        "pair_pvs": None,
+    }
+    if support is None or acceptance is None:
+        return result
+    correction = minus["correction_entity"] if minus["stance"] == "contradicted" else None
+    try:
+        restoration = semantic_restoration_score(correction, original_entity, nli=nli)
+    except Exception as exc:
+        # 不把运行失败填为零分，也不回显可能含外部信息的异常正文。
+        return {**result, "score_status": "nli_error", "error_type": type(exc).__name__}
+    margin = max(0.0, restoration - acceptance)
+    return {
+        **result, "score_status": "scored", "restoration": restoration,
+        "restoration_margin": margin, "pair_pvs": support * margin,
+    }
+
+
+def aggregate_hybrid_source(
+    pair_scores: Sequence[Mapping[str, Any]],
+    *,
+    dataset: str,
+    source_key: str,
+) -> dict[str, Any]:
+    """严格聚合同一 source 的三对；均值是主分，中位数只作诊断。"""
+    if len(pair_scores) > 3:
+        raise ValueError("hybrid_pvs_pair_budget_exceeded")
+    pair_ids: set[str] = set()
+    for row in pair_scores:
+        if row.get("dataset") != dataset or row.get("source_key") != source_key:
+            raise ValueError("hybrid_pvs_source_identity_mismatch")
+        pair_id = row.get("pair_id")
+        if not isinstance(pair_id, str) or not pair_id.strip() or pair_id in pair_ids:
+            raise ValueError("hybrid_pvs_pair_identity_duplicate_or_missing")
+        pair_ids.add(pair_id)
+        if row.get("scoring_kind") != "stance_semantic_restoration":
+            raise ValueError("hybrid_pvs_scoring_kind_mismatch")
+        if row.get("score_status") == "scored":
+            value = row.get("pair_pvs")
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or not 0.0 <= value <= 1.0):
+                raise ValueError("hybrid_pvs_pair_score_invalid")
+    result: dict[str, Any] = {
+        "dataset": dataset, "source_key": source_key,
+        "scoring_kind": "stance_semantic_restoration",
+        "pair_scores": [dict(row) for row in pair_scores],
+        "score_status": "insufficient_pairs" if len(pair_scores) < 3 else "incomplete",
+        "source_pvs": None, "source_pvs_mean": None, "source_pvs_median": None,
+    }
+    if len(pair_scores) == 3 and all(row.get("score_status") == "scored" for row in pair_scores):
+        scores = [float(row["pair_pvs"]) for row in pair_scores]
+        result.update(score_status="scored", source_pvs=mean(scores),
+                      source_pvs_mean=mean(scores), source_pvs_median=median(scores))
+    return result
+
+
+def prepare_hybrid_pvs_inputs(
+    selected_rows: Sequence[Mapping[str, Any]],
+    response_rows: Sequence[Mapping[str, Any]],
+    *,
+    dataset: str,
+) -> dict[str, Any]:
+    """绑定既有 selected pairs 与 RAG 回答；只适配字段，不重选或重写问句。"""
+    sources: dict[str, str] = {}
+    wrapped_sources: set[str] = set()
+    pairs: list[dict[str, Any]] = []
+    pair_ids: set[str] = set()
+    identity_fields = ("dataset", "source_key", "chunk_sha256")
+    pair_fields = ("pair_id", "original_entity", "counter_entity", "q_plus_text", "q_minus_text")
+    for row in selected_rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("hybrid_pvs_selected_row_invalid")
+        construction = row.get("construction", row)
+        if not isinstance(construction, Mapping):
+            raise ValueError("hybrid_pvs_construction_unavailable")
+        if "selected_pairs" in construction:
+            selected = construction["selected_pairs"]
+            if (not isinstance(selected, list)
+                    or construction.get("selected_pair_count", len(selected)) != len(selected)):
+                raise ValueError("hybrid_pvs_selected_pair_count_mismatch")
+            outer_source = row.get("source", construction)
+            if not isinstance(outer_source, Mapping) or any(
+                outer_source.get(key) != construction.get(key) for key in identity_fields
+            ):
+                raise ValueError("hybrid_pvs_construction_source_mismatch")
+        else:
+            selected = [construction]
+        identity = {key: construction.get(key) for key in identity_fields}
+        if (identity["dataset"] != dataset
+                or any(not isinstance(value, str) or not value.strip() for value in identity.values())):
+            raise ValueError("hybrid_pvs_source_identity_invalid")
+        source_key, chunk_hash = identity["source_key"], identity["chunk_sha256"]
+        if len(chunk_hash) != 64 or any(char not in "0123456789abcdef" for char in chunk_hash):
+            raise ValueError("hybrid_pvs_chunk_hash_invalid")
+        if source_key in sources and sources[source_key] != chunk_hash:
+            raise ValueError("hybrid_pvs_source_chunk_drift")
+        if "selected_pairs" in construction:
+            if source_key in sources:
+                raise ValueError("hybrid_pvs_duplicate_source_result")
+            wrapped_sources.add(source_key)
+        elif source_key in wrapped_sources:
+            raise ValueError("hybrid_pvs_duplicate_source_result")
+        sources[source_key] = chunk_hash
+        for pair in selected:
+            if (not isinstance(pair, Mapping)
+                    or any(pair.get(key) != value for key, value in identity.items())
+                    or any(not isinstance(pair.get(key), str) or not pair[key].strip() for key in pair_fields)):
+                raise ValueError("hybrid_pvs_selected_pair_invalid")
+            if pair["pair_id"] in pair_ids:
+                raise ValueError("hybrid_pvs_duplicate_selected_pair")
+            pair_ids.add(pair["pair_id"])
+            pairs.append({**identity, **{key: pair[key] for key in pair_fields}})
+    if not sources:
+        raise ValueError("hybrid_pvs_selected_input_empty")
+    if len(set(sources.values())) != len(sources):
+        raise ValueError("hybrid_pvs_chunk_reused_across_sources")
+    source_pairs = {key: [pair for pair in pairs if pair["source_key"] == key] for key in sources}
+    if any(len(items) > 3 for items in source_pairs.values()):
+        raise ValueError("hybrid_pvs_pair_budget_exceeded")
+
+    queries: dict[str, dict[str, Any]] = {}
+    for pair in pairs:
+        for polarity, claim_type, text_field in (
+            ("Q_plus", "true", "q_plus_text"), ("Q_minus", "counterfactual", "q_minus_text"),
+        ):
+            query_id = sha256_obj({"pair_id": pair["pair_id"], "polarity": polarity})
+            queries[query_id] = {
+                **{key: pair[key] for key in identity_fields}, "pair_id": pair["pair_id"],
+                "query_id": query_id, "polarity": polarity, "claim_type": claim_type,
+                "query_text": pair[text_field], "query": pair[text_field],
+            }
+    responses: dict[str, dict[str, Any]] = {}
+    cell: dict[str, Any] | None = None
+    fingerprints: set[str] = set()
+    cell_fields = ("concrete_model", "retriever_backend", "retriever_id", "variant_id", "context_control")
+    for row in response_rows:
+        if not isinstance(row, Mapping) or not isinstance(row.get("query_id"), str):
+            raise ValueError("hybrid_pvs_response_row_invalid")
+        query_id = row["query_id"]
+        if query_id in responses:
+            raise ValueError("hybrid_pvs_duplicate_response")
+        query = queries.get(query_id)
+        if query is None or any(row.get(key) != query[key] for key in (
+            "dataset", "source_key", "pair_id", "claim_type", "query",
+        )):
+            raise ValueError("hybrid_pvs_response_query_mismatch")
+        if "chunk_sha256" in row and row["chunk_sha256"] != query["chunk_sha256"]:
+            raise ValueError("hybrid_pvs_response_chunk_mismatch")
+        if (row.get("mode") != "rag"
+                or any(not isinstance(row.get(key), str) or not row[key].strip() for key in cell_fields)):
+            raise ValueError("hybrid_pvs_rag_cell_identity_required")
+        if (row.get("error") is not None and not isinstance(row["error"], str)
+                or row.get("response") is not None and not isinstance(row["response"], str)):
+            raise ValueError("hybrid_pvs_raw_response_invalid")
+        current_cell = {key: row.get(key) for key in (*cell_fields, "generator_family", "generator_version")}
+        if cell is not None and current_cell != cell:
+            raise ValueError("hybrid_pvs_mixed_runtime_cells")
+        cell = current_cell
+        if row.get("response") and not row.get("error"):
+            if row.get("provider_model_id") != row["concrete_model"]:
+                raise ValueError("hybrid_pvs_provider_model_mismatch")
+            if row.get("system_fingerprint"):
+                fingerprints.add(str(row["system_fingerprint"]))
+        responses[query_id] = dict(row)
+    if len(fingerprints) > 1:
+        raise ValueError("hybrid_pvs_mixed_response_fingerprints")
+    return {
+        "sources": sources, "source_pairs": source_pairs, "pairs": pairs,
+        "queries": queries, "responses": responses,
+        "cell": None if cell is None else {"mode": "rag", **cell, "system_fingerprints": sorted(fingerprints)},
+    }
+
+
+def run_hybrid_pvs_scoring(
+    *,
+    dataset: str,
+    config_path: str | Path,
+    pairs_path: str | Path,
+    responses_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    project_root: str | Path = ".",
+    dry_run: bool = False,
+    run_role: str = "development",
+    nli: NLIPredictor | None = None,
+) -> dict[str, Any]:
+    """V24 离线评分入口；预检不加载模型、不写分数，运行只写全新目录。"""
+    root = Path(project_root)
+    if run_role not in {"development", "formal"}:
+        raise ValueError("hybrid_pvs_run_role_invalid")
+    config_file, pairs_file = (root / config_path).resolve(), (root / pairs_path).resolve()
+    response_file = None if responses_path is None else (root / responses_path).resolve()
+    output = None if output_dir is None else (root / output_dir).resolve()
+    if not dry_run and (response_file is None or output is None):
+        raise ValueError("hybrid_pvs_responses_and_output_required")
+    if not dry_run and output.exists():
+        raise FileExistsError("hybrid_pvs_output_exists_use_new_directory")
+    config = load_yaml(config_file)
+    if config.get("protocol_version") != "pcv-mia-v24" or dataset not in config.get("datasets", []):
+        raise ValueError("hybrid_pvs_v24_config_required")
+    settings = validate_hybrid_pvs_config(config, root)
+    prepared = prepare_hybrid_pvs_inputs(
+        list(read_jsonl(pairs_file)), [] if response_file is None else list(read_jsonl(response_file)),
+        dataset=dataset,
+    )
+    snapshot: dict[str, Any]
+    try:
+        snapshot = {"status": "verified_local_files", **validate_nli_snapshot(
+            settings["snapshot_dir"], expected_model_id=settings["model_id"], expected_revision=settings["revision"],
+        )}
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError) as exc:
+        snapshot = {"status": "unavailable", "error_type": type(exc).__name__}
+    summary: dict[str, Any] = {
+        "run_kind": ("v24_formal_hybrid_pvs" if run_role == "formal" else "v24_development_offline_hybrid_pvs"),
+        "protocol_version": "pcv-mia-v24",
+        "status": "prepared_inputs_only", "dataset": dataset, "cell": prepared["cell"],
+        "source_count": len(prepared["sources"]), "pair_count": len(prepared["pairs"]),
+        "query_count": len(prepared["queries"]), "response_count": len(prepared["responses"]),
+        "sources_with_three_pairs": sum(len(items) == 3 for items in prepared["source_pairs"].values()),
+        "missing_response_count": len(prepared["queries"]) - len(prepared["responses"]),
+        "scoring": config["scoring"], "nli_snapshot": snapshot,
+        "nli_loaded": nli is not None,
+        "cuda_checked": isinstance(nli, TransformersNLIPredictor), "formal_freeze_performed": False,
+        "api_calls_performed": 0, "victim_calls_performed": 0, "retriever_calls_performed": 0,
+        "config_sha256": sha256_file(config_file), "pairs_sha256": sha256_file(pairs_file),
+        "responses_sha256": None if response_file is None else sha256_file(response_file),
+        "scorer_sha256": sha256_file(__file__), "git": git_snapshot(),
+    }
+    if dry_run:
+        return summary
+
+    # 先用现有函数处理 exact/缺失等情况；只有非 exact 恢复才需要加载一次 NLI。
+    pair_scores: list[dict[str, Any]] = []
+    arguments: list[dict[str, Any]] = []
+    for pair in prepared["pairs"]:
+        bound = []
+        for polarity in ("Q_plus", "Q_minus"):
+            query_id = sha256_obj({"pair_id": pair["pair_id"], "polarity": polarity})
+            bound.append(prepared["responses"].get(query_id, {}))
+        arguments.append({
+            "dataset": dataset, "source_key": pair["source_key"], "pair_id": pair["pair_id"],
+            "original_entity": pair["original_entity"],
+            "plus_response": bound[0].get("response"), "minus_response": bound[1].get("response"),
+            "plus_error": bool(bound[0].get("error")), "minus_error": bool(bound[1].get("error")),
+        })
+        pair_scores.append(score_hybrid_pair(**arguments[-1], nli=nli))
+    needs_nli = [i for i, score in enumerate(pair_scores) if score["score_status"] == "nli_error"]
+    if needs_nli and nli is None:
+        nli = build_hybrid_pvs_nli(config, root)
+        summary.update(nli_loaded=True, cuda_checked=True)
+        for i in needs_nli:
+            pair_scores[i] = score_hybrid_pair(**arguments[i], nli=nli)
+    for pair, score in zip(prepared["pairs"], pair_scores):
+        score.update(chunk_sha256=pair["chunk_sha256"], counter_entity=pair["counter_entity"],
+                     q_plus_text=pair["q_plus_text"], q_minus_text=pair["q_minus_text"],
+                     **(prepared["cell"] or {}))
+    source_scores = [
+        {**aggregate_hybrid_source([score for score in pair_scores if score["source_key"] == key],
+                                  dataset=dataset, source_key=key), "chunk_sha256": chunk_hash,
+         **(prepared["cell"] or {})}
+        for key, chunk_hash in prepared["sources"].items()
+    ]
+    summary.update(
+        status="scored" if all(row["score_status"] == "scored" for row in source_scores) else "incomplete",
+        scored_pair_count=sum(row["score_status"] == "scored" for row in pair_scores),
+        scored_source_count=sum(row["score_status"] == "scored" for row in source_scores),
+    )
+    output.mkdir(parents=True, exist_ok=False)
+    for name, rows in (("pair_scores.jsonl", pair_scores), ("source_scores.jsonl", source_scores)):
+        path = output / name
+        write_jsonl(rows, path)
+        summary[name.removesuffix(".jsonl") + "_sha256"] = sha256_file(path)
+    write_json(summary, output / "scoring_summary.json")
+    return summary
 
 
 def support_score(row: dict[str, Any], unknown_lambda: float, refusal_penalty: float) -> float:

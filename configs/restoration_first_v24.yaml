@@ -18,6 +18,26 @@ semantic_similarity:
   local_files_only: true
   query_instruction: ""
 
+scoring:
+  kind: stance_semantic_restoration
+  support_mapping: {supported: 1.0, contradicted: 0.0, insufficient: 0.0}
+  pair_formula: "S+ * max(0, R- - A-)"
+  pairs_per_source: 3
+  source_aggregation: mean
+  diagnostic_aggregation: median
+  restoration:
+    kind: normalized_exact_then_bidirectional_nli_min
+    value_template: "The corrected value is {value}."
+    nli:
+      model_id: tasksource/deberta-base-long-nli
+      revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+      snapshot_dir: models/menta/deberta-base-long-nli
+      local_files_only: true
+      device: cuda
+      require_cuda: true
+      batch_size: 16
+      max_length: 1280
+
 development:
   canary_input_path: null
   canary_pair_count: 30
@@ -27,6 +47,7 @@ development:
   luna_only_direct:
     adapter: luna_direct_paired_candidates
     max_candidates_per_source: 8
+    max_counters_per_slot: 3
     pairs_per_source: 3
     smoke_max_sources: 8
   luna_only_ab:
@@ -111,6 +132,8 @@ formal:
   victim_queries_per_dataset: 12000
   reserve_in_main_victim_budget: false
   fallback_pair_rate_maximum: 0.01
+  # 正式入口读取同一配置中的单 cell 绑定；实际 split/index/victim 尚未冻结，禁止默认回落历史配置。
+  runtime: null
 
 stealth_diagnostics:
   hard_gate: false

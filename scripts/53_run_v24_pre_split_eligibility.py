@@ -615,7 +615,7 @@ def run_luna_only_smoke(
     config = load_v24_config(root)
     settings = config.get("development", {}).get("luna_only_direct", {})
     if settings != {"adapter": "luna_direct_paired_candidates", "max_candidates_per_source": 8,
-                    "pairs_per_source": 3, "smoke_max_sources": 8}:
+                    "max_counters_per_slot": 3, "pairs_per_source": 3, "smoke_max_sources": 8}:
         raise ValueError("luna_direct_settings_invalid")
     input_file = _luna_ab_development_path(root, input_path)
     sources = list(read_jsonl(input_file))
@@ -630,7 +630,7 @@ def run_luna_only_smoke(
         raise ValueError("luna_direct_model_must_be_luna")
     context = {
         "run_kind": "luna_only_direct_smoke", "protocol_version": config["protocol_version"],
-        "source_count": len(sources), "sources": identities, "settings": settings,
+        "source_count": len(sources), "sources": identities, "settings": settings, "candidate_unit": "factual_slot",
         "input_sha256": sha256_file(input_file), "config_sha256": sha256_obj(config), "llm_profile": profile,
         "code_sha256": sha256_obj({"runner": sha256_file(__file__),
                                     "screening": sha256_file(PROJECT_ROOT / "src/prepare/restoration_first_v24.py")}),
@@ -678,6 +678,9 @@ def run_luna_only_smoke(
             "results_sha256": sha256_obj(rows), "active_request": active,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "candidate_count": sum(len(row.get("candidates") or []) for row in rows),
+            "counter_candidate_count": sum((row.get("construction") or {}).get("counter_candidate_count", 0) for row in rows),
+            "valid_slot_count": sum((row.get("construction") or {}).get("valid_slot_count", 0) for row in rows),
+            "valid_pair_count": sum((row.get("construction") or {}).get("valid_pair_count", 0) for row in rows),
             "selected_pair_count": sum((row.get("construction") or {}).get("selected_pair_count", 0) for row in rows),
             "eligible_source_count": sum(bool((row.get("construction") or {}).get("eligible")) for row in rows),
             "execution_incomplete_count": sum(row.get("status") == "execution_incomplete" for row in rows),

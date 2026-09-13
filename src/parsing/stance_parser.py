@@ -31,6 +31,71 @@ from ..rag.runner import compact_response_rows, response_is_success
 
 LOGGER = get_logger(__name__)
 
+
+def parse_hybrid_response(
+    response: str | bytes | None,
+    *,
+    generator_error: bool = False,
+) -> dict[str, Any]:
+    """为 V24 混合评分读取明确立场，不用实体出现或关键词片段推断支持。"""
+    result: dict[str, Any] = {
+        "raw_response": response if isinstance(response, str) else None,
+        "parse_status": "invalid",
+        "stance": None,
+        "correction_entity": None,
+    }
+    if generator_error:
+        return {**result, "parse_status": "generator_error"}
+    if isinstance(response, bytes):
+        try:
+            response = response.decode("utf-8")
+        except UnicodeDecodeError:
+            return result
+        result["raw_response"] = response
+    if response is None or (isinstance(response, str) and not response.strip()):
+        return {**result, "parse_status": "missing"}
+    if not isinstance(response, str):
+        return result
+    text = response.strip()
+
+    def unique_fields(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        fields = dict(items)
+        if len(fields) != len(items):
+            raise ValueError("duplicate_response_field")
+        return fields
+
+    if text.startswith("{"):
+        try:
+            value = json.loads(text, object_pairs_hook=unique_fields)
+        except (ValueError, TypeError):
+            return result
+        if not isinstance(value, dict) or set(value) != {"stance", "correction_entity"}:
+            return result
+        stance, correction = value["stance"], value["correction_entity"]
+        if not isinstance(stance, str) or stance not in {"supported", "contradicted", "insufficient"}:
+            return result
+        if correction is not None and not isinstance(correction, str):
+            return result
+        correction = (correction.strip() or None) if isinstance(correction, str) else None
+        if stance != "contradicted" and correction is not None:
+            return result
+    else:
+        token = text.casefold().replace("’", "'").rstrip(".!").strip()
+        correction = None
+        if token in {"yes", "consistent"}:
+            stance = "supported"
+        elif token in {"no", "inconsistent"}:
+            stance = "contradicted"
+        elif token in {"i don't know", "i do not know"}:
+            stance = "insufficient"
+        else:
+            match = re.fullmatch(r"inconsistent\s*:\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+            if match is None:
+                return result
+            stance, correction = "contradicted", match.group(1).strip() or None
+    # 否定但没有更正值是合法行为，由评分层给零恢复分。
+    return {**result, "parse_status": "parsed", "stance": stance, "correction_entity": correction}
+
 # 下面四个正则用来从回答文字里"嗅探"模型的态度。re.IGNORECASE 表示不区分大小写。
 # UNKNOWN_RE: 命中表示模型说"我不知道/无法核实/信息不足"。
 UNKNOWN_RE = re.compile(r"\b(?:i do not know|i don't know|don't know|cannot verify|can't verify|unknown|insufficient information|not enough information)\b", re.IGNORECASE)

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.parsing.stance_parser import parse_stance_files
 from src.llm.generator_registry import resolve_generator_from_pipeline_config
 from src.rag.paths import retriever_id_from_config
-from src.scoring.pcv_scorer import compute_pcv_scores
+from src.scoring.pcv_scorer import compute_pcv_scores, run_hybrid_pvs_scoring
 from src.utils.io import ensure_dir, load_yaml, resolve_path
 from src.utils.run_context import experiment_scoped_dir
 from src.utils.logger import setup_logging
@@ -40,7 +41,12 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Parse PCV-MIA stances and compute scores.")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
+    parser.add_argument("--config", help="经典或显式 V24 模式对应的评分配置")
+    parser.add_argument("--v24-hybrid", action="store_true", help="仅运行 V24 stance + semantic restoration 离线评分")
+    parser.add_argument("--pairs", help="V24 已选 pair JSONL 或现有 smoke_results.jsonl")
+    parser.add_argument("--responses", help="单个 dataset/Generator/Retriever cell 的原始 RAG 回答 JSONL")
+    parser.add_argument("--output-dir", help="V24 评分的新输出目录，不覆盖已有结果")
+    parser.add_argument("--dry-run", action="store_true", help="V24 输入预检；不加载模型、不写分数")
     parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
     parser.add_argument("--retriever-backend", choices=["dense", "bm25", "hybrid"], default=None)
     parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
@@ -51,7 +57,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.v24_hybrid:
+        if not args.pairs:
+            parser.error("--v24-hybrid requires --pairs")
+        if not args.dry_run and (not args.responses or not args.output_dir):
+            parser.error("V24 scoring requires --responses and a new --output-dir, or --dry-run")
+        if (args.force or args.no_resume or args.skip_llm_only or args.generator_family or args.retriever_backend
+                or args.rag_config != str(PROJECT_ROOT / "configs" / "rag_config.yaml")):
+            parser.error("V24 mode does not accept legacy override/resume flags; cell identity comes from responses")
+        args.config = args.config or str(PROJECT_ROOT / "configs" / "restoration_first_v24.yaml")
+    else:
+        if args.pairs or args.responses or args.output_dir or args.dry_run:
+            parser.error("--pairs/--responses/--output-dir/--dry-run require --v24-hybrid")
+        args.config = args.config or str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml")
+    return args
 
 
 def main() -> int:
@@ -61,7 +81,17 @@ def main() -> int:
         进程退出码,正常结束返回 0。
     """
     args = parse_args()
+    if args.v24_hybrid:
+        summary = run_hybrid_pvs_scoring(
+            dataset=args.dataset, config_path=args.config, pairs_path=args.pairs,
+            responses_path=args.responses, output_dir=args.output_dir,
+            project_root=PROJECT_ROOT, dry_run=args.dry_run,
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 2 if summary["status"] == "incomplete" else 0
     config = load_yaml(args.config)
+    if config.get("protocol_version") == "pcv-mia-v24" or config.get("scoring", {}).get("kind") == "stance_semantic_restoration":
+        raise ValueError("V24 hybrid scoring requires explicit --v24-hybrid; legacy scoring is not a fallback")
     rag_config = load_yaml(args.rag_config)
     retriever_backend = args.retriever_backend or str(
         rag_config.get("retrieval", {}).get("backend", "dense")

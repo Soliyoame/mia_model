@@ -6,36 +6,163 @@ PCV-MIA（Paired Counterfactual Verification Membership Inference Attack）研�
 
 当前主线为 `pcv-mia-v24 / pcv-query-local-counterfactual-reconstruction`，仍处于开发验证阶段。详细实验过程、结果和下一步统一维护在[研究总表](研究记录/顶会推进_notes.md)与[任务总表](研究记录/顶会推进_task_plan.md)，本页只提供入口和简要状态。
 
+**2026-09-13：V24 正式 runner 的代码链已接通，本地 mock 端到端验证通过。** 10号脚本的显式 `--v24` 串起冻结 selected pairs、固定split、主库index、现有RAG/victim执行循环和新PVS。新增11项测试；相关回归476项中427通过、49项既有跳过，零失败。合成2250-source split中，1000 Member/1000 Non-Member执行12000条mock查询，250 Reserve不发查询，得到6000个pair及2000个source分数；共享Q+保留独立query ID，中断/失败恢复和完成态不重跑均通过。真实API/GPU调用为0，没有运行正式实验。当前 `formal.runtime: null`，真实输入、模型/index绑定与代码冻结仍未完成，固定NLI权重仍缺失。见[正式入口说明](#v24-formal-runner)、[验证记录](artifacts/v24/development/pvs_hybrid_20260913/formal_runner_mock_validation.json)和[最新研究记录](研究记录/顶会推进_notes.md#v24-formal-runner-mock-20260913)；下方此前“正式runner未接通”的记录保留为历史状态。
+
+**2026-09-13：V24 混合 PVS 离线入口已接通，正式冻结尚未完成。** 11号脚本增加显式 `--v24-hybrid` 和无模型 `--dry-run`，直接读取已有 selected pairs 或 smoke 结果，绑定单个 RAG cell 的原始回答，调用既有 pair/source 评分。新入口11项集成测试及已有20项PVS测试通过；扩展431项中382通过、49项既有跳过。已有5篇开发产物的预检识别15对/30问，未生成新查询或调用模型。固定NLI权重仍缺失，真实语义验证、正式split/index/cell绑定与代码提交尚待完成；不把预检当作formal freeze。见下方入口说明及[本轮记录](研究记录/顶会推进_notes.md#v24-pvs-entry-freeze-preparation-20260913)。
+
+**2026-09-13：结构化 stance + semantic restoration 的独立 PVS 开发接口完成。** `S+`、`A−` 使用明确 stance（supported=1，contradicted/insufficient=0）；`R−` 在否定且有 correction 时先做完整规范化相等判断，否则仅比较 correction/e+ 的双向 NLI 蕴含概率并取较小值。主公式为 `S+ * max(0, R− − A−)`，source 三对 mean 为主分、median 仅诊断。新增18项测试通过；扩展回归418项中369通过、49项既有跳过，18项包含其中。Query Construction、victim prompt、历史评分与经典入口保持；新接口未接入正式 runner。NLI 复用现有 DeBERTa predictor，但本轮只有 mock 验证，没有模型加载或真实语义效果验证。见[定义、接口与验证记录](研究记录/顶会推进_notes.md#v24-hybrid-pvs-20260913)及[七个合成样例和全部中间分数](artifacts/v24/development/pvs_hybrid_20260913/local_validation.json)。
+
+**2026-09-12：保持当前代码/Prompt的未见开发30篇验证完成。** 三数据集各10篇，与历史开发source/text重叠为0；106个slot组、279个counter，最终71对，**23/30篇本地选满三对**（nfcorpus 10/10、scidocs 8/10、trec-covid 5/10）。七篇不足为六篇零slot（其中五篇trec-covid仅标题）和一篇只有两个counter，没有selector漏选；8篇通过同槽备用补满。全部71对Assistant审阅记录8对明确问题与13对边界备注，未新增准入门槛或重选。32次逻辑尝试取得30份响应，两次无响应恢复原件保留；代码/Prompt/config及PVS不变。详见[本批报告和全部问句](artifacts/v24/development/luna_only_direct_fresh30_20260912/validation_report.md)、[机器可读汇总](artifacts/v24/development/luna_only_direct_fresh30_20260912/run_summary.json)及[完成记录](研究记录/顶会推进_notes.md#v24-luna-grouped-unseen30-20260912-result)。本批为固定未见prefix开发验证，已完成并停止，无victim/PVS/formal。
+
+**2026-09-12：同30篇离线审阅完成，暂不进入下一阶段。** 已逐对查看全部69个selected pair，记录13对明确构造问题（7篇）与5对边界备注；三个新选满三对的source均仍有明确问题。20/30→22/30和66→69的原始数量改善保留，未按诊断重选或建立新门槛。本轮仅保存审阅与文档，代码、Prompt、配置和PVS未改，API调用为0。详见[完整离线审阅](artifacts/v24/development/luna_only_direct_fresh30_20260911/three_counters_prompt_attempt2/quantity_construction_review.md)与[审阅完成记录](研究记录/顶会推进_notes.md#v24-luna-three-counters-offline-review)。
+
+**2026-09-12：新 Prompt 同30篇复测完成并停止。** 仅将每slot的“up to three”改为主动尝试三个不同counter，其余代码/配置保持。本次生成111组/289个counter、selected 69对，**22/30篇本地选满三对**（nfcorpus 8/10、scidocs 6/10、trec-covid 8/10），旧Prompt为20/30。固定6篇的12对Assistant抽查仍发现角色错配与事实范围问题，数量达标不代表语义合格。31次调用尝试取得30份响应，一次无响应同输入恢复，失败原件保留；未运行victim/PVS/formal。详见[完整报告](artifacts/v24/development/luna_only_direct_fresh30_20260911/three_counters_prompt_attempt2/retest_report.md)与[完成记录](研究记录/顶会推进_notes.md#v24-luna-three-counters-prompt-retest-result)。
+
 | 文件 | 职责 |
 |---|---|
 | [configs/restoration_first_v24.yaml](configs/restoration_first_v24.yaml) | 数据集、模型、Luna-only 开发配置、固定预算与历史构造配置 |
-| [src/prepare/restoration_first_v24.py](src/prepare/restoration_first_v24.py) | Luna-only 四字段候选、最小 gates、共享模板和 source eligibility；保留历史构造路径 |
+| [src/prepare/restoration_first_v24.py](src/prepare/restoration_first_v24.py) | Luna-only 按 slot 分组的 Q+/counter 列表、单次替换、最小 gates 和 source eligibility；保留历史构造路径 |
 | [scripts/53_run_v24_pre_split_eligibility.py](scripts/53_run_v24_pre_split_eligibility.py) | Luna-only preview/smoke，以及历史候选池、canary 和容量入口 |
 | [scripts/54_build_v24_beir_source_pools.py](scripts/54_build_v24_beir_source_pools.py) | 从本地 BEIR corpus.jsonl 构建独立 source pool |
+| [scripts/10_run_rag_and_llm_only.py](scripts/10_run_rag_and_llm_only.py) | 显式 `--v24` 单cell正式运行入口，已有pairs → RAG/victim → hybrid PVS；`--dry-run` 仅预检 |
+| [scripts/11_parse_stance_and_score.py](scripts/11_parse_stance_and_score.py) | 显式 `--v24-hybrid` 离线PVS预检/评分；省略该开关仍走经典入口 |
 
 当前数据集为 `nfcorpus`、`scidocs`、`trec-covid`。每个 BEIR document 对应一个 source 和一个冻结 chunk；只读取 corpus 的 `_id/title/text`，不读取 queries、qrels 或 relevance labels。当前输入和产物位于 `artifacts/v24/`，旧 EDGAR/Enron/PubMed 产物保留为历史证据。
 
-当前单个 chunk 保存该记录完整的 `title + text`。已记录后续原则：短文整篇保留，长文按实际模型 tokenizer 长度评估固定多块；候选、查询预算和统计单位均按 source 保持一致。本批 canary 沿用现有切分，多块方案尚未实施。
+当前单个 chunk 保存该记录完整的 `title + text`。按用户最新决定继续以完整 source 输入，取消为了凑三对而再切块的提案。Luna 读取整块，从中选取完整的 atomic factual relation；每个 pair 只询问其中一个关系，候选和查询预算仍按 source 计算。
 
-当前开发主线为 **Luna-only PCV 简化方案 B**：`frozen chunk → 一次 GPT-5.6 Luna → 0–8 个 (true_claim, original_entity, counter_entity, question_template) → 最小确定性 gates → Q+=T(e+), Q−=T(e−)`。构造只使用冻结 chunk 与固定 prompt；反事实必须能依据 chunk 判为假，counter 未出现在文本中不构成错误性证据。事实不完整、未消解话语指代，或非穷尽/list/set 等导致替换真假无法确定时直接跳过。
+当前开发主线已接入 **Luna-only PCV 简化方案 B：atomic Q+ + 同次分组 counter**：`frozen chunk → 一次 GPT-5.6 Luna → 0–8 个 (true_claim, original_entity, q_plus, counter_entities[1..3]) → 全部 slot/counter 最小检查/去重及 Q−=Q+[e+→e−] → 优先不同slot，不足时用同槽额外counter补至三对`。每个有效 slot 的多个 counter 都在首次响应中生成，无第二次 counter-only 调用。Q+ 只验证引文中的一个原子事实，不必复述其他并列事实；counter 可以出现在 chunk 中，错误性须由该原子关系及 chunk 的正常语义支持。最新 schema、选择规则及验证见[分组 counter 实现记录](研究记录/顶会推进_notes.md#v24-luna-grouped-counters)；此前[最终收缩式修复](研究记录/顶会推进_notes.md#v24-luna-final-contraction)和[同槽备用规则](研究记录/顶会推进_notes.md#v24-luna-same-slot-counter)保留为历史依据。
 
-**最新 Prompt 已完成接入、本地验证和同六篇真实复测，仍有明确构造漏检。** 自包含只判断句内能否理解“谁/什么做了什么”，不要求特定论文或模型名称；反事实按正常自然语义判断，`many applications → no applications` 等明确对立不因极端范围解释被拒绝。明显未消解指代、无句内绝对时间锚点的相对时间，以及不能确定为假的非穷尽关系替换直接 skip。现有 [build_luna_direct_prompt](src/prepare/restoration_first_v24.py) 已采用[研究总表](研究记录/顶会推进_notes.md)中定稿的完整 Prompt；确定性 gates 与 PVS 不变。
+**atomic Q+ 的既有最小检查继续保留。** [build_luna_direct_prompt](src/prepare/restoration_first_v24.py) 明确Q+使用真实e+且不得包含本组列表中任何完整counter；代码验证后只替换Q+中唯一、连续的e+。实体槽位在claim和Q+中的匹配容忍大小写差异，保留模型原始文本及槽外所有字符；不做fuzzy matching或倒装重组，`true_claim`自身仍须逐字出现在chunk中。本地指代检查限于完整词`we`、`our [proposed] framework/method/model/approach`、`this approach/framework/method/review`及`the latter/former`，不要求论文或方法专名。其他上下文、同槽语义角色、反事实错误性及自然性仍由同次Luna构造约束；无绝对锚点的相对时间或无法确定为假的非排他替换直接skip，不repair。本地检查记录结构有效性，事实依据与反事实错误性通过开发抽查检查。
 
-新路径不使用事实补全、canonical repair、证据扩展、全文重建、独立 fact/query verifier、semantic correction retry 或 restoration eligibility，也不加载 GLiNER2/BGE。历史 GLiNER2、ranking v2、旧两阶段及旧 Luna-only A/B 保留为 comparator/复现路径。配置中的默认 `candidate_fact_adapter` 仍是历史 GLiNER2；新方案通过 `development.luna_only_direct` 和下述独立入口调用，旧 `run-canary` 不会自动变成新方案。
+**开发复核统一收窄为“构造正确性抽查”**：只检查Q+对应原文支持的atomic fact、同角色e−使该关系明确为假，以及Q+/Q−只改变指定槽位。正常英语语法变化、只问长句中的一个子事实、不写论文/方法专名、victim未恢复e+都不单独构成拒绝理由；指代或表达问题只有在妨碍理解和判断该事实时才需要记录。现有代码没有综合语义评分或人工复核eligibility gate，也不新增此类gate。此前扁平版同30篇复测的抽查范围在生成前固定为原顺序每数据集前2篇的已选pair，共6篇、最多18对；缺少pair照实记录，不换样或补生成。只报告实际抽查结果，不推算30篇的“整体语义通过率”。详见[三项抽查规则](研究记录/顶会推进_notes.md#v24-luna-construction-correctness-review)。
+
+direct 路径不使用事实补全、canonical repair、证据扩展、全文重建、独立 fact/query verifier、semantic correction retry 或 restoration eligibility，也不加载 GLiNER2/BGE。历史 GLiNER2、ranking v2、旧两阶段及旧 Luna-only A/B 保留为 comparator/复现路径。配置中的默认 `candidate_fact_adapter` 仍是历史 GLiNER2；现行 atomic Q+ 实现通过 `development.luna_only_direct` 和下述独立入口调用，旧 `run-canary` 保持历史路径。
 
 固定的主要约束：
 
-- 每个 frozen source 一次 Luna 调用，最多返回 8 个候选；代码按返回顺序处理，不重新 ranking，不追加 generation 或 repair。
-- 按 `(normalized_true_claim, normalized_original_entity)` 去重，允许同 claim 不同 slot；保留前三个通过 gates 的 pair 后停止。不足三对记录 `source_eligibility_insufficient`，正式预算仍为每 source 3 对、6 条 query。
+- 每个 frozen source/chunk 一次 Luna 调用，最多返回 8 个 slot 组；每组共享一个 claim/e+/Q+，在同次响应中提供 1–3 个 counter，最多展开 24 个备选 pair。每个有效 slot 都尝试提供三个 counter，无法给出足够明确错误的不同替换时允许少于三个；不追加 generation、counter-only 请求或 candidate 9。counter 须同角色、明确错误且不是彼此的同义词、别名或近义改写；语义要求由同次 Luna 承担，本地只做规范化字面去重，不增加在线语义 verifier。
+- 按 `(normalized_true_claim, normalized_original_entity, normalized_counter_entity)` 去重，允许同 claim 不同 slot，也允许同槽不同 counter。全部检查后，先按原序选不同 slot 的首个有效 counter；不足三对再按 slot 顺序、counter 顺序补足：三槽 A1/B1/C1，两槽 A1/B1/A2，一槽 A1/A2/A3。每槽累计最多贡献三对，没有质量 ranking；若重复输出同槽，Q+ 必须逐字一致，否则 `same_slot_q_plus_mismatch` 拒绝。
+- `candidate_count` / `valid_candidate_count` 现在记录 slot 组数，`valid_slot_count` 记录不同有效槽数；counter 数、有效 pair 数和最终 selected 数分别记录，不能把新组数与旧扁平候选数直接比较。不足三对仍记录 `source_eligibility_insufficient`；最终最多每 source 3 对、6 条 query，允许 Q+ 文本重复。共享事实的多个反事实探测不等于多个独立事实，统计单位仍是 source；交给后续的每个 pair 仍保存单值 `counter_entity`，支持与恢复行为由独立 PVS 评分处理。
 - 先在 membership、Retriever、victim 与 AUC 不可见的条件下取得 2,250 篇 eligible source，再固定划分为 1,000 `KB_Member`、1,000 `True_Non_Member`、250 `Reserve`。
 - 主 RAG index 只含 `KB_Member`；每个 dataset × Generator × Retriever 的主评估 cell 为 12,000 条 query，Reserve 不计入这一主 victim 预算。
 - PVS 按 source 汇总，分别报告各 Retriever 的逐数据集与 macro 结果。模型、构造、split、检索、scoring 和评估配置必须在正式结果可见前冻结。
 
-### 当前简况（2026-09-10）
+<a id="v24-formal-runner"></a>
 
-**新自然语义 Prompt 的同批六篇真实复测与全部诊断已完成。** 16:55:52 完成六次 Luna 请求，返回14个候选，自动选中12对、3/6 source自动达到三对。Assistant-only复核全部候选为 **2 confirmed_valid / 8 failed / 4 unconfirmed**；已选12对为 **2/7/3**，确认三对有效的source为 **0/6**。主要问题为模板丢失固定claim内容、未解析话语指代、局部slot拼接/名称冲突、无锚点相对时间及反事实错误性不足。见[完整真实复测报告与全部实际 Q+/Q−](artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_attempt1/natural_semantics_retest_report.md)。
+### V24 正式 runner 与本地 mock 验证
 
-本次真实调用logical/physical/retry=6/6/0，tokens=6,585 input/9,275 output，累计请求latency=196.735秒。六个真实响应的身份、离线解析及选择回放通过；禁用API客户端的完成态resume保持原response/summary不变。本轮未改代码、Prompt、配置、PVS或正式约束；复核追加API=0，完成后停止，未进入fresh30/formal。单次同六篇开发回归不能推断总体容量或显著改善/退化。
+正式代码路径为 `已有 selected pairs → 固定 split 绑定 → 六问计划 → 现有 RAG/victim → 原始回答 → hybrid PVS → source mean/median`。这是运行导出适配，不重新执行Luna、selector或构造gate，也不改变PVS公式和victim prompt。旧10号入口保留V20行为；V24必须显式使用 `--v24`，不会默认读取历史Gemma配置、V20 schedule或旧scoring。
+
+复现本轮11项本地定向测试（外部client、Retriever、NLI均为mock，无网络/GPU）：
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B -m unittest tests.test_token_bucket_runner.V24FormalRunnerTests
+```
+
+真实运行前，在现有 `configs/restoration_first_v24.yaml` 的 `formal.runtime` 填入单个dataset × Generator × Retriever cell的固定绑定。当前值为null，尚未选择真实运行参数。必填项如下：
+
+| 字段 | 内容 |
+|---|---|
+| `selected_pairs_path` / `split_manifest_path` | 已有2250-source selected pairs JSONL与V24固定split manifest；不得用开发子集代替 |
+| `output_dir` | 本cell独立输出目录；首次必须全新，后续默认校验后resume |
+| `llm_profiles_path` / `victim_profile` | 已有victim profile文件和选中的profile；凭据仍只来自环境变量 |
+| `generator_family` / `concrete_model` / `generator_version` | 明确的模型身份；实际profile和provider model ID必须匹配 |
+| `retrieval` | `backend`、`retriever_id`、`index_dir`、`index_manifest_sha256`、`top_k`；支持dense/bm25/hybrid |
+| `generation` | 显式保存 `temperature`、`max_tokens`、`timeout`、`retries`、`retry_backoff_base`、`retry_backoff_max`、`retry_until_success`、`retry_cooldown_seconds`、`request_interval_seconds`、`max_workers`、`requests_per_minute`、`checkpoint_every` |
+
+hybrid的 `index_dir` 指向dense索引，另填 `bm25_index_dir`、`bm25_index_manifest_sha256` 与 `retrieval.hybrid` 的现有HybridRagRetriever参数；`reranker_revision`须固定、`reranker_local_files_only=true`，`final_top_k`与`top_k`一致。两个索引必须共享docstore。dense索引须声明固定embedding revision和本地加载。
+
+绑定完成后可只读预检；当前null绑定会被明确拒绝，不会自动选用历史输入：
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B scripts\10_run_rag_and_llm_only.py --v24 --dataset nfcorpus --config configs\restoration_first_v24.yaml --dry-run
+```
+
+预检验证2250总量、1000/1000/250固定split、source/hash/pair顺序、原问句及单次替换、主index只含完整的KB_Member集合，以及模型/后端绑定；不加载模型、不写文件。主计划只有2000 source、6000 pair、12000 query，Reserve无victim请求。相同Q+按不同pair保留三个query ID并逐条调用，Q−仍须互异。这里的检查是冻结产物完整性检查，不新增construction语义筛选。
+
+实际执行去掉 `--dry-run`，并要求已获真实运行授权、config与代码已提交冻结。入口先加载既定本地NLI，再初始化Retriever/victim；缺权重或CUDA时不会先消费victim查询预算。原始回答不齐全时保留恢复状态、暂不评分；解析失败仍由既有PVS记录为不完整，不填零。默认resume只补未成功query；已完成cell仅校验产物，不再加载模型或调用API。输入、配置、profile、Git commit或结果hash漂移则拒绝续跑，不支持 `--force` 覆盖正式结果。
+
+输出复用普通JSONL/JSON：`selected_main_pairs.jsonl`、`query_plan.jsonl`、`benchmark.jsonl`、`rag_responses.jsonl`及其既有identity/manifest、`scores/pair_scores.jsonl`、`scores/source_scores.jsonl`、`scores/scoring_summary.json`、`run_summary.json`。source主分是mean，median只诊断；membership分组在benchmark/split中，不能作为scoring或重选输入。每后端单独运行、单独报告，本入口不执行AUC/TPR评估。没有新增协议、authorization、ledger或freeze层。
+
+当前只完成代码和mock验证；真实固定NLI五例sanity、正式输入与cell绑定、config+代码commit冻结尚待完成。mock的 `[1,0.8,0] → mean=0.6 / median=0.8` 仅验证接口与聚合，不代表真实NLI语义表现或攻击结果。
+
+### V24 PVS 离线入口与此前冻结准备
+
+只检查已有构造产物，不调用Luna、victim、Retriever或NLI，也不写分数：
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B scripts\11_parse_stance_and_score.py --v24-hybrid --dataset nfcorpus --pairs artifacts\v24\development\luna_only_direct_fresh30_20260912\luna_attempt1\nfcorpus_batch1\smoke_results.jsonl --dry-run
+```
+
+`--config` 在该模式默认使用 `configs/restoration_first_v24.yaml`。`--pairs` 接受已有 `smoke_results.jsonl` 的 `construction.selected_pairs`、source级 `selected_pairs`，或逐pair JSONL；只展平已选结果，保持顺序、e+/e−及Q+/Q−原文，不读取Luna生成回答作为victim回答，不重新筛选或top-up。零对/不足三对的source保留为不足状态；同槽多个counter的重复Q+保留不同pair/query身份，不按文本去重。
+
+有原始RAG回答后，用 `--responses <单cell回答JSONL> --output-dir <全新目录>` 替代 `--dry-run` 即可离线评分。回答沿用现有RAG行字段：`query_id/dataset/source_key/pair_id/claim_type/query/response/error`；`claim_type` 为 `true/counterfactual`，问句必须与已选pair逐字一致。query_id沿用V24已有规则：`sha256_obj({pair_id, polarity})`，polarity为`Q_plus/Q_minus`。每行保留 `mode=rag`、模型实际ID、Retriever、variant与context身份；入口拒绝跨cell、重复回答或问句/来源漂移。纯No、未知、解析失败与NLI失败仍按既有评分定义处理，不把失败填零或对剩余pair平均。
+
+产出为 `pair_scores.jsonl`、`source_scores.jsonl` 和 `scoring_summary.json`；主分仍是三对mean，median仅诊断。summary保存输入/config/scorer hash、Git状态和cell信息；已有目录拒绝覆盖，不自动resume或回退到旧评分。模型仅在非exact恢复需要时加载；缺少固定本地权重则停止该次实际评分，不下载、不改模型。返回 `prepared_inputs_only` 仅表示输入预检完成，不表示模型可用、语义质量通过或正式冻结。
+
+以下保留此前只接通离线入口时的冻结准备记录；正式runner衔接状态已由上节更新：
+
+- Query Construction、Luna Prompt、selector、三对/六问及scoring公式保持；本轮只补评分入口。
+- 固定NLI revision已声明，但本地权重与五个RA sanity case的真实双向entailment仍待验证；mock不能替代该结论。
+- V24目录目前只有开发产物和source pools，正式eligibility/split/query/index/cell尚未产出或绑定。PVS离线入口不等于53号开发smoke已接通完整正式RAG运行；正式query导出和runner预算兼容仍待衔接，尤其不能沿用经典runner对source内重复Q+的拒绝规则。
+- 工作树仍有未提交修改，当前HEAD不是本轮冻结提交。下一步先完成固定NLI的五例真实离线验证，再安排正式入口/固定split绑定与config+代码提交；本轮不启动这些运行。
+
+证据：[入口与冻结准备验证](artifacts/v24/development/pvs_hybrid_20260913/entry_validation.json)。此前[独立函数验证](artifacts/v24/development/pvs_hybrid_20260913/local_validation.json)保持原样。
+
+### 当前简况（2026-09-12）
+
+**分组 counter 版本的同30篇真实复测已完成并停止。** 原完整chunk与顺序保持，30份响应共97个slot组、210个counter，本地有效208对、实际selected 66对；**20/30篇本地满三对：nfcorpus 8/10、scidocs 4/10、trec-covid 8/10**，旧扁平版为22/30。同槽fallback选入4对，让3篇补满三对；另10篇不足全部来自原始生成数量：5篇零slot、5篇只给出1–2个counter。本地仅拒绝2个counter，没有使原本够三对的source变成不足。见[完整报告与全部实际Q+/Q−](artifacts/v24/development/luna_only_direct_fresh30_20260911/grouped_counters_attempt1/retest_report.md)、[汇总](artifacts/v24/development/luna_only_direct_fresh30_20260911/grouped_counters_attempt1/retest_summary.json)及[完成记录](研究记录/顶会推进_notes.md#v24-luna-grouped-counters-retest-result)。
+
+固定6篇中4篇有pair，实际抽查11对：8对的三项构造检查得到支持，2对丢失WhatsApp互动范围、1对的previously缺少参照时点；另记录一组hinder/prevent近义备用及一处the an措辞偏差。没有按抽查重选或推算全30篇语义通过率。共31次调用尝试、30份响应：00s2pabm首轮RuntimeError且无响应，仅在独立目录原样恢复一次，失败原件保留，其用量/计费未知。已收到响应的input/output tokens=55,950/71,510，累计请求latency=1387.325秒。30条离线回放和七个输出目录禁止client的resume通过；本次运行未改代码、Prompt、配置或PVS。
+
+**分组 counter 版本的本地验证证据。** direct/mock **63项全部通过**，包含于完整 V24 回归 **297项：287通过、10项既有legacy skipped**。覆盖一槽三对、两槽补足、不同槽优先、8组/24counter全部检查但只选三对、Q+禁counter、去重与无top-up。六个旧扁平checkpoint在创建client或写入前均被既有漂移检查拒绝，历史产物保持。该实现阶段真实API/victim/Retriever/GPU调用为0；其后真实复测结果见上方，本次代码未变，没有重复运行这些测试。详见[实现与验证记录](研究记录/顶会推进_notes.md#v24-luna-grouped-counters)。
+
+**此前扁平最终收缩版Prompt的同30篇真实复测与固定6篇抽查已完成并停止。** 当时生成130候选，本地valid=121、selected=67对，**22/30篇本地选满三对：nfcorpus 8/10、scidocs 6/10、trec-covid 8/10**。8篇不足中，7篇原始输出少于三候选（6篇为零），另1篇3个候选均被既有指代检查拒绝。同槽备用在1篇中填入2对，使其本地选满三对。该结果属于旧扁平schema的开发回归，不是分组版本的真实结果，也不是全30篇构造正确性通过率。
+
+固定6篇中两篇零pair，实际抽查其余4篇的10对：8对的事实依据与反事实错误性得到支持，2对分别缺少抗体测量对象、初始/后续疗程范围；10对单槽替换均保持。未抽查部分不记通过，未按抽查重选。30条重解析/选择回放、130候选全量处理、67对替换和六批离线resume通过，代码、Prompt、配置与PVS不变。见[本轮报告与实际Q+/Q−](artifacts/v24/development/luna_only_direct_fresh30_20260911/final_contraction_attempt1/retest_report.md)及[完成记录](研究记录/顶会推进_notes.md#v24-luna-final-contraction-retest-result)。
+
+30次成功生成的input/output tokens为51,570/63,475，累计请求latency为1229.418秒。首批另有5次沙箱内无响应尝试，经确认后在独立目录重新执行；失败原件保留，原请求计费未知，因此不能把整体调用写成只有30次。未运行victim、Retriever、GPU或formal，没有新版本、提交或推送。
+
+**2026-09-12完成复核口径收缩。** 本次只修改README和两份研究总表，生成Prompt、选择器、测试与PVS均未改动；没有新增审核器、分数或准入阈值。后续报告分开记录本地数量是否满三对与抽查发现的具体构造问题。旧5/30等审核结论按原口径保留，未重新标注；本轮未做真实生成或抽查，API调用为0。
+
+**2026-09-11最终收缩式修复及本地验证完成。** direct/mock共55项；扩展回归303项中293通过、10项既有legacy skipped，55项包含其中。最近30篇的116个保存候选只做离线回放：3个纯大小写拒绝恢复，新增指代/Q+ counter检查生效，本地valid由110变100、selected由61变57、本地三对source由15变13。没有重新生成或重新计算语义通过率，原始实验产物保持；API/victim/Retriever/GPU调用为0。设计、代码边界及回放明细见[最终修复记录](研究记录/顶会推进_notes.md#v24-luna-final-contraction)。新Prompt的真实输出尚未验证。
+
+**上一版Prompt对同30篇的真实复测及全部候选诊断已完成。** 原样复用三数据集各10篇的完整chunk与顺序，30次Luna返回116候选，本地valid=110，实际selected=61；15/30篇本地选满三对，Assistant-only确认三对均有效为 **5/30：nfcorpus 2/10、scidocs 0/10、trec-covid 3/10**。对比旧响应按当时selector回放的8/30，这批复测未见提升；它是同批开发回归，不是新的未见fresh30或正式结果。见[该次报告与全部实际Q+/Q−](artifacts/v24/development/luna_only_direct_fresh30_20260911/same_slot_counter_attempt1/regeneration_report.md)及[研究总表](研究记录/顶会推进_notes.md#v24-luna-same30-regeneration)。
+
+15篇数量不足全部在Luna原始响应中就只有0–2个候选，并非本地gate把至少3个筛成不足；另10篇虽选满三对，但语义未通过。新响应中本地接受6个同槽备用候选，全部来自4篇scidocs，诊断为4失败/2未确认；实际选入2个，没有增加三对语义有效source。已选61对为39有效/15失败/7未确认，没有按Assistant标签重选。
+
+实际API logical/physical/retry=30/30/0，input/output tokens=48,060/62,912，累计请求latency=1280.893秒。30条重解析/回放、116候选全量处理、61对单次替换和六批禁用client的完成态resume通过；本轮未改代码、Prompt或配置，10个保护文件和27个旧产物hash不变。当前结果已保存并停止，没有追加生成、victim/Retriever/GPU或formal调用。
+
+**同槽备用反实体规则已实现并完成本地验证。** direct/mock 48/48通过；扩展回归296项中286通过、10项既有legacy skipped。回放原fresh30的30条保存响应、115候选，仅MED-1118由C0/C1改为C0/C1/C2，新增一对沿用此前Assistant有效标签；其余29篇选择及已选问句不变。本地valid=111、selected=67、本地三对source=18/30、三对均语义有效=8/30（nfcorpus 4/10、scidocs 0/10、trec-covid 4/10）。见[实现与本地回放报告](artifacts/v24/development/luna_only_direct_fresh30_20260911/same_slot_counter_local_regression_20260911/local_regression_report.md)。
+
+这是此前新selector对旧响应的回放；当时尚未真实验证新Prompt的生成效果。该次新增API/tokens/API latency均为0，未改PVS、配置或旧产物。30条重解析/回放、67对单次替换通过，新代码在client初始化前拒绝resume六个旧attempt；该次8/30与上面的新真实生成5/30分别保留。
+
+**此前 atomic Q+ Prompt 的 fresh30 开发验证已完成。** 三数据集各10篇，30次Luna返回115候选，本地valid=110、实际selected=66；17/30篇本地凑齐三对，Assistant-only复核后实际选中三对均有效为 **7/30：nfcorpus 3/10、scidocs 0/10、trec-covid 4/10**。已选66对为41有效、23失败、2未确认。另23篇中13篇数量不足、10篇虽然凑齐却含语义问题。见[完整报告与全部实际Q+/Q−](artifacts/v24/development/luna_only_direct_fresh30_20260911/fresh30_report.md)及[研究总表](研究记录/顶会推进_notes.md#v24-luna-fresh30-development)。
+
+主要失败包括未解析指代、非原子问句、反事实错误性未确定、条件或语义角色改变。本地只拒绝5个候选（duplicate=1、q_plus_slot_count=4）；其中3次slot失配是大小写契约问题，不等同于事实或英语语法错误。5篇原返回候选中仍有足够有效候选，但原序选中坏候选；诊断没有重选，不能把事后候选可用性12/30写成实际通过率。
+
+该次API logical/physical/retry=30/30/0，tokens=43,980 input/64,251 output，累计请求latency=1265.146秒；无Retriever/victim/GPU调用。30条重解析、选择回放、66对单次替换及六批禁用客户端的完成态resume通过，当时原产物与10个源码/config/PVS保护hash不变。真实生成与复核阶段未改代码或Prompt，未重跑此前39/39 direct/mock测试。固定未见prefix每数据集10篇，只作开发诊断；该批结果原样保留，后续修改与本地回放另存。
+
+此前Prompt输出修正仅改三处要求并通过39/39 direct/mock测试：Q+保持原实体、引文逐字复制、同次调用检查完整chunk。正常数值问句与小写引文配自然问句合法；无补生成或repair。上述fresh30才是该Prompt的新真实生成结果，历史mock与同六篇计数不替代本次语义复核。
+
+**此前最小筛选修复与同六篇保存响应的本地回归已完成。** 原18个候选全部检查，本地valid=9，最终selected=7；Assistant-only复核已选7对均有效，2/6 source有三对有效pair。MED-1114的C0/C1/C2由指代规则拒绝，C3/C4/C5三个OR候选按原顺序入选。没有重新生成Luna候选。见[完整回归报告](artifacts/v24/development/luna_only_direct_beir6_20260910/atomic_qplus_local_regression_20260911/local_regression_report.md)。
+
+该次9个候选被拒，原因命中为 `unresolved_discourse_reference=5`、`q_plus_slot_count=4`、`claim_not_exact_chunk_span=1`；一条候选同时命中两项。MED-1114的C7仍是非atomic问题，本地通过但未选，不把全部valid写成语义通过，也未为它加规则。该次是同一响应上的筛选回归，不能推断新样本或总体质量，也不代表最新Prompt的生成效果。
+
+当次direct/mock测试38/38通过；扩展回归286项中276通过、10项既有legacy skipped，38项包含在286项内。六篇身份、原响应重解析、完整筛选和七对单次替换均通过，原产物及配置hash不变。该次新增API/tokens/API latency均为0，Prompt和PVS未改，完成后停止调整同六篇。
+
+**此前2026-09-10的同六篇 atomic Q+ 真实复测与全部诊断已完成。** 20:21:20完成6次Luna请求，返回18候选，自动选中7对、2/6 source自动达到三对。Assistant-only复核全部18候选为8有效/10失败；已选7对为4有效/3失败，1/6 source具有三对确认有效pair。MED-1114前三个上下文依赖人数句占满选择名额，后四个有效OR草稿早停未选；另有Q+提前填入e−和claim大小写漂移被确定性gate拒绝。见[原始报告与全部问句](artifacts/v24/development/luna_only_direct_beir6_20260910/atomic_qplus_attempt1/atomic_qplus_retest_report.md)。
+
+该次logical/physical/retry=6/6/0，tokens=8,205 input/8,590 output，累计请求latency=172.324秒。六条身份、重解析、选择回放、七对单次替换及禁用客户端的完成态resume均通过；原response/summary不变。当次运行与复核未改代码/Prompt/config，没有追加API、补选或进入fresh30/formal。
+
+此前本地验证direct/smoke 29/29通过；v24、BEIR source pool与sibling rate-limit回归277项中267 passed、10项既有legacy skipped。29项是277项的子集。该次真实复测期间代码未变，没有重跑这些测试；它们不替代真实语义复核。
+
+此前设计阶段撤回了“Q+ 没有复述其他并列事实”这一拒绝理由；OR 句只验证 beef 对应的 1.22 可以成立。旧响应、诊断标签与计数原样保留，本轮未重新标注或生成，下面的历史 0/6 不代表 atomic Q+ 的效果。
+
+**上一版自然语义 Prompt 的同批六篇真实复测与全部诊断已完成。** 16:55:52 完成六次 Luna 请求，返回14个候选，自动选中12对、3/6 source自动达到三对。按当时整句忠实性口径，Assistant-only复核全部候选为 **2 confirmed_valid / 8 failed / 4 unconfirmed**；已选12对为 **2/7/3**，确认三对有效的source为 **0/6**。当时记录了模板省略并列内容、未解析话语指代、局部slot拼接/名称冲突、无锚点相对时间及反事实错误性不足。见[历史真实复测报告与全部实际 Q+/Q−](artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_attempt1/natural_semantics_retest_report.md)。
+
+该次真实调用logical/physical/retry=6/6/0，tokens=6,585 input/9,275 output，累计请求latency=196.735秒。六个真实响应的身份、离线解析及选择回放通过；禁用API客户端的完成态resume保持原response/summary不变。真实复测期间未改代码、Prompt、配置、PVS或正式约束；复核追加API=0，完成后停止，未进入fresh30/formal。单次同六篇开发回归不能推断总体容量或显著改善/退化。
 
 此前接入后的direct/smoke测试22/22通过，定向回归270项中260 passed、10项既有legacy skipped；该阶段API=0。本次代码未变，未重复这些测试。同六篇旧输出按新口径的Assistant-only诊断为4有效/4不合格/2未确认，原选中九对为4/3/2，1/6 source具备三对确认有效pair；它是本次同口径比较的旧输出基准。见[当时本地验证与重评报告](artifacts/v24/development/luna_only_direct_beir6_20260910/natural_semantics_local_review/local_validation_report.md)。
 
@@ -57,19 +184,19 @@ PCV-MIA（Paired Counterfactual Verification Membership Inference Attack）研�
 
 Query Construction 在两问实例化后结束；支持、否定与恢复留给 PVS。现有 v23 PVS 对 correction_entity 使用规范化 exact equality，经典 parser/scorer 也依赖关键词/实体字符串，尚不完整表达连续语义 restoration；这些评分位置已记录为后续独立事项，本轮 PVS 主公式未改。
 
-| 53 号脚本的新入口 | 用途 |
+| 53 号脚本的当前运行入口（atomic Q+ + 单次替换） | 用途 |
 |---|---|
 | `preview-luna-only-smoke --input <frozen chunk JSONL>` | 本地校验，最多 8 source，无 API/GPU 调用 |
 | `run-luna-only-smoke --input <同一输入> --output-dir <新开发目录>` | 每 source 一次 Luna，保存完整响应、候选、pair 与统计；同目录恢复使用 `--resume` |
 
-输入和输出均限定在 `artifacts/v24/development/`。本轮到此完成并停止；未创建 v25，未改变 BEIR datasets、formal split、2250 target、3 对/6 问、PVS 主公式或 AUC/TPR@1%FPR，未启动 fresh30/capacity/formal。
+输入和输出均限定在 `artifacts/v24/development/`。本轮分组 counter 的同30篇真实复测、固定抽查和报告完成并停止；未创建 v25，未改变 BEIR datasets、formal split、2250 target、3 对/6 问、PVS 主公式或 AUC/TPR@1%FPR，未启动 capacity/formal。
 
 <details>
 <summary>2026-09-09 及此前开发记录（历史路径与当时待办）</summary>
 
 ### 历史简况（2026-09-09）
 
-以下保留当时的结果、入口与待办；当前构造方案和停止边界以上方 2026-09-10 条目为准。历史两阶段、事实补全和 A/B 待办不自动延续到简化方案 B。
+以下保留当时的结果、入口与待办；当前构造方案和停止边界以上方 2026-09-12 分组 counter 条目为准。历史两阶段、事实补全和 A/B 待办不自动延续到简化方案 B。
 
 新开发样本两阶段真实 canary 已于 10:49 完成，**质量验收未通过**：30篇输入完成，自动通过12/30对，Assistant-only两问均通过8/30对（NFCorpus 3/10、SCIDOCS 4/10、TREC-COVID 1/10）。已交付24问句中16通过、8失败；其余36目标槽位未选出问句，全部60槽位已记录。执行缺失0，Luna逻辑/物理/重试=84/85/1，阶段响应已保存且核验一致。见[本批验收与归因报告](artifacts/v24/development/query_quality_canary_two_stage_fresh_20260909/luna_attempt1/canary_acceptance_report.md)。TREC-COVID三篇零候选及首次不足的预检保留，本批不进入capacity/formal。
 
