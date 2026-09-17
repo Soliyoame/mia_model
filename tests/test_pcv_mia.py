@@ -642,20 +642,30 @@ class HybridPvsTests(unittest.TestCase):
                 self.assertEqual(score["restoration"], 1.0)
                 self.assertEqual(score["pair_pvs"], expected)
 
-    def test_accepting_counter_is_one_and_negative_margin_is_clipped(self) -> None:
-        score = self._pair(minus_response=self._response("supported"))
-        self.assertEqual(score["counter_acceptance"], 1.0)
-        self.assertEqual(score["restoration"], 0.0)
-        self.assertEqual(score["restoration_margin"], 0.0)
-        self.assertEqual(score["non_acceptance"], 0.0)
-        self.assertEqual(score["pair_pvs"], 0.0)
+    def test_accepting_counter_is_negative_regardless_of_positive_support(self) -> None:
+        for plus, support in (("supported", 1.0), ("insufficient", 0.0), ("contradicted", 0.0)):
+            with self.subTest(plus=plus):
+                nli = self._nli()
+                score = self._pair(plus_response=self._response(plus),
+                                   minus_response=self._response("supported"), nli=nli)
+                self.assertEqual(score["score_status"], "scored")
+                self.assertEqual(score["positive_support"], support)
+                self.assertEqual(score["counter_acceptance"], 1.0)
+                self.assertEqual(score["restoration"], 0.0)
+                self.assertEqual(score["restoration_margin"], 0.0)
+                self.assertEqual(score["non_acceptance"], 0.0)
+                self.assertEqual(score["pair_pvs"], -1.0)
+                nli.probabilities.assert_not_called()
 
     def test_unknown_is_valid_zero_support_and_not_a_runtime_failure(self) -> None:
-        score = self._pair(plus_response="I don't know", minus_response="I don't know")
-        self.assertEqual(score["score_status"], "scored")
-        for key in ("positive_support", "counter_acceptance", "restoration", "pair_pvs"):
-            self.assertEqual(score[key], 0.0)
-        self.assertEqual(score["non_acceptance"], 1.0)
+        for plus, support in (("I don't know", 0.0), ("Consistent", 1.0)):
+            with self.subTest(plus=plus):
+                score = self._pair(plus_response=plus, minus_response="I don't know")
+                self.assertEqual(score["score_status"], "scored")
+                self.assertEqual(score["positive_support"], support)
+                for key in ("counter_acceptance", "restoration", "pair_pvs"):
+                    self.assertEqual(score[key], 0.0)
+                self.assertEqual(score["non_acceptance"], 1.0)
 
     def test_exact_normalized_restoration_skips_nli(self) -> None:
         nli = self._nli()
@@ -712,11 +722,11 @@ class HybridPvsTests(unittest.TestCase):
         ]
         for original, correction in cases:
             with self.subTest(original=original):
-                nli = self._nli(0.94, 0.81)
+                nli = self._nli(0.94, 0.7)
                 score = self._pair(original_entity=original,
                                    minus_response=self._response("contradicted", correction), nli=nli)
-                self.assertAlmostEqual(score["restoration"], 0.81)
-                self.assertAlmostEqual(score["pair_pvs"], 0.81)
+                self.assertAlmostEqual(score["restoration"], 0.7)
+                self.assertAlmostEqual(score["pair_pvs"], 0.7)
                 corrected = f"The corrected value is {correction}."
                 true = f"The corrected value is {original}."
                 nli.probabilities.assert_called_once_with([(corrected, true), (true, corrected)])
@@ -780,14 +790,25 @@ class HybridPvsTests(unittest.TestCase):
 
     def test_three_pairs_keep_mean_primary_and_median_diagnostic(self) -> None:
         pairs = [self._pair(pair_id="p0"),
-                 self._pair(pair_id="p1", minus_response="Inconsistent: forty-three RA patients", nli=self._nli()),
+                 self._pair(pair_id="p1", minus_response="Inconsistent: forty-three RA patients", nli=self._nli(0.9, 0.5)),
                  self._pair(pair_id="p2", minus_response="Consistent")]
         source = aggregate_hybrid_source(pairs, dataset="toy", source_key="toy::s1")
         self.assertEqual(source["score_status"], "scored")
-        self.assertAlmostEqual(source["source_pvs_mean"], 0.6)
+        self.assertEqual([row["pair_pvs"] for row in source["pair_scores"]], [1.0, 0.5, -1.0])
+        self.assertAlmostEqual(source["source_pvs_mean"], 1.0 / 6.0)
         self.assertEqual(source["source_pvs"], source["source_pvs_mean"])
-        self.assertEqual(source["source_pvs_median"], 0.8)
+        self.assertEqual(source["source_pvs_median"], 0.5)
         self.assertEqual([row["pair_id"] for row in source["pair_scores"]], ["p0", "p1", "p2"])
+
+    def test_pair_and_source_score_range_includes_both_endpoints(self) -> None:
+        for minus, expected in (("Consistent", -1.0), ("Inconsistent: 43 RA patients", 1.0)):
+            with self.subTest(expected=expected):
+                pairs = [self._pair(pair_id=f"p{i}", minus_response=minus) for i in range(3)]
+                self.assertEqual([row["pair_pvs"] for row in pairs], [expected] * 3)
+                source = aggregate_hybrid_source(pairs, dataset="toy", source_key="toy::s1")
+                self.assertEqual(source["score_status"], "scored")
+                for field in ("source_pvs", "source_pvs_mean", "source_pvs_median"):
+                    self.assertEqual(source[field], expected)
 
     def test_insufficient_or_incomplete_source_does_not_average_remaining_pairs(self) -> None:
         good = [self._pair(pair_id="p0"), self._pair(pair_id="p1")]
@@ -804,7 +825,7 @@ class HybridPvsTests(unittest.TestCase):
         variants = [good + [self._pair(pair_id="p3")], [good[0], good[0], good[2]]]
         for field, value in [("source_key", "toy::s2"), ("dataset", "other"),
                              ("scoring_kind", "legacy"), ("pair_pvs", float("nan")),
-                             ("pair_pvs", 1.1), ("pair_pvs", True)]:
+                             ("pair_pvs", -1.1), ("pair_pvs", 1.1), ("pair_pvs", True)]:
             variants.append([good[0], good[1], {**good[2], field: value}])
         for pairs in variants:
             with self.subTest(pairs=pairs):
@@ -833,7 +854,8 @@ class HybridPvsTests(unittest.TestCase):
         config = load_yaml(root / "configs" / "restoration_first_v24.yaml")
         changes = [
             (("support_mapping", "insufficient"), 0.5),
-            (("pair_formula",), "S+ + R-"), (("source_aggregation",), "median"),
+            (("pair_formula",), "S+ + R-"), (("pair_formula",), "S+ * max(0, R- - A-)"),
+            (("source_aggregation",), "median"),
             (("pairs_per_source",), 4),
             (("restoration", "value_template"), "Question: {value}"),
             (("restoration", "nli", "model_id"), "other-model"),
@@ -923,8 +945,8 @@ class HybridPvsEntryTests(unittest.TestCase):
             source = list(read_jsonl(tmp / "scores/source_scores.jsonl"))[0]
             summary = read_json(tmp / "scores/scoring_summary.json")
             self.assertEqual([row["pair_id"] for row in scored], ["p0", "p1", "p2"])
-            self.assertEqual([row["pair_pvs"] for row in scored], [1.0, 0.8, 0.0])
-            self.assertAlmostEqual(source["source_pvs_mean"], 0.6)
+            self.assertEqual([row["pair_pvs"] for row in scored], [1.0, 0.8, -1.0])
+            self.assertAlmostEqual(source["source_pvs_mean"], 0.8 / 3.0)
             self.assertEqual(source["source_pvs"], source["source_pvs_mean"])
             self.assertEqual(source["source_pvs_median"], 0.8)
             self.assertEqual(source["concrete_model"], "synthetic-victim")

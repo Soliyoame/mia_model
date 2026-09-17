@@ -520,10 +520,10 @@ class V24FormalRunnerTests(unittest.TestCase):
         self.assertEqual([row["query"] for row in queries[:6:2]], [self.selected[0]["q_plus_text"]] * 3)
         self.assertEqual([row["query"] for row in queries[1:6:2]], [pair["q_minus_text"] for pair in self.selected[:3]])
         for source in sources:
-            self.assertAlmostEqual(source["source_pvs_mean"], 0.6)
+            self.assertAlmostEqual(source["source_pvs_mean"], 0.8 / 3.0)
             self.assertEqual(source["source_pvs"], source["source_pvs_mean"])
             self.assertEqual(source["source_pvs_median"], 0.8)
-            self.assertEqual([pair["pair_pvs"] for pair in source["pair_scores"]], [1.0, 0.8, 0.0])
+            self.assertEqual([pair["pair_pvs"] for pair in source["pair_scores"]], [1.0, 0.8, -1.0])
         scoring = read_json(output / "scores/scoring_summary.json")
         self.assertEqual(scoring["run_kind"], "v24_formal_hybrid_pvs")
         before = sha256_file(output / "run_summary.json")
@@ -545,7 +545,7 @@ class V24FormalRunnerTests(unittest.TestCase):
             "unique_queries": 12000, "mock_victim_calls": first["client_calls"] + rest["client_calls"],
             "mock_retriever_calls": first["retriever_calls"] + rest["retriever_calls"], "mock_nli_calls": rest["nli_calls"],
             "before_interrupt_calls": 6, "resume_calls": rest["client_calls"], "completed_resume_calls": 0,
-            "sample_pair_pvs": [1.0, 0.8, 0.0], "sample_source_mean": 0.6, "sample_source_median": 0.8,
+            "sample_pair_pvs": [1.0, 0.8, -1.0], "sample_source_mean": 0.8 / 3.0, "sample_source_median": 0.8,
             "external_api_calls": 0, "gpu_model_loads": 0, "wall_seconds": round(time.perf_counter() - started, 3),
         }
 

@@ -21,7 +21,7 @@ semantic_similarity:
 scoring:
   kind: stance_semantic_restoration
   support_mapping: {supported: 1.0, contradicted: 0.0, insufficient: 0.0}
-  pair_formula: "S+ * max(0, R- - A-)"
+  pair_formula: "S+ * R- - A-"
   pairs_per_source: 3
   source_aggregation: mean
   diagnostic_aggregation: median

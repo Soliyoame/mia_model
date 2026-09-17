@@ -1,6 +1,11 @@
 """PCV-MIA scoring.
 
-This module computes the Paired Verification Score (PVS) used by PCV-MIA.
+V24：S+ 表示真实命题得到支持，R- 表示拒绝反事实后对原值的语义恢复，
+A- 表示错误接受反事实。PVS_i = S_i^+ * R_i^- - A_i^-。
+source 主分为三对 PVS 的均值；pair/source 范围为 [-1, 1]，不作概率归一化。
+高分表示更强成员证据，负分表示错误接受反事实带来的反证。
+
+以下 CVG 说明仅适用于保留的经典评分路径：
 
 CVG = SupportScore(Q+) + CorrectionScore(Q-) - FalseAcceptancePenalty(Q-)
 The operational black-box attack uses CVG_RAG directly. CVG_LLM and
@@ -69,7 +74,7 @@ def validate_hybrid_pvs_config(
     expected = {
         "kind": "stance_semantic_restoration",
         "support_mapping": HYBRID_PVS_SUPPORT,
-        "pair_formula": "S+ * max(0, R- - A-)",
+        "pair_formula": "S+ * R- - A-",
         "pairs_per_source": 3,
         "source_aggregation": "mean",
         "diagnostic_aggregation": "median",
@@ -193,10 +198,12 @@ def score_hybrid_pair(
     except Exception as exc:
         # 不把运行失败填为零分，也不回显可能含外部信息的异常正文。
         return {**result, "score_status": "nli_error", "error_type": type(exc).__name__}
+    # 旧 margin 仅保留为兼容诊断字段，不参与正式 PVS。
     margin = max(0.0, restoration - acceptance)
+    pair_pvs = support * restoration - acceptance
     return {
         **result, "score_status": "scored", "restoration": restoration,
-        "restoration_margin": margin, "pair_pvs": support * margin,
+        "restoration_margin": margin, "pair_pvs": pair_pvs,
     }
 
 
@@ -222,7 +229,7 @@ def aggregate_hybrid_source(
         if row.get("score_status") == "scored":
             value = row.get("pair_pvs")
             if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or not 0.0 <= value <= 1.0):
+                    or not math.isfinite(value) or not -1.0 <= value <= 1.0):
                 raise ValueError("hybrid_pvs_pair_score_invalid")
     result: dict[str, Any] = {
         "dataset": dataset, "source_key": source_key,
