@@ -30,11 +30,13 @@ from contextlib import ExitStack, contextmanager, redirect_stdout
 from pathlib import Path
 from typing import Any, Iterator
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 import uuid
 
 from src.rag.runner import (
-    TokenBucket, _call_generator, build_rag_prompt, run_rag_and_llm_only,
+    PCV_RUNTIME_PROMPT_VERSION, PCV_ATTACK_REQUEST_PROMPT_HASH,
+    TokenBucket, _call_generator, build_rag_prompt, build_llm_only_prompt,
+    build_pcv_attack_request, run_rag_and_llm_only,
     run_v24_formal_cell, validate_fixed_query_budget,
 )
 from src.utils.hash import sha256_file, sha256_obj, sha256_text
@@ -115,6 +117,93 @@ def _run(work, qp, bp, client, *, workers, rpm, tag, variant_id="full_pvs"):
     rag = {r["query_id"]: r["response"] for r in read_jsonl(rag_out)}
     llm = {r["query_id"]: r["response"] for r in read_jsonl(llm_out)}
     return rag, llm
+
+
+class PcvAttackRequestTests(unittest.TestCase):
+    def test_wrapper_preserves_query_and_shells_have_no_response_contract(self) -> None:
+        for query in ("Was the trial conducted on 281 patients?",
+                      "  Was the {trial} conducted on 282 patients?\r\n患者  "):
+            with self.subTest(query=query):
+                request = build_pcv_attack_request(query)
+                self.assertEqual(request, build_pcv_attack_request(query))
+                self.assertEqual(request[:len(query)].encode("utf-8"), query.encode("utf-8"))
+                for shell in (build_rag_prompt(query, ["first", "second"]), build_llm_only_prompt(query)):
+                    for marker in ("Reply with exactly one of", "Consistent", "Inconsistent", "I don't know"):
+                        self.assertNotIn(marker, shell)
+                for prompt in (build_rag_prompt(request, ["first", "second"]), build_llm_only_prompt(request)):
+                    self.assertEqual(prompt.split("User request:\n", 1)[1], request)
+                    self.assertEqual(prompt.count("Reply with exactly one of:"), 1)
+                    self.assertTrue(prompt.endswith("Reply with only that line."))
+
+    def test_raw_retrieval_shared_request_six_calls_and_prompt_resume_identity(self) -> None:
+        from src.rag.retriever import RetrievedChunk
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            qp, bp = _make_inputs(work, 6)
+            queries = list(read_jsonl(qp))
+            positive = "  Was the {trial} conducted on 281 patients?\r\n患者  "
+            for i, row in enumerate(queries):
+                row.update(pair_id=f"pair-{i // 2}", source_key="source-1", audit_id="audit-1",
+                           claim_type="true" if i % 2 == 0 else "counterfactual",
+                           query=positive if i % 2 == 0 else f"Was the trial conducted on {282 + i} patients?")
+            write_jsonl(queries, qp)
+            write_jsonl([{"audit_id": "audit-1", "source_key": "source-1", "doc_id": "d"}], bp)
+            original_bytes = qp.read_bytes()
+            raw_queries = [row["query"] for row in queries]
+            contexts = ["First reference.\nUnchanged.", "Second reference."]
+            retriever = _FakeRetriever()
+            retriever.retrieve = Mock(return_value=[
+                RetrievedChunk(f"chunk-{i}", f"doc-{i}", context, 1.0 - i / 10, {})
+                for i, context in enumerate(contexts)
+            ])
+            client = Mock(spec=["generate"])
+            client.generate.return_value = "Consistent"
+            rag_out, llm_out = work / "rag.jsonl", work / "llm.jsonl"
+            kwargs = dict(
+                dataset="nfcorpus", queries_path=qp, benchmark_path=bp, index_dir=work / "idx",
+                rag_output_path=rag_out, llm_output_path=llm_out, client=client,
+                retriever_override=retriever, top_k=2, pairs_per_source=3, allow_shared_q_plus=True,
+                run_rag=True, run_llm_only=True, max_workers=1,
+            )
+            manifest = run_rag_and_llm_only(**kwargs)
+            self.assertEqual(retriever.retrieve.call_args_list, [call(q, top_k=2) for q in raw_queries])
+            self.assertEqual(client.generate.call_count, 12)  # RAG 六问 + 独立 LLM-only control 六问。
+            prompts = [item.args[0] for item in client.generate.call_args_list]
+            for i, raw_q in enumerate(raw_queries):
+                request = build_pcv_attack_request(raw_q)
+                self.assertEqual(prompts[2 * i], build_rag_prompt(request, contexts))
+                self.assertEqual(prompts[2 * i + 1], build_llm_only_prompt(request))
+                for prompt in prompts[2 * i:2 * i + 2]:
+                    self.assertEqual(prompt.split("User request:\n", 1)[1], request)
+                    self.assertEqual(prompt.count("Reply with exactly one of:"), 1)
+                for marker in ("Reply with exactly one of", "Consistent", "Inconsistent"):
+                    self.assertNotIn(marker, retriever.retrieve.call_args_list[i].args[0])
+            self.assertEqual(qp.read_bytes(), original_bytes)
+            for output in (rag_out, llm_out):
+                self.assertEqual([row["query"] for row in read_jsonl(output)], raw_queries)
+            self.assertEqual(manifest["fixed_budget"]["pairs_per_source"], 3)
+            self.assertEqual(manifest["query_budget_per_source"], 6)
+            self.assertEqual(manifest["experiment_identity"]["runtime_prompt_version"], PCV_RUNTIME_PROMPT_VERSION)
+            self.assertEqual(manifest["experiment_identity"]["attack_request_prompt_hash"], PCV_ATTACK_REQUEST_PROMPT_HASH)
+            run_rag_and_llm_only(**kwargs)
+            self.assertEqual(client.generate.call_count, 12)
+            self.assertEqual(retriever.retrieve.call_count, 6)
+            identity_path = rag_out.with_suffix(".identity.json")
+            identity = read_json(identity_path)
+            before = rag_out.read_bytes()
+            for version in (None, "legacy-internal-response-contract"):
+                altered = dict(identity)
+                if version is None:
+                    altered.pop("runtime_prompt_version")
+                else:
+                    altered["runtime_prompt_version"] = version
+                write_json(altered, identity_path)
+                with self.assertRaisesRegex(RuntimeError, "Experiment identity mismatch"):
+                    run_rag_and_llm_only(**kwargs)
+                self.assertEqual(rag_out.read_bytes(), before)
+                self.assertEqual(client.generate.call_count, 12)
+                self.assertEqual(retriever.retrieve.call_count, 6)
 
 
 class TokenBucketTest(unittest.TestCase):
@@ -405,6 +494,7 @@ class V24FormalRunnerTests(unittest.TestCase):
         self._write_index()
         self.environment = patch.dict(os.environ, {key: "" for key in (
             "PCV_VICTIM_PROFILE", "PCV_VICTIM_MODEL", "PCV_VICTIM_MODEL_VERSION", "PCV_VICTIM_BASE_URL",
+            "PCV_VICTIM_API_KEY",
         )})
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -430,15 +520,18 @@ class V24FormalRunnerTests(unittest.TestCase):
     def _dependencies(self, *, interrupt_after: int | None = None) -> Iterator[dict[str, Any]]:
         from src.rag.retriever import RetrievedChunk
 
-        counters = {"client_calls": 0, "retriever_calls": 0, "nli_calls": 0, "prompts": []}
+        counters = {"client_calls": 0, "retriever_calls": 0, "nli_calls": 0, "prompts": [], "retrieval_queries": []}
         test = self
 
         class Client:
             def generate_with_metadata(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
                 counters["client_calls"] += 1
                 counters["prompts"].append(prompt)
-                question = prompt.split("Verification request:\n", 1)[1].split("\n\n", 1)[0]
-                test.assertEqual(prompt, build_rag_prompt(question, [test.docstore[0]["text"]]))
+                request = prompt.split("User request:\n", 1)[1]
+                question = request.split("\n\nReply with exactly one of:", 1)[0]
+                test.assertEqual(request, build_pcv_attack_request(question))
+                test.assertEqual(prompt.count("Reply with exactly one of:"), 1)
+                test.assertEqual(prompt, build_rag_prompt(request, [test.docstore[0]["text"]]))
                 test.assertNotIn("KB_Member", prompt)
                 test.assertNotIn("True_Non_Member", prompt)
                 response = "Consistent"
@@ -461,6 +554,8 @@ class V24FormalRunnerTests(unittest.TestCase):
                 if interrupt_after is not None and counters["client_calls"] == interrupt_after:
                     raise RuntimeError("synthetic interruption")
                 counters["retriever_calls"] += 1
+                counters["retrieval_queries"].append(query)
+                test.assertEqual(top_k, test.runtime["retrieval"]["top_k"])
                 row = test.docstore[0]
                 return [RetrievedChunk(row["chunk_id"], row["doc_id"], row["text"], 1.0, row["metadata"])]
 
@@ -513,6 +608,8 @@ class V24FormalRunnerTests(unittest.TestCase):
         self.assertEqual(summary["scored_source_count"], 2000)
         self.assertEqual(summary["scored_pair_count"], 6000)
         self.assertEqual(len(queries), 12000)
+        self.assertEqual(first["retrieval_queries"] + rest["retrieval_queries"], [row["query"] for row in queries])
+        self.assertEqual(summary["binding"]["runtime_prompt_version"], PCV_RUNTIME_PROMPT_VERSION)
         self.assertEqual(len({row["query_id"] for row in responses}), 12000)
         self.assertEqual({row["group"] for row in responses}, {"KB_Member", "True_Non_Member"})
         self.assertFalse((output / "unused_llm_only.jsonl").exists())
@@ -533,6 +630,11 @@ class V24FormalRunnerTests(unittest.TestCase):
         for name in ("client_factory", "retriever_factory", "nli_factory"):
             done[name].assert_not_called()
         self.assertEqual(sha256_file(output / "run_summary.json"), before)
+        with self._dependencies() as drift, patch("src.rag.runner.PCV_RUNTIME_PROMPT_VERSION", "changed"):
+            with self.assertRaisesRegex(ValueError, "resume_binding_drift"):
+                self._run()
+        for name in ("client_factory", "retriever_factory", "nli_factory"):
+            drift[name].assert_not_called()
         with (output / "scores/source_scores.jsonl").open("a", encoding="utf-8") as handle:
             handle.write("\n")
         with self._dependencies() as altered, self.assertRaisesRegex(ValueError, "resume_artifact_drift"):
@@ -716,6 +818,11 @@ class V24FormalRunnerTests(unittest.TestCase):
             self._run()
         calls["client_factory"].assert_not_called()
         self.config_path.write_bytes(original_config)
+        with self._dependencies() as drift, patch("src.rag.runner.PCV_RUNTIME_PROMPT_VERSION", "changed"):
+            with self.assertRaisesRegex(ValueError, "resume_binding_drift"):
+                self._run()
+        for name in ("client_factory", "retriever_factory", "nli_factory"):
+            drift[name].assert_not_called()
         with self._dependencies() as calls, patch("src.rag.runner.git_snapshot", return_value={"commit": "b" * 40, "dirty": False}):
             with self.assertRaisesRegex(ValueError, "resume_binding_drift"):
                 self._run()
