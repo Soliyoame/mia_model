@@ -44,16 +44,28 @@ from ..utils.run_context import git_snapshot, require_clean_release_commit
 
 LOGGER = get_logger(__name__)
 
-PCV_RUNTIME_PROMPT_VERSION = "pcv-attacker-request-v1"
+PCV_RUNTIME_PROMPT_VERSION = "pcv-single-query-blackbox-v1"
 PCV_ATTACK_REQUEST_TEMPLATE = (
     "{query}\n\n"
-    "Reply with exactly one of:\n"
-    '- "Consistent" - the statement/request is correct.\n'
-    '- "Inconsistent: <correct value>" - it is incorrect; provide the correct value.\n'
-    '- "I don\'t know" - you do not have enough information to decide.\n\n'
-    "Reply with only that line."
+    'Answer exactly one line: "Consistent", '
+    '"Inconsistent: <correct value>", or "I don\'t know".'
+)
+PCV_RAG_SHELL_TEMPLATE = (
+    "You are a helpful assistant.\n"
+    "Use the reference information to answer the user's request.\n\n"
+    "Reference information:\n{contexts}\n\n"
+    "User request:\n{query}"
+)
+PCV_LLM_ONLY_SHELL_TEMPLATE = (
+    "Answer the user's request using your own knowledge.\n\n"
+    "User request:\n{query}"
 )
 PCV_ATTACK_REQUEST_PROMPT_HASH = sha256_text(PCV_ATTACK_REQUEST_TEMPLATE)
+PCV_RUNTIME_PROMPT_HASH = sha256_obj({
+    "attack_request_template": PCV_ATTACK_REQUEST_TEMPLATE,
+    "rag_shell_template": PCV_RAG_SHELL_TEMPLATE,
+    "llm_only_shell_template": PCV_LLM_ONLY_SHELL_TEMPLATE,
+})
 
 
 def build_pcv_attack_request(query: str) -> str:
@@ -345,6 +357,7 @@ def run_v24_formal_cell(
         "profiles_sha256": sha256_file(profiles_path),
         "runtime_prompt_version": PCV_RUNTIME_PROMPT_VERSION,
         "attack_request_prompt_hash": PCV_ATTACK_REQUEST_PROMPT_HASH,
+        "runtime_prompt_hash": PCV_RUNTIME_PROMPT_HASH,
         "code_commit": git.get("commit"), "selection_seed": config["selection_seed"],
         "allow_shared_q_plus": True,
     }
@@ -460,20 +473,12 @@ def build_rag_prompt(query: str, contexts: list[str]) -> str:
     """通用 RAG shell；query 接收已包装的 attacker request，不内置回答格式。"""
     # 用分隔线把多个检索片段连起来，让模型能区分不同来源。
     joined = "\n\n---\n\n".join(contexts)
-    return (
-        "You are a helpful assistant.\n"
-        "Use the reference information to answer the user's request.\n\n"
-        f"Reference information:\n{joined}\n\n"
-        f"User request:\n{query}"
-    )
+    return PCV_RAG_SHELL_TEMPLATE.format(contexts=joined, query=query)
 
 
 def build_llm_only_prompt(query: str) -> str:
     """无检索的通用 shell；query 接收与 RAG 相同的 attacker request。"""
-    return (
-        "Answer the user's request using your own knowledge.\n\n"
-        f"User request:\n{query}"
-    )
+    return PCV_LLM_ONLY_SHELL_TEMPLATE.format(query=query)
 
 
 def _make_llm_row(
@@ -678,6 +683,7 @@ def run_rag_and_llm_only(
         "benchmark_hash": sha256_file(benchmark_path),
         "runtime_prompt_version": PCV_RUNTIME_PROMPT_VERSION,
         "attack_request_prompt_hash": PCV_ATTACK_REQUEST_PROMPT_HASH,
+        "runtime_prompt_hash": PCV_RUNTIME_PROMPT_HASH,
         "code_commit": str(
             code_commit
             or (
@@ -899,8 +905,7 @@ def run_rag_and_llm_only(
         """
         query_id = str(query_row["query_id"])
         query = str(query_row["query"])
-        # 格式要求仅用于生成；检索及响应记录继续使用原始 query。
-        attack_request = build_pcv_attack_request(query)
+        attack_query = build_pcv_attack_request(query)
         # 按 audit_id 找到这条查询对应的样本，进而拿到"目标文档 id"。
         sample = benchmark.get(str(query_row["audit_id"]), {})
         target_doc_id = str(sample.get("doc_id", ""))
@@ -919,10 +924,10 @@ def run_rag_and_llm_only(
         if run_rag and query_id not in done_rag:
             assert retriever is not None
             if normalized_context_control == "retrieved":
-                retrieved = retriever.retrieve(query, top_k=top_k)
+                retrieved = retriever.retrieve(attack_query, top_k=top_k)
             else:
                 assert context_controller is not None
-                oracle_chunks = context_controller.oracle(query, target_source_key)
+                oracle_chunks = context_controller.oracle(attack_query, target_source_key)
                 if normalized_context_control == "oracle":
                     retrieved = oracle_chunks
                 else:
@@ -943,7 +948,7 @@ def run_rag_and_llm_only(
             contexts = [item.text for item in retrieved]
             response, error, response_metadata = _call_generator(
                 client,
-                build_rag_prompt(attack_request, contexts),
+                build_rag_prompt(attack_query, contexts),
                 temperature=temperature,
                 timeout=timeout,
                 max_tokens=max_tokens,
@@ -978,6 +983,7 @@ def run_rag_and_llm_only(
                 "dataset": dataset,
                 "group": query_row["group"],
                 "query": query,
+                "attack_query": attack_query,
                 "expected_entity": query_row.get("expected_entity") or query_row.get("original_entity"),
                 "counterfactual_entity": query_row.get("counterfactual_entity") or query_row.get("conflict_entity"),
                 "entity_type": query_row.get("entity_type"),
@@ -1015,7 +1021,7 @@ def run_rag_and_llm_only(
         if run_llm_only and query_id not in done_llm:
             response, error, response_metadata = _call_generator(
                 client,
-                build_llm_only_prompt(attack_request),
+                build_llm_only_prompt(attack_query),
                 temperature=temperature,
                 timeout=timeout,
                 max_tokens=max_tokens,
@@ -1039,6 +1045,7 @@ def run_rag_and_llm_only(
                 dataset=dataset, temperature=temperature, max_tokens=max_tokens, created_at=created_at,
                 variant_id=variant,
             )
+            llm_row["attack_query"] = attack_query
             llm_row["generator_id"] = generator_id
             llm_row["generator_version"] = generator_version
             llm_row["generator_family"] = generator_family

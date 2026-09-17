@@ -3920,3 +3920,13 @@ PubMed resume 修复（2026-08-05）：
 本条随用户授权的当前V24提交保存，目标为`codex/v24-pre-split-eligibility`及其`origin`同名分支；提交SHA和远端结果以Git记录为准。交付包含grouped-counter构造、混合PVS、正式runner、测试及文档，独立V23改动和本地开发artifacts保持原位。沿用476项回归结果，不重跑模型或实验。
 
 唯一下一步保持：准备固定revision本地NLI权重，完成五个RA case真实离线验证。随后补真实formal输入和cell绑定，再做正式冻结；当前`formal.runtime`仍为空，此次代码交付不代表formal已冻结或已运行。
+
+### 2026-09-17：v24 single-query black-box runtime 完成（superseding）
+
+- [x] 将固定短wrapper生成的同一个`attack_query`同时送入Retriever和RAG Generator；matched LLM-only的`User request`逐字节相同。
+- [x] 保留raw `query`并在response新增`attack_query`；query plan及Q+/Q-字节不改，三对/六问、top-k与context不变。
+- [x] generic shell不包含回答格式；回答契约只在attacker request出现一次。
+- [x] runtime版本更新为`pcv-single-query-blackbox-v1`；resume/formal identity新增完整prompt contract hash，旧版本/旧hash/缺失hash拒绝续跑。
+- [x] runner 22项、PCV parser/scoring 47项、V24套件运行312项（302通过、10项既有skip），合计运行381项（371通过、10 skip）；完整12000-query mock通过，`git diff --check`通过。
+- [x] parser、NLI、PVS `S+ * R- - A-`、Luna、selector、eligibility、split与baseline零修改；真实API/Retriever/GPU/formal调用为0，无artifact生成。
+- [ ] 下一步：正式victim运行前冻结包含新runtime identity的config+代码；不得复用`pcv-attacker-request-v1`响应。已有构造、Q+/Q-、eligibility与split无需重跑。

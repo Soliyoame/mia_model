@@ -4922,3 +4922,11 @@ source内共享Q+只在显式V24模式允许：三对仍有六个唯一query ID�
 用户明确授权把当前代码提交到V24分支并推送远端。本条随本次提交保存：分支为`codex/v24-pre-split-eligibility`，远端为`origin`（`Soliyoame/mia_model`）。提交范围包含此前尚未入库的Luna-only atomic Q+/grouped-counter实现、混合PVS、离线与正式runner入口、对应测试及研究记录；独立V23工作树改动保持未提交，开发artifacts、权重和凭据不纳入Git。实际提交SHA与远端状态以Git记录为准。
 
 本次只做版本交付，不改代码或Prompt，不重跑实验。验证沿用刚完成的476项回归：427通过、49既有skip、零失败；完整12000-query合成mock证据保持。代码提交不等于formal freeze：`formal.runtime`仍为null，固定NLI权重及真实formal输入/模型/index绑定仍待准备，工作树另有V23资产。唯一下一步仍是固定NLI五例真实离线验证；不因提交或推送自动启动victim/formal。
+
+### 2026-09-17：v24 single-query black-box RAG runtime（superseding）
+
+本条取代同日“Retriever仍使用原始query”的runtime状态。`PCV_RUNTIME_PROMPT_VERSION`更新为`pcv-single-query-blackbox-v1`，攻击者提交的唯一文本为原始Q后追加固定短suffix：`Answer exactly one line: "Consistent", "Inconsistent: <correct value>", or "I don't know".`。同一个完整`attack_query`逐字节同时进入Retriever和RAG Generator的`User request`；matched LLM-only使用相同`attack_query`。generic RAG/LLM-only shell继续不包含回答契约。
+
+response行保留`query`作为Luna构造的semantic core，并新增`attack_query`记录实际提交文本。query JSONL及Q+/Q-字节不改，三对/六问预算、top-k、context、Luna/selector/eligibility/split、parser、NLI、PVS `S+ * R- - A-`及baseline均不改；因此不需重生成构造、eligibility或split。未来正式victim response必须使用新runtime生成，旧`pcv-attacker-request-v1`响应不能续跑或混用。
+
+resume/formal binding同时记录wrapper hash和覆盖wrapper、RAG shell、LLM-only shell的完整`runtime_prompt_hash`；旧版本、旧wrapper hash、缺失或变化的runtime hash均fail closed。验证仅使用离线mock：runner 22项、PCV parser/scoring 47项、V24套件运行312项（302通过、10项既有skip），合计运行381项（371通过、10 skip）；包含完整12000-query mock恢复、Retriever/Generator同query、原始query文件不变、六问预算及identity drift。`git diff --check`通过。真实Luna/victim/OpenAI-compatible API、Retriever、embedding、NLI、GPU及formal调用均为0，未生成或改写实验artifact。
