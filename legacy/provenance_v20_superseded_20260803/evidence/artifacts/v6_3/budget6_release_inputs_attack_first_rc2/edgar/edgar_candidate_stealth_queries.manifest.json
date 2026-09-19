@@ -1,0 +1,25 @@
+{
+  "dataset": "edgar",
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "accepted": 7500,
+  "rejected": 0,
+  "accepted_pairs": 3750,
+  "rejected_pairs": 0,
+  "stealth_detection_rate": 0.0,
+  "pair_rejection_rate": 0.0,
+  "fixed_budget": {
+    "enabled": true,
+    "pairs_per_source": 3,
+    "queries_per_source": 6,
+    "eligible_sources": 1250,
+    "insufficient_sources": {},
+    "selected_pairs": 3750,
+    "query_text_uniqueness_enforced": true,
+    "duplicate_query_text_pairs": 0,
+    "fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae"
+  },
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_local_files_only": true,
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\edgar\\edgar_candidate_stealth_queries.jsonl",
+  "output_hash": "baf8d824d23919162079d57f472fee0265c453e4445201f8d2dc64d1ea553682"
+}

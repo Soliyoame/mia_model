@@ -1,0 +1,67 @@
+{
+  "created_at": "2026-07-28T04:58:41.015538+00:00",
+  "promotion_protocol": "formal_fixed_pair_promotion_v2",
+  "dataset": "edgar",
+  "benchmark_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\benchmarks\\edgar_attack_benchmark.jsonl",
+  "benchmark_hash": "4c454aea5f72a8c447e956f9560b08027753ad1f208a94d911641bb24cd93c63",
+  "benchmark_manifest_hash": "bf6cc8fcd07b0e44f6d02f0fe6205cbe28d54b5b6d7d8f893d9889f7402c751b",
+  "query_eligibility_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\edgar\\edgar_query_eligible_sources.json",
+  "query_eligibility_hash": "f1ad2059420f439d1c412767da3028e48f3de6d9bb348a57d95a1a6bce38e003",
+  "query_eligibility_protocol": "pre_split_local_query_eligibility_v6_3_attack_first_rc2_budget6_release_v1_unique_query_text",
+  "query_eligibility_whitelist_hash": "bd859976d9bce18c2d4ca287fccae135691ea180ce84d7d65d46c053ca8836dc",
+  "upstream_fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+  "formal_fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "source_counts_by_group": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "pair_counts_by_group": {
+    "Reserve": 750,
+    "KB_Member": 1500,
+    "True_Non_Member": 1500
+  },
+  "query_counts_by_group": {
+    "True_Non_Member": 3000,
+    "Reserve": 1500,
+    "KB_Member": 3000
+  },
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\facts\\edgar_facts.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\facts\\edgar_facts.errors.jsonl",
+  "facts": 3750,
+  "facts_by_group": {
+    "True_Non_Member": 1500,
+    "Reserve": 750,
+    "KB_Member": 1500
+  },
+  "facts_by_entity_type": {
+    "MONEY": 539,
+    "PERCENT": 343,
+    "MEDICAL_VALUE": 247,
+    "DATE": 1351,
+    "LOCATION": 127,
+    "SECTION_ID": 157,
+    "ORG": 725,
+    "NUMERIC_VALUE": 137,
+    "PRODUCT": 102,
+    "IDENTIFIER": 5,
+    "PERSON": 16,
+    "PHONE": 1
+  },
+  "facts_by_tier": {
+    "primary": 3748,
+    "fallback": 2
+  },
+  "promotion_scope": "facts_referenced_by_frozen_formal_pair_plan",
+  "output_hash": "4c454aea5f72a8c447e956f9560b08027753ad1f208a94d911641bb24cd93c63",
+  "error_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "post_regroup_output_hash": "4c454aea5f72a8c447e956f9560b08027753ad1f208a94d911641bb24cd93c63",
+  "post_regroup_at": "2026-07-31T02:49:29.500110+00:00",
+  "near_duplicate_regrouping_hash": "fbbb1334d8c9d68759bcde279d7eaa2a817f2fbbe7eff28f0643d8f1ed157ad4",
+  "split_manifest_hash": "9bb73a6fd110a5d6934b645e0ebf4b5ce0aa0594805b0ded68c47d17dc39b8b7"
+}

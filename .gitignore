@@ -15,19 +15,38 @@ ENV/
 .test_tmp/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
 .coverage
+.coverage.*
+coverage.xml
+junit.xml
 htmlcov/
 
+# Python build / packaging artifacts
+build/
+dist/
+site/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
 # Local editor and OS files
+.agents/
+.codex/
 .claude/
 .vscode/
 .idea/
+.ipynb_checkpoints/
 .DS_Store
 Thumbs.db
 
 # Secrets and local environment files
 .env
 .env.*
+!.env.example
+!.env.template
 *.key
 *.pem
 config/llm_api.json
@@ -39,6 +58,8 @@ configs/*secret*.yaml
 datasets/
 output/
 models/
+# MEntA NLI weights and their local verification manifest stay local.
+/models/menta/
 checkpoints/
 runs/
 wandb/
@@ -55,3 +76,20 @@ wandb/
 .pristine_recovered/
 outputs/
 indexes/
+backups/
+/artifacts/
+# Legacy 运行二进制/响应仅本地保留；审计 manifest 仍进入版本控制。
+/legacy/**/indexes/
+/legacy/**/rag_responses/
+/legacy/pre_response_regroup_20260731/
+
+# 第三方 baseline 官方整仓（参考源码，体积大不入库；自包含参考模块在 MBA/ S2MIA/ RAG_MIA/）
+src/baselines/IA/
+src/baselines/DCMI/
+src/baselines/MIRABEL/
+
+# 研究记录（思路/未来计划），不入库
+/思路v*.txt
+/未来计划.txt
+# 归档目录:思路/实验记录统一收纳于此,整目录不入库
+/研究记录/

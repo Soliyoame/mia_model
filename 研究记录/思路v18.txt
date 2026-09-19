@@ -1,0 +1,216 @@
+思路 v18 —— Baseline 复现就绪审计与 API 失败不丢样本
+================================================================================
+
+本文记录 2026-07-13 对 PCV-MIA baseline 复现代码的就绪审计、小规模真实 API
+试跑、MBA 并发错误修复，以及对 PCV-MIA 主攻击和全部 baseline 统一实施的
+「API 失败不丢样本」规则。本文是思路 v16/v17 的工程可靠性增量，不改变
+RAG-only Paired Verification Score 的 P0 方法定义。
+
+================================================================================
+一、Baseline 就绪审计
+================================================================================
+
+本轮先按「能否直接开跑」的标准做了只读审计。结论是：5 个 baseline 的主链已经接通，
+但正式全量跑之前必须先做环境、前置产物与真实 API smoke test。
+
+已确认项：
+
+  1. RAG-MIA / S2MIA(s) / MBA / IA / DCMI 都通过同一个 victim_harness 调用同一
+     RAG index、victim、retrieval top-k 和 source-level 指标；
+  2. baseline 目标只读 KB_Member 和 True_Non_Member，Reserve / Spoof 不进评估；
+  3. Edgar / Enron index 的 kb_hash、docstore_hash、index_hash 一致，security boundary 只允许
+     KB_Member；
+  4. benchmark 存在固定 SHA-256 且校验一致；
+  5. 真实 all-MiniLM-L6-v2 检索可加载，json_vector_fallback 只是真实向量的存储
+     fallback，不是 hashing embedding；
+  6. GPT-2 proxy LM 已缓存且可在 CUDA 上加载。
+
+审计时发现运行环境缺少 nltk，会使 S2MIA/DCMI 的 BLEU 打分失败。requirements.txt
+已声明 nltk>=3.8，因此属于环境未完整安装，不是 baseline 公式错误。
+
+忠实度边界仍保持诚实标注：
+
+  - RAG-MIA、S2MIA(s)、MBA 属较高忠实度复现；
+  - IA 用同源检索器余弦区分度代替 ElectraScorer；
+  - DCMI 因官方 base signal 未完整开源，使用 S2(s) 同口径 BLEU 作近似；
+  - S2MIA(s&p) 需 logprob/本地困惑度，不进纯黑盒主表。
+
+================================================================================
+二、第一次全 baseline smoke test 的现象
+================================================================================
+
+命令：
+
+    python scripts/12_run_baselines.py --dataset edgar --max-targets 4
+
+首次试跑中，RAG-MIA、S2MIA、MBA、IA、DCMI 都出现 victim read timeout，最终没有
+共同成功 source，公平对齐检查因此拒绝生成对照表。最后的「PCV 与所有 baseline
+没有共同成功 source」只是连锁结果，根因是 victim API 请求全部超时。
+
+日志中的 victim=0 不代表没有发送请求，而是旧计数只在逻辑请求成功后增加；
+超时的物理尝试没进成功调用计数。
+
+================================================================================
+三、MBA `Already borrowed` 并发 bug
+================================================================================
+
+首次试跑的 MBA 还出现：
+
+    Already borrowed
+
+原因不是 mask_answers 再次串味，而是 4 个工作线程同时使用同一个 Hugging Face
+tokenizer/model。旧修复已经把 mask_answers 改为线程局部值，但 Rust tokenizer 内部借用状态仍
+不保证并发安全。
+
+最终修复：
+
+  - 保留 MBAHighDiff 单例，避免重复加载 GPT-2；
+  - 对 build_query 的 tokenizer/GPT-2 选词阶段加全局串行锁；
+  - query 构造完成后立即释放锁；
+  - victim RAG/API 请求仍按 max_workers 并发，不影响 RPM 管道。
+
+回归测试用一个会在并发进入时稳定报 `Already borrowed` 的 fake proxy 验证串行化，
+同时保留 barrier 测试验证 mask_answers 不串味。真实 GPT-2 的 4 线程 smoke test
+也成功完成，没有再出现借用冲突。
+
+修复后命令：
+
+    python scripts/12_run_baselines.py --dataset edgar --methods MBA --max-targets 4
+
+结果：
+
+  - 4 个 chunk 全部成功，failed=0，victim=4；
+  - 最终按 source 聚合为 scored=2；
+  - 期间有一次 read timeout，短重试后恢复；
+  - PCV-MIA 与 MBA 在同一 source whitelist 上成功并表。
+
+这里 2 个 source 上的 AUC=1.0 只能证明链路可跑，不具备统计意义。
+
+================================================================================
+四、IA / DCMI 为什么更容易失败
+================================================================================
+
+后续 IA 和 DCMI 小规模试跑都能产生部分成功结果，但失败率明显高于 MBA。原因是
+一个目标的完整链需要更多调用：
+
+  - MBA：1 次 victim；
+  - DCMI：2 次 victim + 1 次 attacker；
+  - IA：约 5 次 victim + 7 次 attacker。
+
+若单次调用成功率为 90%，一个目标链全成功的粗略概率是：
+
+  - MBA：0.9^1 = 90%；
+  - DCMI：0.9^3 ≈ 73%；
+  - IA：0.9^12 ≈ 28%。
+
+实际日志中同时出现：
+
+    The read operation timed out
+    SSL: UNEXPECTED_EOF_WHILE_READING
+    HTTP 403: Authorization failed
+
+其中 read timeout 表示 60 秒内没有完成响应；SSL EOF 表示服务器或中间代理提前断开连接；
+偶发 403 在后续重试可恢复，更像网关多后端/短时鉴权状态不一致，而不是 key 永久无效。
+
+4 RPM 只限制发送频率，不等于服务端一定允许 4 条长连接同时存活。IA/DCMI 维持请求
+链的时间更长，因此更容易暴露端点抖动。
+
+================================================================================
+五、最终决策【已拍板】：API 失败不丢样本
+================================================================================
+
+用户明确要求：
+
+    API 请求失败后不能直接不管，必须等一段时间后重新申请。
+    不仅 baseline，PCV-MIA 核心攻击也必须使用同一规则。
+    不允许「重试若干次后仍失败就中止」，而要持续冷却并重试到成功。
+
+因此最终语义固定为：
+
+  1. 每个物理 API 请求首先执行短重试；
+  2. 短重试使用 retries + retry_backoff_base/max 指数退避；
+  3. 短重试耗尽后，若错误属于可恢复 API/网络错误，则等待
+     retry_cooldown_seconds（默认 300 秒）；
+  4. 冷却后重试同一个 prompt，不从头重跑 IA/DCMI 已经成功的前置调用；
+  5. 若仍失败，继续「短重试 -> 长冷却」循环，直到成功；
+  6. 每一次物理重试都重新经过 TokenBucket.acquire()，不绕过 RPM；
+  7. 空回答也当作 empty_response API 失败；
+  8. 缺依赖、本地解析错误、代码 bug 等非 API 异常不做无限重试。
+
+默认配置：
+
+    retries: 2
+    retry_backoff_base: 30
+    retry_backoff_max: 300
+    retry_until_success: true
+    retry_cooldown_seconds: 300
+    requests_per_minute: 4
+    sibling_requests_per_minute: 4
+    max_workers: 4
+
+可恢复错误范围包括：
+
+  - empty_response；
+  - read/connect timeout；
+  - urlopen / connection reset / connection aborted / remote closed；
+  - SSL unexpected EOF；
+  - HTTP 408 / 425 / 429；
+  - HTTP 500 / 502 / 503 / 504 / 520 / 522 / 524；
+  - 当前网关实测中可恢复的 HTTP 403 / Authorization failed。
+
+该规则已接入：
+
+  - PCV-MIA 第 10 步 RAG 请求；
+  - 可选 LLM-only 请求；
+  - RAG-MIA / S2MIA / MBA 的 victim 请求；
+  - IA / DCMI 的 victim 与 sibling attacker 请求。
+
+================================================================================
+六、验证
+================================================================================
+
+本轮新增/扩展的测试覆盖：
+
+  - MBA proxy 并发访问必须串行；
+  - MBA mask_answers 仍是线程局部；
+  - baseline API 连续跨越多个长冷却轮次后最终成功；
+  - PCV-MIA generator API 跨越多个长冷却轮次后最终成功；
+  - 非 API 本地错误不会无限重试；
+  - 每次物理重试都能通过 before_attempt 重新进入令牌桶；
+  - 空回答继续按 API 失败处理；
+  - 原有并发等价、令牌桶速率上限、source 聚合与响应压实不受影响。
+
+验证结果：
+
+  - 相关 baseline + token-bucket 测试 11 项通过；
+  - P2 integrity contract 5 项通过；
+  - 本轮相关 6 个 Python 文件内存语法编译通过；
+  - git diff --check 通过；
+  - 真实 GPT-2 4 线程 smoke test 通过。
+
+当前本地环境仍缺 nltk，因此全量 unittest 会在 S2MIA/DCMI BLEU 相关用例上报
+ModuleNotFoundError。这是环境依赖问题，本轮没有通过修改公式或降级实现规避。
+
+================================================================================
+七、运行注意事项
+================================================================================
+
+  1. 当端点持续故障时，进度条可能长时间不动，但线程正在冷却/重试，不是丢了查询；
+  2. 默认语义是无限重试，永久无效的 key 或长期宕机会让进程一直运行；
+  3. 需要人工停止时使用 Ctrl+C；
+  4. 不应仅因进度慢就加大 RPM，requests_per_minute 必须等于 key 的真实限额；
+  5. IA/DCMI 调用链长，在不稳定端点上会比 MBA 慢很多，但不再因某次 API 抖动静默缺样本。
+
+================================================================================
+八、最终规则
+================================================================================
+
+    PCV-MIA 核心攻击和所有 baseline 的可恢复 API 错误都必须重试到成功。
+
+    不允许因 timeout、SSL EOF、empty_response、429/5xx 或当前网关偶发 403
+    而让 query/chunk/source 从指标中静默消失。
+
+    重试的是同一个 API 请求，不重复已成功的攻击链前置步骤；每次物理请求
+    都必须遵守各自 key 的令牌桶 RPM。
+
+    非 API 的本地错误必须显式暴露并修复，不能用无限重试掩盖。

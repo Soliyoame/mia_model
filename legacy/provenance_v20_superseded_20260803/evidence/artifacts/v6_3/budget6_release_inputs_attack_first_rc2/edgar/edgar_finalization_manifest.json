@@ -1,0 +1,25 @@
+{
+  "dataset": "edgar",
+  "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+  "scan_plan_sha256": "41a55f2cb3cb2a915b4b5059edf925adeb4de98d0f520bee81c30b28910a2069",
+  "scan_checkpoint_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\edgar\\edgar_budget6_release_checkpoint.json",
+  "scan_checkpoint_sha256": "d72160e64f8c909020648b00214d94c06bdb55cace12f41042220369534e501e",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "semantic_resolver_protocol": "local_claim_pair_v6_3_precision_cascade",
+  "semantic_schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "gliner_inference_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "status": "complete",
+  "outputs": {
+    "query_eligibility": {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\edgar\\edgar_query_eligible_sources.json",
+      "sha256": "f1ad2059420f439d1c412767da3028e48f3de6d9bb348a57d95a1a6bce38e003"
+    }
+  }
+}

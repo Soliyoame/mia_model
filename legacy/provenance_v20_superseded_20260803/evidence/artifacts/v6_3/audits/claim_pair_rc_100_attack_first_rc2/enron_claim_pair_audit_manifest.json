@@ -1,0 +1,48 @@
+{
+  "dataset": "enron",
+  "seed": 42,
+  "sample_size": 100,
+  "source_count": 100,
+  "strata": {
+    "Eligibility_Candidate::DATE": 7,
+    "Eligibility_Candidate::DURATION": 7,
+    "Eligibility_Candidate::EMAIL": 3,
+    "Eligibility_Candidate::IDENTIFIER": 7,
+    "Eligibility_Candidate::LOCATION": 7,
+    "Eligibility_Candidate::MEDICAL_VALUE": 7,
+    "Eligibility_Candidate::MONEY": 7,
+    "Eligibility_Candidate::NUMERIC_VALUE": 6,
+    "Eligibility_Candidate::ORG": 6,
+    "Eligibility_Candidate::PERCENT": 6,
+    "Eligibility_Candidate::PERSON": 6,
+    "Eligibility_Candidate::PHONE": 6,
+    "Eligibility_Candidate::PRODUCT": 6,
+    "Eligibility_Candidate::PROJECT_NAME": 3,
+    "Eligibility_Candidate::SECTION_ID": 6,
+    "Eligibility_Candidate::TIME": 6,
+    "Eligibility_Candidate::URL": 4
+  },
+  "sample_whitelist_hash": "2447a43828668170157854182c798ae6de11050d61563c621ffb46f0fd3fb2db",
+  "annotator_a_shuffle_seed": 1043,
+  "annotator_b_shuffle_seed": 2044,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_selected_claims_rc2.jsonl",
+  "claims_hash": "bf607a0278f1a4648a501d78f95709783fd83dd4b102033a3bf4ece138915d96",
+  "prior_audit_exclusions": [],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 0,
+    "excluded_source_count": 0,
+    "excluded_audit_id_count": 0,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 3750,
+    "candidate_rows_removed": 0
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\enron_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\enron_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "0f50cce1345257647cead3268d83ed8f13061b5f7847530588b4c04914eb6a57",
+  "annotator_b_hash": "1404d9ef3e226a0a031e22461fe2047408ce24803d69c114ce5b02d7203738ad"
+}

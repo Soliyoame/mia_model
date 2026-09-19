@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover
 from ..data.filter import CONTRACT_TERM_RE, DATE_RE, EMAIL_RE, MEDICAL_VALUE_RE, MONEY_RE, NUMERIC_RE, ORG_RE, PERCENT_RE, TEMPLATE_RE
 from ..utils.io import read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from .entity_type_policy import SUPPORTED_ENTITY_TYPES
 
 
 LOGGER = get_logger(__name__)
@@ -65,8 +66,8 @@ DURATION_RE = re.compile(
     r"(?:minutes?|hours?|days?|weeks?|months?|years?|quarters?)\b",
     re.IGNORECASE,
 )
-# 网址:http(s):// 或 www. 开头的一串。
-URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>'\")]+", re.IGNORECASE)
+# 网址:http(s):// 或 www. 开头的一串。句号、逗号等句末标点不能成为实体的一部分。
+URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>'\")\],;]+(?<![.,:;!?])", re.IGNORECASE)
 # 电话:可选国家码 + (区号) + 7 位号码,允许 - . 空格分隔。
 PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b")
 # 条款编号:Section/Article/Clause 等 + 形如 3.2(a) 的编号。
@@ -77,8 +78,8 @@ SECTION_ID_RE = re.compile(
 )
 # 结构化标识符:ID/No./Invoice/Order 等 + 一串字母数字编号。
 IDENTIFIER_RE = re.compile(
-    r"\b(?:ID|No\.|Number|Account|Invoice|Contract|Document|Order|Claim|Case)\s*[:#-]?\s*"
-    r"[A-Z0-9][A-Z0-9._/-]{3,}\b",
+    r"\b(?:(?:ID|Number|Account|Invoice|Contract|Document|Order|Claim|Case)\b|No\.)\s*[:#-]?\s*"
+    r"(?=[A-Z0-9._/-]*\d)[A-Z0-9][A-Z0-9._/-]{3,}\b",
     re.IGNORECASE,
 )
 # 句子:一段不含句末标点的内容 + 一个句末标点(或到行尾)。用于把实体定位到所在句子。
@@ -103,7 +104,7 @@ BOILERPLATE_RE = re.compile(
 HEADER_FOOTER_RE = re.compile(r"^\s*(?:from|to|cc|bcc|subject|sent|date|regards|thanks|sincerely)\s*:?\s*$", re.IGNORECASE)
 
 # 抽取器版本号,写进每条结果便于追溯是哪版规则产出的。
-EXTRACTOR_VERSION = "attackability_v1"
+EXTRACTOR_VERSION = "attackability_v21_entity_policy_r1"
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,14 @@ PATTERN_REGISTRY: tuple[PatternSpec, ...] = (
     PatternSpec("PERSON", "named_entity", PERSON_RE, _scores(0.70, 0.70, 0.82), 68),
     PatternSpec("NUMERIC_VALUE", "structured_numeric", NUMERIC_RE, _scores(0.60, 0.65, 0.55), 10),
 )
+
+_EXTRACTOR_ENTITY_TYPES = frozenset(spec.entity_type for spec in PATTERN_REGISTRY)
+if _EXTRACTOR_ENTITY_TYPES != SUPPORTED_ENTITY_TYPES:
+    raise RuntimeError(
+        "Extractor/entity-policy type coverage mismatch: "
+        f"missing={sorted(SUPPORTED_ENTITY_TYPES - _EXTRACTOR_ENTITY_TYPES)} "
+        f"extra={sorted(_EXTRACTOR_ENTITY_TYPES - SUPPORTED_ENTITY_TYPES)}"
+    )
 
 # 由登记表派生:实体类型 → (家族, 基础分, 优先级)，给 NER 候选查默认值用。
 TYPE_DEFAULTS: dict[str, tuple[str, dict[str, float], int]] = {
@@ -245,6 +254,324 @@ ORGISH_PERSON_TOKENS = {
     "University",
 }
 
+# PERSON 的正则候选只提供召回，下面这些章节词、角色词和普通文档词用于本地高精度门禁。
+# 这是类别级词表，不针对某个数据集中的具体样本或 source ID。
+NON_PERSON_TOKENS = {
+    "abstract",
+    "agreement",
+    "annual",
+    "announcements",
+    "assets",
+    "assessment",
+    "assignments",
+    "author",
+    "background",
+    "both",
+    "business",
+    "card",
+    "capital",
+    "cash",
+    "center",
+    "clinical",
+    "combination",
+    "conclusion",
+    "conclusions",
+    "contributions",
+    "contract",
+    "credit",
+    "discovery",
+    "discussion",
+    "division",
+    "factors",
+    "financial",
+    "flow",
+    "figure",
+    "general",
+    "hemichannels",
+    "hybridization",
+    "immunological",
+    "introduction",
+    "items",
+    "lien",
+    "management",
+    "material",
+    "materials",
+    "method",
+    "methods",
+    "objective",
+    "objectives",
+    "offering",
+    "officer",
+    "our",
+    "partner",
+    "permeability",
+    "prophage",
+    "project",
+    "purpose",
+    "recognition",
+    "release",
+    "result",
+    "results",
+    "revenue",
+    "risk",
+    "sale",
+    "second",
+    "studio",
+    "study",
+    "supplementary",
+    "supply",
+    "table",
+    "test",
+    "the",
+    "this",
+    "timing",
+    "updated",
+}
+
+NON_PERSON_TOKENS.update(
+    {
+        "application",
+        "accounting",
+        "agreement",
+        "average",
+        "brain",
+        "certain",
+        "committees",
+        "control",
+        "delaware",
+        "fab",
+        "flash",
+        "framework",
+        "gene",
+        "glycosylation",
+        "immunoglobulin",
+        "immunohistochemistry",
+        "law",
+        "learning",
+        "license",
+        "manuscript",
+        "matrix",
+        "measurements",
+        "model",
+        "note",
+        "nurse",
+        "ontology",
+        "outlier",
+        "overdose",
+        "percent",
+        "plan",
+        "ratio",
+        "ref",
+        "registered",
+        "related",
+        "relationships",
+        "revised",
+        "sanger",
+        "sequencing",
+        "service",
+        "shareholder",
+        "statements",
+        "stock",
+        "structure",
+        "swap",
+        "transactions",
+        "unit",
+    }
+)
+
+GENERIC_PROJECT_NAMES = {
+    "advisors",
+    "agreement",
+    "an",
+    "at",
+    "appropriation",
+    "cost",
+    "enrolment",
+    "flexibility",
+    "leader",
+    "liquidity",
+    "loan",
+    "loans",
+    "management",
+    "optimization",
+    "partners",
+    "phase",
+    "report",
+    "standardizes",
+    "table",
+    "testing",
+    "the",
+}
+
+GENERIC_PROJECT_NAMES.update(
+    {
+        "according",
+        "assets",
+        "background",
+        "be",
+        "consensus",
+        "consortium",
+        "costs",
+        "entities",
+        "forgiveness",
+        "id",
+        "implementation",
+        "insomnia",
+        "labor",
+        "limited",
+        "mineral",
+        "overview",
+        "plus",
+        "promissory",
+        "revenues",
+        "this",
+        "we",
+    }
+)
+
+_TERMINAL_SENTENCE_RE = re.compile(r"[.!?](?:[\"')\]]+)?$")
+_LEADING_FRAGMENT_SURFACE_RE = re.compile(
+    r"^(?:[,;:]|(?:>\s*){2,}|[•▪◦]|-\s*based\b|"
+    r"\d+\s+(?:\[IMAGE\]|IN\b)|\d+(?:\.\d+)?%\s+reported\b)",
+    re.IGNORECASE,
+)
+_EMAIL_METADATA_RE = re.compile(
+    r"(?:Content-Transfer-Encoding|Content-Type|Message-ID|Mime-Version|"
+    r"X-(?:From|To|cc|bcc|Folder|Origin|FileName)|"
+    r"(?:^|[>\s])(?:From|To|Subject|Date))\s*:",
+    re.IGNORECASE,
+)
+_ENCODING_OR_MAILBOX_RE = re.compile(
+    r"(?:=\d{2}|quoted-printable|\b[A-Za-z]{2,}=\s+[A-Za-z]|"
+    r"(?:\\[^\\\s]+){2,}|(?:maildir|exmerge)[\\/])",
+    re.IGNORECASE,
+)
+_EMAIL_INTERNAL_ADDRESS_RE = re.compile(
+    r"(?:/[A-Z]{2,}/[A-Z]{2,})?@[A-Z]{2,}(?:\b|/)",
+    re.IGNORECASE,
+)
+_TRUNCATED_ENUMERATION_RE = re.compile(r"(?:^|\n)\s*\d+\.\s*$")
+_COPY_LINK_LIST_RE = re.compile(r"\bcopy and paste the link\b", re.IGNORECASE)
+_IDENTIFIER_PARTS_RE = re.compile(
+    r"^(?P<prefix>ID|Number|Account|Invoice|Contract|Document|Order|Claim|Case|No\.)"
+    r"\s*[:#-]?\s*(?P<payload>[A-Za-z0-9][A-Za-z0-9._/-]{3,})$",
+    re.IGNORECASE,
+)
+_QUANTITY_WORD_SUFFIXES = {
+    "beer",
+    "beers",
+    "item",
+    "items",
+    "patient",
+    "patients",
+    "shot",
+    "shots",
+    "unit",
+    "units",
+}
+_TRUNCATED_ENDING_RE = re.compile(
+    r"(?:\b(?:p|a|v|u|Mr|Mrs|Ms|Dr|Mon|Tue|Wed|Thu|Fri|Sat|Sun|"
+    r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.|"
+    r"(?<!\.)\b[A-Z]\.|https?://(?:www\.)?|"
+    r"(?:(?:[$€£¥]|[A-Z]\$)\s*\d{1,2}\.))$",
+    re.IGNORECASE,
+)
+_SCIENTIFIC_HEADING_PREFIX_RE = re.compile(
+    r"^(?:Background|Methods?|Results?|Setting|Affinity measurement|"
+    r"Research design and methods|Materials and Methods|Cell Culture|"
+    r"Accession Number|Experimental and Clinical Evidence|"
+    r"Boundary Conditions and Mesh for Unit-Cell Model)\s+(?=[A-Z])",
+    re.IGNORECASE,
+)
+_NOMINAL_FRAGMENT_RE = re.compile(
+    r"^(?:"
+    r"[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,3}\s+et al\.|"
+    r"(?:Project|Program|Initiative)\s+[A-Z][A-Za-z0-9-]*"
+    r"(?:\s*\([^)]*\))?\s+for\b[^.!?]*\.|"
+    r"\d+\s+[A-Z][^.!?]{2,120}\.|"
+    r"(?:Section\s+\S+,\s+as adopted|Code of Federal Regulations\b)[^.!?]*\.|"
+    r"(?:Objective responses|Follow-up and histology):\s+[^.!?]{2,160}\."
+    r")$",
+    re.IGNORECASE,
+)
+_MULTI_EMAIL_LIST_RE = re.compile(
+    r"(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\s*[,;]\s*){2,}",
+    re.IGNORECASE,
+)
+_MONEY_NONFINANCIAL_UNIT_RE = re.compile(
+    r"^\s*(?:active\s+)?(?:people|persons|users|connections|reads|pbmcs?|deaths?|"
+    r"workers?|patients?|cases?|cells?|shares?|stocks?|inhabitants?|residents?|population)\b",
+    re.IGNORECASE,
+)
+_MONEY_FINANCIAL_CUE_RE = re.compile(
+    r"\b(?:usd|dollars?|dlrs?|revenue|sales?|assets?|charges?|costs?|expenses?|"
+    r"payment|price|value|debt|income|funds?|cash|fees?|consideration|notional|"
+    r"market|capital|investment|budget|profit|loss|worth)\b|[$€£¥]",
+    re.IGNORECASE,
+)
+_CLOCK_CONTEXT_RE = re.compile(
+    r"\b(?:at|from|until|between|before|after|by|meeting|time|schedule|"
+    r"morning|afternoon|evening|noon|midnight|opens?|closes?|deadline)\b",
+    re.IGNORECASE,
+)
+_RATIO_CONTEXT_RE = re.compile(
+    r"\b(?:v/v|w/w|ratio|dilution|diluted|antibod|concentration|mixture|"
+    r"solution|prepared|composed|codon|case\s+(?:no|number))\b|-(?:cv|cr)-",
+    re.IGNORECASE,
+)
+_STRICT_CONTRACT_CONTEXT_RE = re.compile(
+    r"\b(?:agreement|contract|lease|license|clause|provision|covenant|party|"
+    r"borrower|lender|warranty|indemnif|non-disclosure|payment\s+term|"
+    r"effective\s+date|governing\s+law)\b",
+    re.IGNORECASE,
+)
+_NONCONTRACT_CONTEXT_RE = re.compile(
+    r"\b(?:accounting|asset|balance\s+sheet|codon|fetal|pregnan|polymer|radical|"
+    r"regeneration|ribosome|treatment|assessor|randomi[sz]|transformer|"
+    r"participant|questionnaire|anonymity|healthcare|tax|deferred)\b",
+    re.IGNORECASE,
+)
+_PRODUCT_OR_ORG_SUFFIX_RE = re.compile(
+    r"^\s+(?:Act|Application|Company|Control|Electric|Group|Manager|Operator|"
+    r"Plan|Regulations?|Agency|Administration|Department|Bank|Corporation|Inc|LLC)\b"
+)
+_BIOLOGICAL_SYSTEM_CONTEXT_RE = re.compile(
+    r"\b(?:biological|cellular|immune|nervous|vascular|organ|model\s+organism|"
+    r"experimental\s+section|device\s+design)\b",
+    re.IGNORECASE,
+)
+_LOCATION_COMPOUND_SUFFIX_RE = re.compile(
+    r"^\s+(?:Instruments?|University|Hospital|Bank|Department|Service|"
+    r"Corporation|Corp|Inc|LLC|Group|Bay|River|Valley)\b"
+)
+_LOWERCASE_FRAGMENT_START_RE = re.compile(r"^[a-z][a-z'-]*\b")
+_MONTH_BEFORE_NUMBER_RE = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?)\.?\s+$",
+    re.IGNORECASE,
+)
+_GENERIC_ORG_VALUES = {
+    "company",
+    "public company",
+    "emerging growth company",
+}
+_GENERIC_PRODUCT_VALUES = {
+    "bibles",
+    "common stock",
+    "electrical products",
+    "gps",
+}
+_PRODUCT_COMPETING_CONTEXT_RE = re.compile(
+    r"\b(?:hotels?|seminars?|conferences?|nanowires?|powders?|questionnaires?|"
+    r"clinical scales?|general practitioners?)\b",
+    re.IGNORECASE,
+)
+_PRODUCT_BIOMEDICAL_SURFACE_RE = re.compile(
+    r"^(?:D|R)?NaseI?$|^[A-Za-z]*(?:ase|aseI)\d*$",
+    re.IGNORECASE,
+)
+
 
 def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
     """把数值夹在 [lower, upper] 区间内(默认 0~1),防止分数越界。"""
@@ -267,12 +594,46 @@ def _overlaps(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return int(left["start"]) < int(right["end"]) and int(right["start"]) < int(left["end"])
 
 
+def has_meaningful_ner_covering_extension(
+    candidate_span: tuple[int, int],
+    ner_span: tuple[int, int],
+    ner_text: str,
+) -> bool:
+    """Whether a covering NER span adds meaningful tokens around a candidate.
+
+    Leading articles and trailing punctuation are harmless normalization
+    differences.  Tokens such as ``São`` in ``São Paulo ... Department`` or
+    ``PLC`` after ``BG Group`` indicate that the regex span is incomplete.
+    """
+
+    start, end = candidate_span
+    ner_start, ner_end = ner_span
+    if not (ner_start <= start and end <= ner_end):
+        return False
+    relative_start = max(0, start - ner_start)
+    relative_end = max(relative_start, end - ner_start)
+    left = ner_text[:relative_start]
+    right = ner_text[relative_end:]
+
+    def words(value: str) -> str:
+        return " ".join(re.findall(r"[A-Za-z0-9]+", value)).casefold()
+
+    left_words = words(left)
+    right_words = words(right)
+    return left_words not in {"", "a", "an", "the"} or bool(right_words)
+
+
 def _normalized(value: str) -> str:
     """把字符串规范化:转小写、压缩空白。用于宽松比较两个实体是否"算同一个"。"""
     return " ".join(value.lower().split())
 
 
-def _sentence_for_span(text: str, start: int, end: int) -> str:
+def _sentence_for_span(
+    text: str,
+    start: int,
+    end: int,
+    sentence_spans: list[tuple[int, int, str]] | None = None,
+) -> str:
     """找出"完整包含 [start,end) 这个实体"的那句话。
 
     参数:
@@ -281,7 +642,12 @@ def _sentence_for_span(text: str, start: int, end: int) -> str:
     返回:
         包含该实体的句子;找不到则返回全文前 300 字符兜底。
     """
-    # 逐句扫描,返回第一句"起点在实体前、终点在实体后"的句子。
+    # 本地 NER 管线启用句法分析时，优先复用其句界；它不会把 ``$37.2``、
+    # ``Inc.`` 或 ``p.m.`` 中的句点误当成 claim 结尾。
+    for sentence_start, sentence_end, sentence in sentence_spans or []:
+        if sentence_start <= start and end <= sentence_end:
+            return sentence.strip()
+    # 无本地句界时退回原有确定性正则切分。
     for match in SENTENCE_RE.finditer(text or ""):
         sentence = match.group(0).strip()
         if match.start() <= start and end <= match.end():
@@ -329,7 +695,7 @@ def _looks_like_header_footer(sentence: str) -> bool:
     return compact.lower() in {"regards", "thanks", "thank you", "sincerely"}
 
 
-def _is_likely_bad_person(value: str) -> bool:
+def is_likely_bad_person(value: str) -> bool:
     """判断一个被当成 PERSON 的值是不是"很可能不是真人名"。
 
     规则:带 Mr/Dr 等称谓的认为是真人;以机构性词(Bank/Group...)结尾的判为机构(非人名)。
@@ -339,16 +705,264 @@ def _is_likely_bad_person(value: str) -> bool:
     返回:
         判定"不像真人名"则 True。
     """
-    words = value.replace(".", "").split()
+    raw_words = value.split()
+    if not raw_words:
+        return True
+    honorific = raw_words[0].rstrip(".") in {"Mr", "Ms", "Mrs", "Dr"}
+    words = raw_words[1:] if honorific else raw_words
     if not words:
         return True
-    # 有称谓前缀,基本可确认是人名。
-    if words[0] in {"Mr", "Ms", "Mrs", "Dr"}:
-        return False
+    # 无称谓时只接受常见的二词姓名，或带单字母中间名的三词姓名；宁可少召回也不
+    # 把章节标题、财务术语和角色短语当作人名。带称谓时允许 1~3 个姓名 token。
+    if honorific:
+        if not 1 <= len(words) <= 3:
+            return True
+    elif not (len(words) == 2 or (len(words) == 3 and len(words[1].rstrip(".")) == 1)):
+        return True
+    normalized_words = [word.strip(".,'").casefold() for word in words]
+    if any(word in NON_PERSON_TOKENS for word in normalized_words):
+        return True
+    if not all(re.fullmatch(r"[A-Z][A-Za-z'-]*|[A-Z]\.?", word) for word in words):
+        return True
     # 以机构性词结尾,多半其实是机构名。
-    if words[-1] in ORGISH_PERSON_TOKENS:
+    if words[-1].rstrip(".") in ORGISH_PERSON_TOKENS:
         return True
     return False
+
+
+def is_likely_bad_project_name(value: str) -> bool:
+    """Reject generic ``Project/Program/Initiative + noun`` phrases."""
+
+    match = PROJECT_NAME_RE.fullmatch(" ".join((value or "").split()))
+    if match is None:
+        return True
+    name = match.group(0).split()[-1].casefold()
+    return name in GENERIC_PROJECT_NAMES
+
+
+def is_likely_bad_identifier(value: str) -> bool:
+    """Reject quantity phrases accidentally captured as structured identifiers."""
+
+    compact = " ".join((value or "").split())
+    match = _IDENTIFIER_PARTS_RE.fullmatch(compact)
+    if match is None or re.search(r"\d", match.group("payload")) is None:
+        return True
+    payload = match.group("payload")
+    quantity = re.fullmatch(r"\d+(?P<word>[a-z]{3,})", payload)
+    return bool(quantity and quantity.group("word") in _QUANTITY_WORD_SUFFIXES)
+
+
+def sentence_semantic_failure_reasons(sentence: str) -> tuple[str, ...]:
+    """Return non-bypassable local reasons why a support sentence is unsafe."""
+
+    compact = " ".join((sentence or "").split())
+    reasons: list[str] = []
+    if not compact or len(compact.split()) < 4:
+        reasons.append("supporting_sentence_too_short")
+    if compact and _TERMINAL_SENTENCE_RE.search(compact) is None:
+        reasons.append("supporting_sentence_incomplete")
+    if _LEADING_FRAGMENT_SURFACE_RE.search(compact):
+        reasons.append("supporting_sentence_fragment_surface")
+    if _EMAIL_METADATA_RE.search(compact):
+        reasons.append("supporting_sentence_email_metadata")
+    if _ENCODING_OR_MAILBOX_RE.search(compact):
+        reasons.append("supporting_sentence_encoding_or_mailbox_artifact")
+    if len(_EMAIL_INTERNAL_ADDRESS_RE.findall(sentence or "")) >= 3:
+        reasons.append("supporting_sentence_internal_address_list")
+    if (sentence or "").count("\n") >= 12:
+        reasons.append("supporting_sentence_excessive_multiline_structure")
+    if _TRUNCATED_ENUMERATION_RE.search(sentence or ""):
+        reasons.append("supporting_sentence_truncated_enumeration")
+    if (
+        len(_COPY_LINK_LIST_RE.findall(compact)) >= 2
+        or len(re.findall(r"https?://", compact, re.IGNORECASE)) >= 3
+    ):
+        reasons.append("supporting_sentence_repeated_link_list")
+    if re.search(r"<[^>]+>|&(?:lt|gt|amp|nbsp);", compact, re.IGNORECASE):
+        reasons.append("supporting_sentence_markup_artifact")
+    if _TRUNCATED_ENDING_RE.search(compact):
+        reasons.append("supporting_sentence_truncated_ending")
+    if compact[:1].islower() and _LOWERCASE_FRAGMENT_START_RE.search(compact):
+        reasons.append("supporting_sentence_lowercase_fragment")
+    if _SCIENTIFIC_HEADING_PREFIX_RE.search(compact):
+        reasons.append("supporting_sentence_heading_prefix")
+    if _NOMINAL_FRAGMENT_RE.search(compact):
+        reasons.append("supporting_sentence_nominal_fragment")
+    if _MULTI_EMAIL_LIST_RE.search(compact):
+        reasons.append("supporting_sentence_email_list")
+    if compact.count('"') % 2:
+        reasons.append("supporting_sentence_unbalanced_quote")
+    if (
+        compact.count("(") != compact.count(")")
+        or compact.count("[") != compact.count("]")
+        or compact.count("{") != compact.count("}")
+    ):
+        reasons.append("supporting_sentence_unbalanced_delimiters")
+    return tuple(dict.fromkeys(reasons))
+
+
+def entity_context_failure_reasons(
+    text: str,
+    span: tuple[int, int],
+    entity_type: str,
+) -> tuple[str, ...]:
+    """Return deterministic context failures for one proposed entity span.
+
+    These checks complement surface regexes.  They detect a syntactically
+    matching substring that is semantically the wrong subtype, such as
+    ``1:10`` in a dilution ratio or ``liability`` in an accounting sentence.
+    """
+
+    start, end = span
+    source = text or ""
+    if start < 0 or end <= start or end > len(source):
+        return ("entity_span_out_of_bounds",)
+    value = source[start:end]
+    kind = (entity_type or "").upper()
+    before = source[max(0, start - 100) : start]
+    after = source[end : min(len(source), end + 100)]
+    window = source[max(0, start - 180) : min(len(source), end + 180)]
+    reasons: list[str] = []
+
+    # Do not accept a numeric tail, a date/version component, or one endpoint
+    # of a range as a standalone entity.
+    if value[:1].isdigit() and before:
+        if before[-1].isdigit() or before[-1] in {",", "."}:
+            reasons.append("entity_numeric_prefix_boundary_mismatch")
+        if re.search(r"\d{2,4}[-/.]\s*$", before):
+            reasons.append("entity_numeric_component_boundary_mismatch")
+    if value[-1:].isdigit() and after:
+        if after[0].isdigit() or re.match(r"^[.,]\d", after):
+            reasons.append("entity_numeric_suffix_boundary_mismatch")
+    if kind == "DURATION" and re.search(r"\d[\d,]*\s*[-–—]\s*$", before):
+        reasons.append("duration_range_endpoint_only")
+
+    if kind == "NUMERIC_VALUE":
+        if re.search(r"[A-Za-z][-–—]\s*$", before):
+            reasons.append("numeric_inside_compound_identifier")
+        if (
+            re.search(r"\[\s*(?:\d+\s*,\s*)*$", before)
+            and re.match(r"^\s*(?:,|\])", after)
+        ):
+            reasons.append("numeric_citation_context")
+        if _MONTH_BEFORE_NUMBER_RE.search(before):
+            reasons.append("numeric_calendar_day_context")
+        if re.search(r"\b(?:Big|Chapter)\s+$", before, re.IGNORECASE):
+            reasons.append("numeric_named_or_legal_context")
+
+    if kind == "MONEY":
+        if _MONEY_NONFINANCIAL_UNIT_RE.search(after):
+            reasons.append("money_nonfinancial_quantity")
+        if re.fullmatch(r"[$€£¥]\s?\d[\d,]*(?:\.\d+)?", value.strip()) and re.match(
+            r"^\s*(?:million|billion)\b", after, re.IGNORECASE
+        ):
+            reasons.append("money_magnitude_suffix_outside_span")
+        if re.search(r"\b(?:million|billion)\b", value, re.IGNORECASE) and not _MONEY_FINANCIAL_CUE_RE.search(window):
+            reasons.append("money_missing_financial_context")
+
+    if kind == "TIME":
+        explicit_clock = bool(
+            re.search(r"\b(?:am|pm)\b|noon|midnight", value, re.IGNORECASE)
+        )
+        repeated_colon_values = len(
+            re.findall(r"(?<!\d)\d{1,2}:\d{2,4}(?!\d)", window)
+        ) >= 2
+        laboratory_ratio_series = repeated_colon_values and re.search(
+            r"(?:\bab\d+\b|\banti-|\bIgG\b|\bantibod\w*|"
+            r"\bdilution\w*|\blight:dark\b)",
+            window,
+            re.IGNORECASE,
+        )
+        if (
+            _RATIO_CONTEXT_RE.search(window)
+            or laboratory_ratio_series
+            or re.match(r"^\s*h\b", after, re.IGNORECASE)
+        ):
+            reasons.append("time_ratio_or_identifier_context")
+        elif not explicit_clock and not _CLOCK_CONTEXT_RE.search(window):
+            reasons.append("time_missing_clock_context")
+
+    if kind == "DATE":
+        if (
+            re.fullmatch(
+                r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+                r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+                r"Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{2}",
+                value.strip(),
+                re.IGNORECASE,
+            )
+            and re.match(r"^\s*,\s*\d{1,2}\b", after)
+        ):
+            reasons.append("date_list_misparsed_as_year")
+
+    if kind == "CONTRACT_TERM":
+        if _NONCONTRACT_CONTEXT_RE.search(window):
+            reasons.append("contract_term_noncontract_context")
+        if value.casefold().strip() in {"liability", "indemnity"} and not _STRICT_CONTRACT_CONTEXT_RE.search(window):
+            reasons.append("contract_term_missing_contract_context")
+
+    if kind == "IDENTIFIER":
+        if (
+            re.match(r"(?i)^contract\s+[A-Za-z]+-\d+\b", value.strip())
+            and re.search(
+                r"\b(?:agents?|people|employees?|workers?|patients?|users?)\s+$",
+                before,
+                re.IGNORECASE,
+            )
+        ):
+            reasons.append("identifier_prefix_used_as_verb")
+
+    if kind == "MEDICAL_VALUE":
+        if re.search(r"\bChapter\s+$", before, re.IGNORECASE):
+            reasons.append("medical_value_legal_chapter_context")
+        if re.fullmatch(r"\d+G", value.strip(), re.IGNORECASE) and re.search(
+            r"\b(?:cell phones?|mobile|network|wireless)\b",
+            window,
+            re.IGNORECASE,
+        ):
+            reasons.append("medical_value_telecom_generation")
+
+    if kind == "PROJECT_NAME":
+        if re.match(r"^\s+[A-Z][A-Za-z0-9-]+\b", after):
+            reasons.append("project_name_incomplete_boundary")
+        if re.search(r"\b[A-Z][A-Za-z0-9-]+\s+$", before):
+            reasons.append("project_name_incomplete_boundary")
+
+    if kind == "PRODUCT":
+        if _PRODUCT_OR_ORG_SUFFIX_RE.search(after):
+            reasons.append("product_incomplete_or_org_boundary")
+        if _BIOLOGICAL_SYSTEM_CONTEXT_RE.search(window):
+            reasons.append("product_biological_or_heading_context")
+        normalized_value = _normalized(value)
+        if normalized_value in _GENERIC_PRODUCT_VALUES:
+            reasons.append("product_generic_common_noun")
+        if _PRODUCT_BIOMEDICAL_SURFACE_RE.fullmatch(value.strip()):
+            reasons.append("product_biomedical_surface")
+        if _PRODUCT_COMPETING_CONTEXT_RE.search(value) or (
+            re.search(r"\bcompany\s+$", before, re.IGNORECASE)
+            and not re.search(
+                r"\b(?:product|platform|device|service|tool|software)\s+$",
+                before,
+                re.IGNORECASE,
+            )
+        ):
+            reasons.append("product_competing_semantic_context")
+
+    if kind == "LOCATION" and _LOCATION_COMPOUND_SUFFIX_RE.search(after):
+        reasons.append("location_inside_named_entity")
+    if kind == "ORG":
+        if _normalized(value) in _GENERIC_ORG_VALUES:
+            reasons.append("org_generic_common_noun")
+        if re.search(r"(?:&|/)\s*$", before):
+            reasons.append("org_incomplete_prefix_boundary")
+        if re.match(
+            r"^\s+(?:of|PLC|Inc|Corp|Corporation|LLC|Ltd|Limited|Company|Co)\b",
+            after,
+            re.IGNORECASE,
+        ):
+            reasons.append("org_incomplete_suffix_boundary")
+
+    return tuple(dict.fromkeys(reasons))
 
 
 def _specificity_score(value: str, entity_type: str, family: str) -> float:
@@ -543,6 +1157,8 @@ class EntityExtractor:
         enable_ner: bool | None = None,
         ner_confidence_threshold: float = 0.75,
         diversity_quotas: dict[str, int] | None = None,
+        semantic_resolver: Any | None = None,
+        require_semantic_resolver: bool = False,
     ) -> None:
         """初始化抽取器。
 
@@ -553,6 +1169,8 @@ class EntityExtractor:
             enable_ner:               是否启用 NER;默认"有模型就启用"。
             ner_confidence_threshold: NER 候选的置信度门槛。
             diversity_quotas:         各家族的挑选配额,默认 DEFAULT_DIVERSITY_QUOTAS。
+            semantic_resolver:        v6.3 本地语义 precision cascade。
+            require_semantic_resolver:是否禁止六类语义实体绕过 resolver。
         """
         self.pattern_registry = pattern_registry or PATTERN_REGISTRY
         self.ner_model = ner_model
@@ -562,41 +1180,173 @@ class EntityExtractor:
         self.enable_ner = bool(ner_model is not None) if enable_ner is None else enable_ner
         self.ner_confidence_threshold = ner_confidence_threshold
         self.diversity_quotas = diversity_quotas or DEFAULT_DIVERSITY_QUOTAS
+        self.semantic_resolver = semantic_resolver
+        self.require_semantic_resolver = bool(require_semantic_resolver)
+        if self.require_semantic_resolver and self.semantic_resolver is None:
+            raise RuntimeError(
+                "v6.3 semantic entity extraction requires a loaded SemanticEntityResolver"
+            )
 
-    def extract(self, text: str, max_entities: int = 5) -> list[dict[str, Any]]:
-        """Extract high-attackability entities under family diversity quotas.
+    def extract(
+        self,
+        text: str,
+        max_entities: int = 5,
+        guarantee_min: int = 1,
+        *,
+        ner_output: Any | None = None,
+        dataset: str = "",
+        semantic_predictions: Any | None = None,
+    ) -> list[dict[str, Any]]:
+        """Extract high-attackability entities with non-bypassable semantic gates.
 
-        中文说明：对外的主方法。把"产生候选→合并→打分→过门槛→多样性挑选"整条流程串起来，
-        返回最终选中的若干实体(带分数与理由)。
+        中文说明：对外的主方法。流程为"产生候选→合并→打分→语义安全硬门禁→质量优选→
+        安全 fallback"。句子不完整、邮件/编码污染和实体表面类型错误是不可旁路的硬失败；
+        guarantee_min 只能从语义安全但分数未过优选阈值的候选中补齐。
 
         参数:
             text:         待抽取的文本。
-            max_entities: 最多返回几个实体。
+            max_entities: 最多返回几个实体(优选上限)。
+            guarantee_min: 每篇文档至少保底返回几个语义安全候选。补齐时忽略 family 配额。
+            ner_output: 可选的预计算本地 NER 文档；用于批处理提速，不改变候选与门禁逻辑。
+            dataset:    数据集名；PubMed 用它启用生物实体 veto。
         返回:
-            选中实体的字典列表;每个含 entity_id、分数、selection_reason 等。
+            选中实体的字典列表;每个含 entity_id、分数、gate_passed、selection_reason 等。
         """
         # 1) 正则候选(主力)。
-        raw_candidates = self._regex_candidates(text or "")
+        source_text = text or ""
+        raw_candidates = self._regex_candidates(source_text)
+        ner_candidates: list[dict[str, Any]] = []
+        sentence_spans: list[tuple[int, int, str]] = []
         # 2) 可选地追加 NER 候选。
-        if self.enable_ner and self.ner_model is not None:
-            raw_candidates.extend(self._ner_candidates(text or ""))
+        if self.enable_ner and ner_output is not None:
+            ner_candidates = self._ner_candidates(source_text, ner_output)
+            sentence_spans = self._ner_sentence_spans(ner_output)
+            raw_candidates.extend(ner_candidates)
+        elif self.enable_ner and self.ner_model is not None:
+            ner_candidates, sentence_spans = self._ner_analysis(source_text)
+            raw_candidates.extend(ner_candidates)
         # 3) 合并重叠/重复候选。
         candidates = self._merge_candidates(raw_candidates)
-        # 4) 给每个候选打分。
-        scored = [self._score_candidate(text or "", candidate) for candidate in candidates]
-        # 5) 过"硬门槛"(质量太差的直接淘汰)。
-        gated = [candidate for candidate in scored if self._passes_hard_gates(candidate)]
-        # 6) 在配额约束下挑出多样且高分的若干个。
-        selected = self._select_diverse(gated, max_entities=max_entities)
+        self._annotate_ner_evidence(candidates, ner_candidates)
+        # 4) v6.3 语义实体 precision cascade。正式 bulk 只运行 GLiNER2 large；
+        # 结构化实体不经过这一步。通过时允许把规则召回的短 span 校正为完整边界。
+        if self.semantic_resolver is not None:
+            candidates, resolutions = self.semantic_resolver.resolve_and_propose(
+                source_text,
+                candidates,
+                dataset=dataset,
+                precomputed_predictions=semantic_predictions,
+            )
+            for candidate, resolution in zip(candidates, resolutions, strict=True):
+                if resolution is None:
+                    continue
+                if candidate.get("semantic_proposal"):
+                    entity_type = str(candidate.get("type") or "").upper()
+                    family, base_scores, priority = TYPE_DEFAULTS.get(
+                        entity_type,
+                        (
+                            "named_entity",
+                            _scores(0.70, 0.68, 0.68),
+                            55,
+                        ),
+                    )
+                    candidate["entity_family"] = family
+                    candidate["base_scores"] = dict(base_scores)
+                    candidate["priority"] = priority
+                    candidate["candidate_sources"] = ["semantic_precision_cascade"]
+                candidate["semantic_resolution"] = resolution.to_dict()
+                if resolution.accepted:
+                    candidate.update(
+                        {
+                            "text": resolution.text,
+                            "start": resolution.start,
+                            "end": resolution.end,
+                            "span": [resolution.start, resolution.end],
+                        }
+                    )
+                    candidate["candidate_sources"] = sorted(
+                        {
+                            *candidate.get("candidate_sources", []),
+                            "semantic_precision_cascade",
+                        }
+                    )
+        # 5) 给每个候选打分。
+        scored = [
+            self._score_candidate(source_text, candidate, sentence_spans=sentence_spans)
+            for candidate in candidates
+        ]
+        # 6) 不可旁路的语义安全门禁。失败项既不能进入 primary，也不能被 fallback 补回。
+        semantic_safe: list[dict[str, Any]] = []
+        for candidate in scored:
+            semantic_failures = self._semantic_gate_failure_reasons(candidate)
+            candidate["semantic_gate_passed"] = not semantic_failures
+            candidate["semantic_gate_failure_reasons"] = list(semantic_failures)
+            if not semantic_failures:
+                semantic_safe.append(candidate)
+        # 7) 优选:在配额约束下挑出通过质量门槛的多样高分实体。
+        gated = [candidate for candidate in semantic_safe if self._passes_hard_gates(candidate)]
+        primary = self._select_diverse(gated, max_entities=max_entities)
+        for candidate in primary:
+            candidate["gate_passed"] = True
+        # 8) 安全保覆盖:不足 guarantee_min 时，只从语义安全但质量分未过门槛的候选补齐。
+        selected = list(primary)
+        if len(selected) < guarantee_min:
+            chosen_keys = {(str(c["type"]), _normalized(str(c["text"]))) for c in selected}
+            ungated = [c for c in semantic_safe if not self._passes_hard_gates(c)]
+            fallback = self._select_topk(ungated, guarantee_min - len(selected), exclude=chosen_keys)
+            for candidate in fallback:
+                candidate["gate_passed"] = False
+            selected.extend(fallback)
         # 给选中项编号、补上人类可读的选择理由。
         for idx, candidate in enumerate(selected, start=1):
             candidate["entity_id"] = f"e{idx}"
             candidate["selection_reason"] = _selection_reason(candidate)
             candidate["reason"] = (
                 f"attackability={candidate['attackability_score']:.3f}; "
+                f"gate_passed={candidate.get('gate_passed', True)}; "
                 f"{candidate['selection_reason']}"
             )
         return selected
+
+    def _select_topk(
+        self,
+        candidates: list[dict[str, Any]],
+        k: int,
+        exclude: set[tuple[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """按可攻击性降序取前 k 个(忽略 family 配额，用于保底补齐)。
+
+        参数:
+            candidates: 候选(通常是未过门槛者)。
+            k:          最多取几个。
+            exclude:    已选过的 (type, 规范化文本) 集合，避免与 primary 重复。
+        返回:
+            选中的候选列表(最多 k 个)。
+        """
+        if k <= 0:
+            return []
+        exclude = exclude or set()
+        # 排序与 _select_diverse 一致，保证确定性可复现。
+        ordered = sorted(
+            candidates,
+            key=lambda x: (
+                -float(x["attackability_score"]),
+                -float(x["importance"]),
+                -float(x.get("privacy_specificity", 0.0)),
+                int(x["start"]),
+            ),
+        )
+        picked: list[dict[str, Any]] = []
+        seen = set(exclude)
+        for candidate in ordered:
+            if len(picked) >= k:
+                break
+            key = (str(candidate["type"]), _normalized(str(candidate["text"])))
+            if key in seen:
+                continue
+            picked.append(candidate)
+            seen.add(key)
+        return picked
 
     def _regex_candidates(self, text: str) -> list[dict[str, Any]]:
         """用规则表里的所有正则扫描文本，产出候选实体列表。
@@ -610,7 +1360,14 @@ class EntityExtractor:
         for spec in self.pattern_registry:
             # 找出该规则在文中的所有匹配。
             for match in spec.pattern.finditer(text):
-                value = match.group(0).strip()
+                raw_value = match.group(0)
+                leading = len(raw_value) - len(raw_value.lstrip())
+                value = raw_value.strip()
+                start = match.start() + leading
+                end = start + len(value)
+                if spec.entity_type == "ORG" and value.endswith("."):
+                    value = value[:-1]
+                    end -= 1
                 # 过一道"表面合法性"检查(太短/太长/泛词等直接跳过)。
                 if not self._valid_surface(value, spec.entity_type):
                     continue
@@ -619,9 +1376,9 @@ class EntityExtractor:
                         "text": value,
                         "type": spec.entity_type,
                         "entity_family": spec.family,
-                        "start": match.start(),
-                        "end": match.end(),
-                        "span": [match.start(), match.end()],
+                        "start": start,
+                        "end": end,
+                        "span": [start, end],
                         "candidate_sources": [spec.source],
                         "base_scores": dict(spec.base_scores),
                         "priority": spec.priority,
@@ -629,7 +1386,33 @@ class EntityExtractor:
                 )
         return candidates
 
-    def _ner_candidates(self, text: str) -> list[dict[str, Any]]:
+    def _ner_analysis(
+        self,
+        text: str,
+    ) -> tuple[list[dict[str, Any]], list[tuple[int, int, str]]]:
+        """Run the pinned local model once and return entities plus sentence spans."""
+
+        try:
+            output = self.ner_model(text)
+        except Exception as exc:  # pragma: no cover - external model behavior
+            LOGGER.warning("NER candidate generation failed: %s", exc)
+            return [], []
+        return self._ner_candidates(text, output), self._ner_sentence_spans(output)
+
+    def _ner_sentence_spans(self, output: Any) -> list[tuple[int, int, str]]:
+        """Normalize spaCy sentence boundaries without requiring them from other backends."""
+
+        try:
+            sentences = output.sents if hasattr(output, "sents") else ()
+            return [
+                (int(sentence.start_char), int(sentence.end_char), str(sentence.text))
+                for sentence in sentences
+                if str(sentence.text).strip()
+            ]
+        except (AttributeError, ValueError):
+            return []
+
+    def _ner_candidates(self, text: str, output: Any) -> list[dict[str, Any]]:
         """调用可选的 NER 模型，把它识别到的实体也转成统一格式的候选。
 
         参数:
@@ -638,12 +1421,6 @@ class EntityExtractor:
             候选字典列表;模型报错或置信度不足时相应跳过。
         """
         candidates: list[dict[str, Any]] = []
-        try:
-            output = self.ner_model(text)
-        except Exception as exc:  # pragma: no cover - external model behavior
-            # 外部模型可能各种报错,这里只记录警告、返回空,不让它拖垮主流程。
-            LOGGER.warning("NER candidate generation failed: %s", exc)
-            return candidates
 
         # 兼容两种输出:spaCy 风格(有 .ents)或直接的列表。
         if hasattr(output, "ents"):
@@ -659,8 +1436,18 @@ class EntityExtractor:
             value, label, start, end, confidence = parsed
             # 把 NER 标签映射到本项目类型;映射不到、或置信度不够,跳过。
             entity_type = NER_LABEL_MAP.get(label.upper())
-            if entity_type is None or confidence < self.ner_confidence_threshold:
+            if (
+                entity_type not in {"PERSON", "ORG", "LOCATION"}
+                or confidence < self.ner_confidence_threshold
+            ):
                 continue
+            article = re.match(r"(?i)^(?:the|a|an)\s+", value)
+            if article is not None:
+                start += article.end()
+                value = value[article.end() :]
+            if entity_type == "ORG" and value.endswith("."):
+                value = value[:-1]
+                end -= 1
             # 查该类型的默认家族/基础分/优先级(查不到给一组兜底默认值)。
             family, base_scores, priority = TYPE_DEFAULTS.get(entity_type, ("domain_term", _scores(0.70, 0.62, 0.66), 50))
             if not self._valid_surface(value, entity_type):
@@ -682,6 +1469,41 @@ class EntityExtractor:
                 }
             )
         return candidates
+
+    def _annotate_ner_evidence(
+        self,
+        candidates: list[dict[str, Any]],
+        ner_candidates: list[dict[str, Any]],
+    ) -> None:
+        """Attach exact/covering/overlapping local-NER evidence to every candidate."""
+
+        for candidate in candidates:
+            start = int(candidate["start"])
+            end = int(candidate["end"])
+            exact: set[str] = set()
+            covering: set[str] = set()
+            overlapping: set[str] = set()
+            meaningful_covering: set[str] = set()
+            for ner_candidate in ner_candidates:
+                ner_start = int(ner_candidate["start"])
+                ner_end = int(ner_candidate["end"])
+                ner_type = str(ner_candidate["type"]).upper()
+                if ner_start == start and ner_end == end:
+                    exact.add(ner_type)
+                if ner_start <= start and end <= ner_end:
+                    covering.add(ner_type)
+                    if has_meaningful_ner_covering_extension(
+                        (start, end),
+                        (ner_start, ner_end),
+                        str(ner_candidate["text"]),
+                    ):
+                        meaningful_covering.add(ner_type)
+                if start < ner_end and ner_start < end:
+                    overlapping.add(ner_type)
+            candidate["ner_exact_types"] = sorted(exact)
+            candidate["ner_covering_types"] = sorted(covering)
+            candidate["ner_meaningful_covering_types"] = sorted(meaningful_covering)
+            candidate["ner_overlapping_types"] = sorted(overlapping)
 
     def _parse_ner_item(self, text: str, item: Any) -> tuple[str, str, int, int, float] | None:
         """把"一个 NER 实体对象"解析成统一的 (值, 标签, 起, 止, 置信度) 五元组。
@@ -744,6 +1566,37 @@ class EntityExtractor:
             if existing is not None:
                 self._merge_into(existing, candidate)
                 continue
+            # 本地 NER 若给出覆盖整个名称的更长 PERSON/ORG/LOCATION span，应替换
+            # 较短的正则命名实体，而不是被正则优先级挡住。
+            if candidate.get("candidate_sources") == ["ner"]:
+                covered_named = [
+                    item
+                    for item in merged
+                    if int(candidate["start"]) <= int(item["start"])
+                    and int(item["end"]) <= int(candidate["end"])
+                    and (
+                        int(candidate["start"]) < int(item["start"])
+                        or int(item["end"]) < int(candidate["end"])
+                    )
+                    and str(candidate.get("type") or "").upper()
+                    in {"PERSON", "ORG", "LOCATION"}
+                    and str(item.get("type") or "").upper()
+                    in {"PERSON", "ORG", "LOCATION", "PRODUCT"}
+                ]
+                if covered_named:
+                    candidate["candidate_sources"] = sorted(
+                        {
+                            *candidate.get("candidate_sources", []),
+                            *(
+                                source
+                                for item in covered_named
+                                for source in item.get("candidate_sources", [])
+                            ),
+                        }
+                    )
+                    merged = [item for item in merged if item not in covered_named]
+                    merged.append(candidate)
+                    continue
             # 若被一个更优的重叠候选挡住,则丢弃本候选。
             if self._is_blocked_by_better_overlap(merged, candidate):
                 continue
@@ -780,8 +1633,15 @@ class EntityExtractor:
         # 合并并集去重来源(便于后面判断"多来源一致")。
         sources = set(existing.get("candidate_sources", [])) | set(candidate.get("candidate_sources", []))
         existing["candidate_sources"] = sorted(sources)
+        # PERSON 正则只负责召回。若同一 span 被本地 NER 明确识别为 ORG/LOCATION，
+        # 使用 NER 类型，避免 ``Internal Control``、``New Jersey`` 一类系统误标。
+        prefer_named_ner_type = (
+            str(existing.get("type") or "").upper() == "PERSON"
+            and candidate.get("candidate_sources") == ["ner"]
+            and str(candidate.get("type") or "").upper() in {"ORG", "LOCATION"}
+        )
         # candidate 优先级更高时,用它的类型/文本/位置/基础分覆盖。
-        if int(candidate["priority"]) > int(existing["priority"]):
+        if prefer_named_ner_type or int(candidate["priority"]) > int(existing["priority"]):
             existing.update(
                 {
                     "type": candidate["type"],
@@ -819,7 +1679,13 @@ class EntityExtractor:
                 return True
         return False
 
-    def _score_candidate(self, text: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    def _score_candidate(
+        self,
+        text: str,
+        candidate: dict[str, Any],
+        *,
+        sentence_spans: list[tuple[int, int, str]] | None = None,
+    ) -> dict[str, Any]:
         """给单个候选计算各项分数,核心是"可攻击性(attackability)"综合分。
 
         综合分是多项特征的加权和:基础重要性、上下文质量、特异性、可替换性、检索锚点强度、
@@ -835,8 +1701,32 @@ class EntityExtractor:
         entity_type = str(candidate["type"])
         family = str(candidate["entity_family"])
         # 定位实体所在句子,并据此算上下文特征。
-        sentence = _sentence_for_span(text, int(candidate["start"]), int(candidate["end"]))
+        start = int(candidate["start"])
+        end = int(candidate["end"])
+        sentence = _sentence_for_span(text, start, end, sentence_spans)
+        sentence_start = text.rfind(sentence, 0, start + 1)
+        if sentence_start < 0:
+            sentence_start = text.find(sentence)
+        relative_start = start - sentence_start if sentence_start >= 0 else -1
+        relative_end = relative_start + len(entity_text) if relative_start >= 0 else -1
+        if (
+            relative_start < 0
+            or relative_end > len(sentence)
+            or sentence[relative_start:relative_end] != entity_text
+        ):
+            occurrences = [
+                match.start()
+                for match in re.finditer(re.escape(entity_text), sentence)
+            ]
+            if occurrences:
+                expected = max(0, start - max(0, sentence_start))
+                relative_start = min(occurrences, key=lambda item: abs(item - expected))
+                relative_end = relative_start + len(entity_text)
+            else:
+                relative_start = -1
+                relative_end = -1
         context = _context_features(sentence, entity_text, entity_type)
+        entity_context_failures = entity_context_failure_reasons(text, (start, end), entity_type)
         specificity = _specificity_score(entity_text, entity_type, family)
         parser_score = _parser_friendliness(entity_type, family, entity_text)
         base = candidate.get("base_scores", _scores(0.60, 0.60, 0.60))
@@ -907,6 +1797,17 @@ class EntityExtractor:
                 "has_relation_context": context["has_relation"],
                 "context_anchor_count": context["anchor_count"],
                 "supporting_sentence": sentence,
+                "supporting_sentence_span": (
+                    [sentence_start, sentence_start + len(sentence)]
+                    if sentence_start >= 0
+                    else None
+                ),
+                "entity_sentence_span": (
+                    [relative_start, relative_end]
+                    if relative_start >= 0
+                    else None
+                ),
+                "entity_context_failure_reasons": list(entity_context_failures),
                 "extractor_version": EXTRACTOR_VERSION,
             }
         )
@@ -936,7 +1837,7 @@ class EntityExtractor:
         if entity_type == "NUMERIC_VALUE" and float(candidate.get("context_quality", 0.0)) < 0.55:
             return False
         # 不像真人名的 PERSON → 淘汰。
-        if entity_type == "PERSON" and _is_likely_bad_person(str(candidate.get("text") or "")):
+        if entity_type == "PERSON" and is_likely_bad_person(str(candidate.get("text") or "")):
             return False
         # 仅由 NER 给出的命名实体,要求更严:置信度、上下文质量、关系语境三道都要过。
         if sources == {"ner"} and family == "named_entity":
@@ -947,6 +1848,56 @@ class EntityExtractor:
             if not bool(candidate.get("has_relation_context")):
                 return False
         return True
+
+    def _semantic_gate_failure_reasons(self, candidate: dict[str, Any]) -> tuple[str, ...]:
+        """Return semantic failures that fallback is forbidden to bypass."""
+
+        reasons = list(sentence_semantic_failure_reasons(str(candidate.get("supporting_sentence") or "")))
+        reasons.extend(str(reason) for reason in candidate.get("entity_context_failure_reasons", []))
+        entity_type = str(candidate.get("type") or "").upper()
+        value = str(candidate.get("text") or "")
+        if entity_type in {
+            "PERSON",
+            "ORG",
+            "LOCATION",
+            "PRODUCT",
+            "PROJECT_NAME",
+            "CONTRACT_TERM",
+        } and (self.semantic_resolver is not None or self.require_semantic_resolver):
+            semantic_resolution = candidate.get("semantic_resolution")
+            if not isinstance(semantic_resolution, dict):
+                reasons.append("semantic_resolution_missing")
+            elif not bool(semantic_resolution.get("accepted")):
+                resolution_reasons = semantic_resolution.get("failure_reasons")
+                if isinstance(resolution_reasons, (list, tuple)):
+                    reasons.extend(str(reason) for reason in resolution_reasons)
+                else:
+                    reasons.append("semantic_resolution_rejected")
+        if entity_type == "PERSON" and is_likely_bad_person(value):
+            reasons.append("person_surface_mismatch")
+        if entity_type == "PROJECT_NAME" and is_likely_bad_project_name(value):
+            reasons.append("project_name_surface_mismatch")
+        if entity_type == "IDENTIFIER" and is_likely_bad_identifier(value):
+            reasons.append("identifier_surface_mismatch")
+        if self.enable_ner and self.ner_model is not None:
+            exact_types = {str(item).upper() for item in candidate.get("ner_exact_types", [])}
+            covering_types = {str(item).upper() for item in candidate.get("ner_covering_types", [])}
+            meaningful_covering_types = {
+                str(item).upper()
+                for item in candidate.get("ner_meaningful_covering_types", [])
+            }
+            conflicts = (exact_types | covering_types) - {entity_type}
+            if entity_type == "PERSON" and "PERSON" not in exact_types:
+                reasons.append("person_missing_exact_local_ner_support")
+            if entity_type == "PRODUCT" and conflicts & {"PERSON", "ORG", "LOCATION"}:
+                reasons.append("product_local_ner_type_conflict")
+            if entity_type == "LOCATION" and conflicts & {"PERSON", "ORG"}:
+                reasons.append("location_local_ner_type_conflict")
+            if entity_type == "ORG" and exact_types & {"PERSON", "LOCATION"}:
+                reasons.append("org_local_ner_type_conflict")
+            if entity_type in {"ORG", "LOCATION", "PRODUCT"} and meaningful_covering_types:
+                reasons.append("named_entity_local_ner_covering_boundary")
+        return tuple(dict.fromkeys(reasons))
 
     def _select_diverse(self, candidates: list[dict[str, Any]], max_entities: int) -> list[dict[str, Any]]:
         """在"每个家族有配额"的约束下，按分数从高到低挑出最多 max_entities 个实体。
@@ -1006,8 +1957,27 @@ class EntityExtractor:
         # 长度太短(<2)或太长(>120)都不要。
         if len(compact) < 2 or len(compact) > 120:
             return False
+        if entity_type == "NUMERIC_VALUE" and re.fullmatch(
+            r"\d+(?:,\d{3})*(?:\.\d+)?",
+            compact,
+        ) is None:
+            return False
+        if entity_type in {"PERSON", "ORG", "LOCATION", "PRODUCT"}:
+            if (
+                compact.count("(") != compact.count(")")
+                or compact.count("[") != compact.count("]")
+                or compact.count("{") != compact.count("}")
+                or compact.count('"') % 2
+            ):
+                return False
+            if re.fullmatch(r"(?:[A-Za-z]\.){1,4}", compact):
+                return False
         # 不像真人名的 PERSON 直接刷掉。
-        if entity_type == "PERSON" and _is_likely_bad_person(compact):
+        if entity_type == "PERSON" and is_likely_bad_person(compact):
+            return False
+        if entity_type == "PROJECT_NAME" and is_likely_bad_project_name(compact):
+            return False
+        if entity_type == "IDENTIFIER" and is_likely_bad_identifier(compact):
             return False
         # 纯泛化词刷掉。
         if _normalized(compact) in GENERIC_ENTITY_VALUES:

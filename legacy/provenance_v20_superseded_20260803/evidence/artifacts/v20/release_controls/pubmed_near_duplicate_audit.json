@@ -1,0 +1,17 @@
+{
+  "source_count": 1250,
+  "normalized_exact_hash_groups": 0,
+  "candidate_pair_count": 0,
+  "near_duplicate_pair_count": 0,
+  "cross_group_pair_count": 0,
+  "cross_group_overlap": [],
+  "pairs": [],
+  "jaccard_threshold": 0.85,
+  "minhash_permutations": 64,
+  "minhash_bands": 8,
+  "passed": true,
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "pubmed",
+  "source_store_hash": "579b23d47461ab8e401f3948e415b9a281f28d517552111cb67785bf661d40e1",
+  "policy": "cross-group clusters require deterministic cluster-level regrouping before any API call"
+}

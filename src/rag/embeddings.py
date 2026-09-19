@@ -21,16 +21,55 @@ experiment semantics.
 
 from __future__ import annotations
 
+import gc
 import math
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 
 
-# 默认使用的句向量模型名(来自 HuggingFace 上的 sentence-transformers 系列)。
-# all-MiniLM-L6-v2 是个又小又快、效果还不错的常用模型，输出 384 维向量。
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# v20 正式 dense retriever。MiniLM 仅允许留在 legacy 审计产物中。
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
+DEFAULT_BGE_QUERY_INSTRUCTION = (
+    "Represent this sentence for searching relevant passages: "
+)
+
+
+def enforce_hf_offline(local_files_only: bool) -> None:
+    """正式本地 snapshot 加载时禁止第三方库额外探测远端文件。"""
+
+    if not local_files_only:
+        return
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+
+def resolve_hf_model_source(
+    model_name: str,
+    *,
+    revision: str | None,
+    local_files_only: bool,
+) -> str:
+    """把冻结的 Hub 身份解析为本地 snapshot 路径，避免 tokenizer 再访问网络。"""
+
+    if not local_files_only:
+        return model_name
+    enforce_hf_offline(True)
+    local_path = Path(model_name)
+    if local_path.exists():
+        return str(local_path.resolve())
+    from huggingface_hub import snapshot_download
+
+    return str(
+        snapshot_download(
+            model_name,
+            revision=revision,
+            local_files_only=True,
+        )
+    )
 
 
 class EmbeddingModel(Protocol):
@@ -51,6 +90,12 @@ class EmbeddingModel(Protocol):
         # 输入一批文本，返回它们的向量(每行一个文本的向量)。这里只是声明签名，无实现。
         ...
 
+    def encode_documents(self, texts: list[str]) -> np.ndarray:
+        ...
+
+    def encode_queries(self, texts: list[str]) -> np.ndarray:
+        ...
+
 
 @dataclass
 class SentenceTransformerEmbeddingModel:
@@ -62,6 +107,9 @@ class SentenceTransformerEmbeddingModel:
 
     # 要加载的模型名称(来自 configs 配置或默认值)。
     model_name: str
+    local_files_only: bool = False
+    revision: str | None = None
+    query_instruction: str = DEFAULT_BGE_QUERY_INSTRUCTION
 
     def __post_init__(self) -> None:
         """dataclass 初始化后自动调用：在这里真正把模型加载进内存。
@@ -71,14 +119,26 @@ class SentenceTransformerEmbeddingModel:
               本文件就崩溃(用到时才报错，更友好)。
             - 读取模型的向量维度并存到 self.dim。
         """
+        model_source = resolve_hf_model_source(
+            self.model_name,
+            revision=self.revision,
+            local_files_only=self.local_files_only,
+        )
         # 仅在真正需要时才导入重型依赖(sentence-transformers)。
         from sentence_transformers import SentenceTransformer
 
         # 按名字下载/加载模型(第一次会联网下载，之后用本地缓存)。
-        self._model = SentenceTransformer(self.model_name)
+        self._model = SentenceTransformer(
+            model_source,
+            local_files_only=self.local_files_only,
+            revision=None if model_source != self.model_name else self.revision,
+        )
         self.name = self.model_name
         # 询问模型它输出的向量是多少维。
-        dim = self._model.get_sentence_embedding_dimension()
+        dimension_getter = getattr(self._model, "get_embedding_dimension", None)
+        if dimension_getter is None:
+            dimension_getter = self._model.get_sentence_embedding_dimension
+        dim = dimension_getter()
         # 拿不到维度时兜底用 768(很多 BERT 类模型的常见维度)。
         self.dim = int(dim) if dim else 768
 
@@ -96,8 +156,57 @@ class SentenceTransformerEmbeddingModel:
         # 统一转成 float32 的 numpy 数组(省内存，且 FAISS 索引要求 float32)。
         return np.asarray(vectors, dtype="float32")
 
+    def encode_documents(self, texts: list[str]) -> np.ndarray:
+        """编码文档块；BGE 文档侧不加 query instruction。"""
 
-def build_embedding_model(model_name: str | None, backend: str = "auto", dim: int = 384) -> EmbeddingModel:
+        return self.encode(texts)
+
+    def encode_queries(self, texts: list[str]) -> np.ndarray:
+        """编码查询；BGE query/document 角色必须保持一致。"""
+
+        prefix = self.query_instruction if self.model_name.casefold().startswith("baai/bge-") else ""
+        return self.encode([f"{prefix}{text}" for text in texts])
+
+    @property
+    def tokenizer(self):
+        """暴露与 embedding snapshot 一致的 tokenizer，供 token-aware chunking 使用。"""
+
+        return getattr(self._model, "tokenizer", None)
+
+    def close(self) -> None:
+        """释放一次性 embedding runtime，避免与后续 CUDA 模型叠加。"""
+
+        model = getattr(self, "_model", None)
+        if model is None:
+            return
+        try:
+            # 先迁回 CPU，再断开最后一个强引用；这不会改变已经写出的向量。
+            model.to("cpu")
+        except Exception:
+            # CUDA 异步错误可能在迁移时才上报，资源清理不能遮蔽主流程结果。
+            pass
+        self._model = None
+        del model
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            # 纯 CPU 环境或异步 CUDA 状态下保持 best-effort。
+            pass
+
+
+def build_embedding_model(
+    model_name: str | None,
+    backend: str = "auto",
+    dim: int = 384,
+    *,
+    local_files_only: bool = False,
+    revision: str | None = None,
+    query_instruction: str = DEFAULT_BGE_QUERY_INSTRUCTION,
+) -> EmbeddingModel:
     """Create the configured embedding model.
 
     ``dim`` is retained for backward-compatible call sites, but real embedding
@@ -127,7 +236,12 @@ def build_embedding_model(model_name: str | None, backend: str = "auto", dim: in
         raise ValueError("Hashing embedding is disabled. Configure a real sentence-transformers model.")
     # 这几种写法都表示"用 sentence-transformers 真实模型"。
     if normalized_backend in {"auto", "sentence_transformers", "sentence-transformer"}:
-        return SentenceTransformerEmbeddingModel(model_name)
+        return SentenceTransformerEmbeddingModel(
+            model_name,
+            local_files_only=local_files_only,
+            revision=revision,
+            query_instruction=query_instruction,
+        )
     # 其它后端名都不认识，报错提示。
     raise ValueError(f"Unsupported embedding backend: {backend}")
 

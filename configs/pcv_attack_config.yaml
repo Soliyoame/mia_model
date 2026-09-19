@@ -2,44 +2,143 @@
 
 logging:
   level: INFO
-  file: datasets/logs/pcv_attack.log
+  file: artifacts/v20/logs/pcv_attack.log
 
 llm_profiles_path: configs/llm_profiles.yaml
 
 paths:
-  benchmark_dir: datasets/benchmarks
-  facts_dir: outputs/facts
-  paired_claims_dir: outputs/paired_claims
-  paired_queries_dir: outputs/paired_queries
-  stealth_filtered_queries_dir: outputs/stealth_filtered_queries
-  parsed_stance_dir: outputs/parsed_stance
-  scores_dir: outputs/scores
+  benchmark_dir: artifacts/v6_3/benchmarks
+  facts_dir: artifacts/v6_3/facts
+  paired_claims_dir: artifacts/v6_3/paired_claims
+  paired_queries_dir: artifacts/v6_3/paired_queries
+  stealth_filtered_queries_dir: artifacts/v6_3/stealth_filtered_queries
+  parsed_stance_dir: artifacts/v20/parsed_stance
+  scores_dir: artifacts/v20/scores
 
 fact_extraction:
-  max_facts_per_doc: 2
+  max_facts_per_doc: 4
   max_entities_per_doc: 8
   max_samples: null
+  ner:
+    enabled: false
+    backend: spacy
+    model: null
+    local_files_only: true
+    confidence_threshold: 0.75
+    batch_size: 32
+  semantic_resolver:
+    enabled: true
+    protocol: local_claim_pair_v6_3_precision_cascade
+    execution_mode: precision_cascade
+    primary_model_role: gliner2_large
+    biomedical_candidate_only: true
+    biomedical_window_chars: 512
+    model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+    local_files_only: true
+    device: cuda
+    spacy_device: cpu
+    biomedical_device: cuda
+    use_fp16: true
+    batch_size: 8
+    thresholds_frozen: true
+    thresholds_sha256: d180bdb02d5bcb5748cfac64b955ecc307b37022671c0200a35a50d0394edfa8
+    calibration_summary_path: artifacts/v6_3/semantic_calibration_precision_cascade_per_type/calibration_summary.json
+    min_target_confidence: 0.95
+    min_confidence_margin: 0.40
+    thresholds_by_entity_type:
+      CONTRACT_TERM:
+        min_target_confidence: 0.50
+        min_confidence_margin: 0.40
+      LOCATION:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.05
+      ORG:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PERSON:
+        min_target_confidence: 0.55
+        min_confidence_margin: 0.40
+      PRODUCT:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PROJECT_NAME:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.40
+    min_consensus_votes: 1
+    min_boundary_votes: 1
+    biomedical_veto_threshold: 0.90
+    overlap_threshold: 0.80
+  # 以下三项现在是"优选阈值"(达标=primary 高质量事实;不达标降级为 fallback，不再整篇丢弃)。
   min_importance: 0.6
   min_replaceability: 0.6
   min_privacy_specificity: 0.5
+  # 方案 D:每篇文档保底产出的事实数(只要有可成句实体)。保证评估覆盖率、消除"可抽取性=组别"的 selection bias。
+  guarantee_min_facts: 1
+  dataset_overrides:
+    enron:
+      max_facts_per_doc: 8
+      max_entities_per_doc: 12
+      guarantee_min_facts: 8
 
 paired_claims:
   perturbation_levels: [light]
   max_pairs_per_fact: 1
 
 paired_queries:
-  query_types: [compressed_verification]
+  query_types: [diverse_slotted_verification]
+  pairs_per_source: 3
+  sibling_profile: openai_api
+  naturalization:
+    candidates_per_pair: 3
+    correction_retries: 2
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 120
+    embedding_model: sentence-transformers/all-MiniLM-L6-v2
+    embedding_local_files_only: true
+    min_question_proposition_similarity: 0.80
+    max_five_gram_containment: 0.35
+    max_longest_common_token_run: 8
+    max_dataset_duplicate_template_rate: 0.01
+    max_dataset_opening_4gram_rate: 0.15
+  nli:
+    model_id: tasksource/deberta-base-long-nli
+    revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+    snapshot_dir: models/menta/deberta-base-long-nli
+    local_files_only: true
+    device: cuda
+    require_cuda: true
+    batch_size: 16
+    max_length: 1280
 
 stealth_filter:
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_local_files_only: true
+  embedding_batch_size: 64
+  pairs_per_source: 3
   min_naturalness: 0.55
   max_context_probe: 0.5
   max_prompt_injection: 0.5
-  min_similarity: 0.03
-  max_similarity: 0.97
+  max_five_gram_containment: 0.35
+  max_longest_common_token_run: 8
+  max_dataset_duplicate_template_rate: 0.01
+  max_dataset_opening_4gram_rate: 0.15
 
 scoring:
   unknown_lambda: 0.5
   refusal_penalty: 0.5
-  false_acceptance_penalty: 1.0
+  # 误受惩罚项默认关闭(置 0):消融显示它在干净集 AUC≈0.525 无判别力(接受反事实事件极稀有),
+  # 去掉后 edgar TPR@1%FPR 0.790→0.815、d' 3.067→3.236。设 >0 可恢复(污染集"接受假声明"或有信号)。
+  false_acceptance_penalty: 0.0
   thresholds: [0.3, 0.5, 0.7, 1.0]
+
+# 辅助脚本显式读取这些论文实验变体；默认流水线行为仍是 full_pvs。
+experiment_variants:
+  default: full_pvs
+  # full_pvs 本身已是 pair→chunk→source 的不加权分层平均，故不重复声明伪造的 unweighted 变体。
+  offline: [full_pvs, qplus_only, qminus_only, correction_only, quality_weighted, primary_only]
+  not_applicable:
+    unweighted: full_pvs already uses unweighted hierarchical means
+  query_controls: [random_same_type_counterfactual, independent_unpaired_query, no_stealth_filter]
+  shortcut_controls: [lexical_query_document_jaccard, embedding_query_document_cosine, retrieval_target_hit_rate, retrieval_max_score, query_token_count, query_char_count, query_digit_ratio, query_punctuation_ratio]
+  query_budgets: [2, 4, 6, 8]

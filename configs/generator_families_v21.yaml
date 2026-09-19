@@ -1,0 +1,40 @@
+registry_version: generator-family-registry-v21
+required_families: [gemma, phi, llama, command-r]
+selection_policy:
+  allowed_factors: [local_availability, context_length, output_format_compatibility, cost, family_membership]
+  forbidden_factors: [pcv_auc, attack_effectiveness, intermediate_attack_results]
+generator_families:
+  gemma:
+    status: frozen
+    role: primary
+    provider: huggingface_local
+    endpoint_id: local:transformers:cuda
+    concrete_model: google/gemma-2-2b-it
+    model_version: 9b78bb926a2a249dd297e27b043019eb0666ce82
+    model_snapshot: hf:google/gemma-2-2b-it@9b78bb926a2a249dd297e27b043019eb0666ce82
+    context_length: 8192
+    temperature_supported: true
+    first_formal_call_at: null
+    selection_reason: "Gemma-2-2B-it is the preregistered first open-weight victim; selected before v21 responses based on local BF16 feasibility and output compatibility."
+  phi: {status: pending, role: extension}
+  llama: {status: pending, role: extension}
+  command-r: {status: pending, role: extension}
+
+auxiliary_roles:
+  query_generator:
+    status: pending_endpoint_freeze
+    provider: openai_compatible
+    endpoint_id: env:PCV_SIBLING_BASE_URL
+    concrete_model: gpt-5.6-luna
+    model_version: env:PCV_SIBLING_MODEL_VERSION
+    temperature: 0
+    seed: 42
+  ia_shadow_answer:
+    status: frozen
+    provider: local_ollama
+    endpoint_id: http://127.0.0.1:11434/v1
+    concrete_model: pcv-qwen3-4b:q4km-8k
+    model_version: ollama:39297c75a309
+    context_length: 8192
+    quantization: Q4_K_M
+    temperature: 0

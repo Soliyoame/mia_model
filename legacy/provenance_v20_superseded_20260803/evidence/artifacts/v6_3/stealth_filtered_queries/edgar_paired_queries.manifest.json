@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-07-28T04:58:41.015538+00:00",
+  "promotion_protocol": "formal_fixed_pair_promotion_v2",
+  "dataset": "edgar",
+  "benchmark_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\benchmarks\\edgar_attack_benchmark.jsonl",
+  "benchmark_hash": "1279aa0e569b9c0785cb94b2571ad7387ebdc342b963f28651dd3800a99d00e6",
+  "benchmark_manifest_hash": "8e8787fc071b42770dd3ba5fbfc160948e213d616f9f02445025fe71e15214ec",
+  "query_eligibility_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\edgar\\edgar_query_eligible_sources.json",
+  "query_eligibility_hash": "f1ad2059420f439d1c412767da3028e48f3de6d9bb348a57d95a1a6bce38e003",
+  "query_eligibility_protocol": "pre_split_local_query_eligibility_v6_3_attack_first_rc2_budget6_release_v1_unique_query_text",
+  "query_eligibility_whitelist_hash": "bd859976d9bce18c2d4ca287fccae135691ea180ce84d7d65d46c053ca8836dc",
+  "upstream_fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+  "formal_fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "source_counts_by_group": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "pair_counts_by_group": {
+    "Reserve": 750,
+    "KB_Member": 1500,
+    "True_Non_Member": 1500
+  },
+  "query_counts_by_group": {
+    "True_Non_Member": 3000,
+    "Reserve": 1500,
+    "KB_Member": 3000
+  },
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\stealth_filtered_queries\\edgar_paired_queries.jsonl",
+  "rejected_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\stealth_filtered_queries\\edgar_paired_queries_rejected.jsonl",
+  "accepted": 7500,
+  "rejected": 0,
+  "accepted_pairs": 3750,
+  "rejected_pairs": 0,
+  "stealth_detection_rate": 0.0,
+  "pair_rejection_rate": 0.0,
+  "fixed_budget": {
+    "pairs_per_source": 3,
+    "queries_per_source": 6,
+    "eligible_sources": 1250,
+    "insufficient_sources": {},
+    "selected_pairs": 3750,
+    "query_text_uniqueness_enforced": true,
+    "duplicate_query_text_pairs": 0,
+    "fixed_budget_plan_hash": "1825c5e1fa0d1326e81ae15b3e222ed80664aae1c585e968f4bb6d2a38e7a8ae",
+    "enabled": true
+  },
+  "upstream_candidate_filter": {
+    "accepted": 7500,
+    "rejected": 0,
+    "accepted_pairs": 3750,
+    "rejected_pairs": 0,
+    "stealth_detection_rate": 0.0,
+    "pair_rejection_rate": 0.0
+  },
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_local_files_only": true,
+  "output_hash": "250a392f18db2e91a56a8ace8d75c79e9e96be8d2b8289f67dfe0dafba28ff0d",
+  "rejected_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "post_regroup_output_hash": "250a392f18db2e91a56a8ace8d75c79e9e96be8d2b8289f67dfe0dafba28ff0d",
+  "post_regroup_at": "2026-07-31T02:49:30.828633+00:00",
+  "near_duplicate_regrouping_hash": "fbbb1334d8c9d68759bcde279d7eaa2a817f2fbbe7eff28f0643d8f1ed157ad4",
+  "split_manifest_hash": "9bb73a6fd110a5d6934b645e0ebf4b5ce0aa0594805b0ded68c47d17dc39b8b7"
+}

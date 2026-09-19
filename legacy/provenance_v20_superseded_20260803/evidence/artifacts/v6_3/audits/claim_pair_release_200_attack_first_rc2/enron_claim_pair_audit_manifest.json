@@ -1,0 +1,55 @@
+{
+  "dataset": "enron",
+  "seed": 314159,
+  "sample_size": 200,
+  "source_count": 200,
+  "strata": {
+    "Eligibility_Candidate::DATE": 16,
+    "Eligibility_Candidate::DURATION": 16,
+    "Eligibility_Candidate::IDENTIFIER": 12,
+    "Eligibility_Candidate::LOCATION": 16,
+    "Eligibility_Candidate::MEDICAL_VALUE": 16,
+    "Eligibility_Candidate::MONEY": 16,
+    "Eligibility_Candidate::NUMERIC_VALUE": 16,
+    "Eligibility_Candidate::ORG": 16,
+    "Eligibility_Candidate::PERCENT": 15,
+    "Eligibility_Candidate::PERSON": 15,
+    "Eligibility_Candidate::PHONE": 15,
+    "Eligibility_Candidate::PRODUCT": 15,
+    "Eligibility_Candidate::SECTION_ID": 1,
+    "Eligibility_Candidate::TIME": 15
+  },
+  "sample_whitelist_hash": "7e549d8784ff673d7a586b208416f202db9d8ae324f77d036dd106a8010bd371",
+  "annotator_a_shuffle_seed": 315160,
+  "annotator_b_shuffle_seed": 316161,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_selected_claims_rc2.jsonl",
+  "claims_hash": "bf607a0278f1a4648a501d78f95709783fd83dd4b102033a3bf4ece138915d96",
+  "prior_audit_exclusions": [
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\enron_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\enron_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "0f50cce1345257647cead3268d83ed8f13061b5f7847530588b4c04914eb6a57",
+      "annotator_b_hash": "1404d9ef3e226a0a031e22461fe2047408ce24803d69c114ce5b02d7203738ad",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    }
+  ],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 1,
+    "excluded_source_count": 100,
+    "excluded_audit_id_count": 100,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 3450,
+    "candidate_rows_removed": 300
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2\\enron_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2\\enron_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "8aca99cb11e68f172e9497288e9c592a200c2e305cf80857be878d3e82f336c5",
+  "annotator_b_hash": "b6c44e00e2ec741a1e770b6682ee603d56a91e2357d32fa22424f7c11c6041ea"
+}

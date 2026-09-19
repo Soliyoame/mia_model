@@ -1,0 +1,40 @@
+{
+  "dataset": "enron",
+  "source_path": "D:\\MIA\\mia_model\\artifacts\\v19\\audits\\claim_pair_ai_adjudication\\enron_claim_pair_ai_adjudication.jsonl",
+  "source_sha256": "6234ad966529b678d81a223dc9657ec6e38e26fc45a292ca53d2995aaba41507",
+  "model_lock_path": "D:\\MIA\\mia_model\\configs\\semantic_entity_models_v6_3.lock.yaml",
+  "model_lock_sha256": "9bce3d3dc0a2c21566a8cce93e07350d11b774c92d55d44d88099f5e1f1831b8",
+  "schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "supplement_path": "D:\\MIA\\mia_model\\configs\\semantic_v6_3_dev_supplement.yaml",
+  "supplement_sha256": "d3663907b7ecfe6d56b818e018bd313e102f1f80e880a42ca5c42bece76a0ae2",
+  "max_rows_per_dataset": null,
+  "supplement_only": false,
+  "runtime": {
+    "device": "cuda",
+    "spacy_device": "cpu",
+    "biomedical_device": "cuda",
+    "batch_size": 8,
+    "use_fp16": true
+  },
+  "protocol": "local_claim_pair_v6_3_precision_cascade",
+  "execution_mode": "precision_cascade",
+  "primary_model_role": "gliner2_large",
+  "created_at": "2026-07-25T03:30:34.290175+00:00",
+  "rows": 51,
+  "labels": {
+    "fail": 20,
+    "pass": 31
+  },
+  "entity_types": {
+    "PERSON": 11,
+    "PRODUCT": 14,
+    "ORG": 6,
+    "LOCATION": 7,
+    "CONTRACT_TERM": 6,
+    "PROJECT_NAME": 7
+  },
+  "api_calls_performed": 0,
+  "label_scope": "AI-assisted historical development labels; not a release audit and not a two-human blind annotation.",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\semantic_calibration_precision_cascade\\enron_raw_predictions.jsonl",
+  "output_sha256": "aafc73203e559c2f669d5e0477edb1143e90a40f6a7d1ff90fc2271df0e6bf00"
+}

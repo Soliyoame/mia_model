@@ -51,9 +51,12 @@ class OpenAICompatibleSiblingClient:
     timeout: float = 60.0         # 超时秒数
     max_tokens: int = 1024        # 默认最大生成长度
     max_retries: int = 2          # 重试次数(sibling 用于离线生成，允许多重试)
+    retry_until_success: bool = False  # transport 错误是否持续重试直到成功
     retry_backoff_base: float = 2.0   # 重试退避基数
     retry_backoff_max: float = 30.0   # 重试退避上限
+    stream: bool = False          # 是否走流式(SSE)请求,透传给底层 client
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数
+    request_rate_limiter: Any = None  # 远端 sibling 共享令牌桶
 
     @cached_property
     def _client(self) -> OpenAICompatibleChatClient:
@@ -66,9 +69,12 @@ class OpenAICompatibleSiblingClient:
             system_prompt=self.system_prompt,
             timeout=self.timeout,
             max_retries=self.max_retries,
+            retry_until_success=self.retry_until_success,
             retry_backoff_base=self.retry_backoff_base,
             retry_backoff_max=self.retry_backoff_max,
             extra_body=self.extra_body,
+            stream=self.stream,
+            request_rate_limiter=self.request_rate_limiter,
         )
 
     def _chat(self, prompt: str, *, max_tokens: int | None = None) -> str:

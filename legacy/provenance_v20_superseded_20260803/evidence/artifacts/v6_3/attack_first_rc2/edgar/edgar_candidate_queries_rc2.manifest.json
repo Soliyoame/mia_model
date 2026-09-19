@@ -1,0 +1,15 @@
+{
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\edgar\\edgar_candidate_queries_rc2.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\edgar\\edgar_candidate_queries_rc2.errors.jsonl",
+  "created_at": "2026-07-28T04:35:40.635658+00:00",
+  "queries": 21922,
+  "errors": 0,
+  "query_types": [
+    "compressed_verification"
+  ],
+  "queries_by_type": {
+    "compressed_verification": 21922
+  },
+  "validation_failures_by_reason": {},
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2"
+}

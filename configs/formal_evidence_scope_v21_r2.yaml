@@ -1,0 +1,30 @@
+formal_evidence_scope_version: pcv_formal_evidence_scope_v21_r2_dataset_stratified
+
+formal_semantic_entity_types:
+  - CONTRACT_TERM
+  - LOCATION
+  - ORG
+  - PERSON
+  - PRODUCT
+
+diagnostic_only_semantic_entity_types:
+  - PROJECT_NAME
+
+minimum_global_valid_pairs: 90
+minimum_valid_pairs_per_dataset_type: 36
+
+audit:
+  dataset_stratified: true
+  datasets_per_type: 3
+  accepted_per_dataset_type: 36
+  hard_negatives_per_dataset_type: 4
+  user_review_per_dataset_type: 4
+  accepted_per_type: 108
+  hard_negatives_per_type: 12
+  user_review_sample_size: 60
+  minimum_accepted_passes_per_dataset_type: 35
+  minimum_accepted_rate_per_dataset_type: 0.96
+  minimum_wilson_95_lower_per_dataset_type: 0.85
+  minimum_accepted_passes_per_type: 104
+  minimum_accepted_rate_per_type: 0.96
+  minimum_wilson_95_lower_per_type: 0.90

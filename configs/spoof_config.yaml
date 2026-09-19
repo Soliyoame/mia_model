@@ -12,6 +12,10 @@ paths:
   splits_dir: datasets/splits
   spoofed_dir: datasets/spoofed
 
+dataset_paths:
+  pubmed:
+    splits_dir: artifacts/v6_3/splits/pubmed
+
 spoof:
   sibling_profile: null
   candidates_per_seed: 3

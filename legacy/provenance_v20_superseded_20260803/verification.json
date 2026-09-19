@@ -1,0 +1,15 @@
+{
+  "approved_cleanup_targets": [
+    "artifacts/v6_3",
+    "artifacts/v20",
+    "indexes",
+    "outputs",
+    "legacy/abandoned_retriever_20260730",
+    "legacy/pre_response_regroup_20260731"
+  ],
+  "evidence_file_count": 278,
+  "inventory_rows": 818,
+  "inventory_sha256": "377c25fc541fdb34a6120f24ae81e6bd1e7249278992854cbebdd784ceda221c",
+  "status": "verified_cleanup_authorized",
+  "verified_at": "2026-08-03T03:30:05.755360+00:00"
+}

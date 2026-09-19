@@ -1,0 +1,313 @@
+"""Build the immutable paper release manifest from an explicit complete canonical suite."""
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.evaluation.matched_control import build_matched_control_analysis  # noqa: E402
+from src.evaluation.paper_figures import render_paper_figures  # noqa: E402
+from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
+from src.utils.io import ensure_dir, read_json, read_jsonl, resolve_path, write_json  # noqa: E402
+from src.utils.run_context import canonical_defense_required, resolve_suite_run  # noqa: E402
+
+QUERY_CONTROLS = (
+    "random_same_type_counterfactual",
+    "independent_unpaired_query",
+    "no_stealth_filter",
+)
+
+
+def _artifact(path: Path, root: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required canonical artifact is missing: {path}")
+    return {
+        "path": str(path.resolve()),
+        "run_relative_path": path.relative_to(root).as_posix(),
+        "size": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def _unique(root: Path, filename: str) -> Path:
+    matches = sorted(path for path in root.rglob(filename) if path.is_file())
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected exactly one {filename} under {root}, found {len(matches)}")
+    return matches[0]
+
+
+def _optional_unique(root: Path, filename: str) -> Path | None:
+    matches = sorted(path for path in root.rglob(filename) if path.is_file())
+    if len(matches) > 1:
+        raise RuntimeError(f"Expected at most one {filename} under {root}, found {len(matches)}")
+    return matches[0] if matches else None
+
+
+def _optional_artifact(path: Path | None, root: Path) -> dict[str, Any]:
+    if path is None:
+        return {"status": "not_required_for_this_cell", "exists": False}
+    return {"status": "available", "exists": True, **_artifact(path, root)}
+
+
+def _paired_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    identity = dict(manifest.get("experiment_identity") or {})
+    identity.pop("run_role", None)
+    identity.pop("retriever_backend", None)
+    identity.pop("retriever_id", None)
+    identity.pop("index_manifest_hash", None)
+    return identity
+
+
+def collect_dataset_release(
+    suite_id: str,
+    dataset: str,
+    victim_model: str,
+    retriever_backend: str,
+    *,
+    render_figures: bool,
+) -> dict[str, Any]:
+    main_root, main_manifest, _ = resolve_suite_run(
+        suite_id,
+        dataset=dataset,
+        run_role="main",
+        victim_model=victim_model,
+        retriever_backend=retriever_backend,
+    )
+    control_root, control_manifest, _ = resolve_suite_run(
+        suite_id,
+        dataset=dataset,
+        run_role="matched_control",
+        victim_model=victim_model,
+        retriever_backend="none",
+    )
+    if _paired_identity(main_manifest) != _paired_identity(control_manifest):
+        raise RuntimeError(f"Main/matched-control identity mismatch for {dataset}")
+
+    main_query_path = _unique(
+        main_root / "stealth_filtered_queries",
+        f"{dataset}_paired_queries.jsonl",
+    )
+    control_query_path = _unique(
+        control_root / "stealth_filtered_queries",
+        f"{dataset}_paired_queries.jsonl",
+    )
+    if sha256_file(main_query_path) != sha256_file(control_query_path):
+        raise RuntimeError(f"Main/matched-control query plan mismatch for {dataset}")
+    control_llm_path = _unique(
+        control_root / "llm_only_responses",
+        f"{dataset}_llm_only_responses.jsonl",
+    )
+    control_llm_manifest_path = _unique(
+        control_root / "llm_only_responses",
+        f"{dataset}_llm_only_responses.manifest.json",
+    )
+
+    report_path = _unique(main_root / "reports", f"{dataset}_final_report.json")
+    source_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_scores.jsonl")
+    score_manifest_path = _unique(main_root / "scores", f"{dataset}_pcv_scores.manifest.json")
+    coverage_path = _unique(main_root / "scores", f"{dataset}_pcv_scores_source_coverage.jsonl")
+    baseline_path = _unique(main_root / "baselines", f"{dataset}_baseline_comparison.jsonl")
+    mechanism_path = _unique(main_root / "mechanisms", f"{dataset}_mechanism_report.json")
+    defense_path = _optional_unique(main_root / "defenses", f"{dataset}_defense_results.json")
+    ablation_path = _unique(main_root / "diagnostics", f"{dataset}_p0_ablation.json")
+    shortcut_path = _unique(main_root / "diagnostics", f"{dataset}_shortcut_controls.json")
+    if canonical_defense_required(dataset, victim_model, retriever_backend) and defense_path is None:
+        raise RuntimeError(f"Representative defense artifact missing for {dataset}/{victim_model}/{retriever_backend}")
+    report = read_json(report_path)
+    expected_whitelist = str((main_manifest.get("experiment_identity") or {}).get("source_whitelist_hash") or "")
+    control_response_manifest = read_json(control_llm_manifest_path)
+    if control_response_manifest.get("queries_hash") != sha256_file(control_query_path):
+        raise RuntimeError(f"Matched-control response/query provenance mismatch for {dataset}")
+    if control_response_manifest.get("source_whitelist_hash") != expected_whitelist:
+        raise RuntimeError(f"Matched-control source whitelist mismatch for {dataset}")
+    if control_response_manifest.get("run_rag") is not False:
+        raise RuntimeError(f"Matched-control unexpectedly ran RAG for {dataset}")
+    if control_response_manifest.get("run_llm_only") is not True:
+        raise RuntimeError(f"Matched-control did not run LLM-only for {dataset}")
+    if report.get("source_whitelist_hash") != expected_whitelist:
+        raise RuntimeError(f"Report/run source whitelist mismatch for {dataset}")
+    ablation = read_json(ablation_path)
+    if ablation.get("source_whitelist_hash") != expected_whitelist:
+        raise RuntimeError(f"Ablation/run source whitelist mismatch for {dataset}")
+
+    query_controls: dict[str, Any] = {}
+    for variant in QUERY_CONTROLS:
+        query_controls[variant] = {
+            "query_manifest": _artifact(
+                main_root / "query_controls" / dataset / variant / "control_manifest.json",
+                main_root,
+            ),
+            "rag_responses": _artifact(
+                main_root / "query_control_responses" / variant / "rag_responses.jsonl",
+                main_root,
+            ),
+            "source_scores": _artifact(
+                main_root / "query_control_scores" / variant / "pcv_scores_source_scores.jsonl",
+                main_root,
+            ),
+            "analysis": _artifact(
+                _unique(main_root / "diagnostics", f"{dataset}_{variant}_query_control.json"),
+                main_root,
+            ),
+        }
+
+    cell_slug = f"{dataset}__{victim_model.split('/')[-1]}__{retriever_backend}".replace(" ", "-")
+    release_dir = ensure_dir(resolve_path("outputs/releases") / suite_id / "cells" / cell_slug)
+    score_manifest = read_json(score_manifest_path)
+    matched_analysis = build_matched_control_analysis(
+        dataset=dataset,
+        queries_path=control_query_path,
+        llm_responses_path=control_llm_path,
+        main_source_scores_path=source_path,
+        output_dir=release_dir,
+        unknown_lambda=float(score_manifest.get("unknown_lambda", 0.5)),
+        refusal_penalty=float(score_manifest.get("refusal_penalty", 0.5)),
+        false_acceptance_penalty_value=float(
+            score_manifest.get("false_acceptance_penalty", 0.0)
+        ),
+        n_bootstrap=2000,
+        seed=42,
+    )
+    matched_artifacts = {
+        name: _artifact(Path(path), release_dir)
+        for name, path in matched_analysis["paths"].items()
+    }
+    canonical_source_path = Path(
+        matched_analysis["paths"]["canonical_source_scores"]
+    )
+    figure_artifacts: list[dict[str, Any]] = []
+    if render_figures:
+        baseline_rows = list(read_jsonl(baseline_path))
+        produced = render_paper_figures(
+            report,
+            list(read_jsonl(canonical_source_path)),
+            baseline_rows,
+            release_dir,
+            dataset=dataset,
+        )
+        figure_artifacts = [{
+            "path": str(Path(path).resolve()),
+            "release_relative_path": Path(path).relative_to(release_dir).as_posix(),
+            "size": Path(path).stat().st_size,
+            "sha256": sha256_file(path),
+        } for path in produced]
+
+    return {
+        "dataset": dataset,
+        "victim_model": victim_model,
+        "retriever_backend": retriever_backend,
+        "source_whitelist_hash": expected_whitelist,
+        "main_run": {
+            "run_id": main_manifest.get("run_id"),
+            "root": str(main_root.resolve()),
+            "manifest": _artifact(main_root / "run_manifest.json", main_root),
+        },
+        "matched_control_run": {
+            "run_id": control_manifest.get("run_id"),
+            "root": str(control_root.resolve()),
+            "manifest": _artifact(control_root / "run_manifest.json", control_root),
+            "query_plan": _artifact(control_query_path, control_root),
+            "llm_only_responses": _artifact(control_llm_path, control_root),
+            "llm_only_manifest": _artifact(control_llm_manifest_path, control_root),
+        },
+        "artifacts": {
+            "final_report": _artifact(report_path, main_root),
+            "source_scores": _artifact(source_path, main_root),
+            "canonical_source_scores": matched_artifacts["canonical_source_scores"],
+            "source_coverage": _artifact(coverage_path, main_root),
+            "baseline_comparison": _artifact(baseline_path, main_root),
+            "mechanism": _artifact(mechanism_path, main_root),
+            "defense": _optional_artifact(defense_path, main_root),
+            "offline_ablation": _artifact(ablation_path, main_root),
+            "shortcut_controls": _artifact(shortcut_path, main_root),
+            "query_controls": query_controls,
+            "matched_control_attribution": matched_artifacts,
+            "paper_figures": figure_artifacts,
+        },
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build an explicit canonical paper release")
+    parser.add_argument("--suite-id", required=True)
+    parser.add_argument("--no-figures", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    suite_path = resolve_path("outputs/releases") / args.suite_id / "suite_manifest.json"
+    if not suite_path.is_file():
+        raise FileNotFoundError(f"Suite manifest not found: {suite_path}")
+    suite = read_json(suite_path)
+    if suite.get("status") != "canonical" or suite.get("missing_cells"):
+        raise RuntimeError("Canonical release requires all preregistered suite cells")
+    quality_gate_path = resolve_path("outputs/diagnostics/quality_gate_report.json")
+    quality_gate = read_json(quality_gate_path) if quality_gate_path.is_file() else {}
+    main_cells = [
+        cell for cell in suite.get("expected_cells", [])
+        if str(cell.get("run_role")) == "main"
+    ]
+    if len(main_cells) != 9:
+        raise RuntimeError(f"Canonical v20 release requires 9 RAG main cells, found {len(main_cells)}")
+    cells: dict[str, Any] = {}
+    for cell in main_cells:
+        dataset = str(cell["dataset"])
+        victim_model = str(cell["victim_model"])
+        retriever_backend = str(cell["retriever_backend"])
+        cell_key = f"{dataset}::{victim_model}::{retriever_backend}"
+        cells[cell_key] = collect_dataset_release(
+            args.suite_id,
+            dataset,
+            victim_model,
+            retriever_backend,
+            render_figures=not args.no_figures,
+        )
+    manifest = {
+        "suite_id": args.suite_id,
+        "status": "canonical",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "selection_rule": suite.get("selection_rule"),
+        "release_commit": suite.get("release_commit"),
+        "suite_manifest": {
+            "path": str(suite_path.resolve()),
+            "sha256": sha256_file(suite_path),
+        },
+        "quality_gate": (
+            {
+                "status": "historical_template_not_canonical_requirement",
+                "path": str(quality_gate_path.resolve()),
+                "size": quality_gate_path.stat().st_size,
+                "sha256": sha256_file(quality_gate_path),
+                "audit_binding_hash": quality_gate.get("audit_binding_hash"),
+            }
+            if quality_gate_path.is_file()
+            else {
+                "status": "not_required",
+                "reason": "v20 uses automated validator and stance parse-rate gates",
+            }
+        ),
+        "cells": cells,
+        "cell_count": len(cells),
+        "cell_binding_hash": sha256_obj({
+            cell_key: {
+                "main": value["main_run"]["run_id"],
+                "matched_control": value["matched_control_run"]["run_id"],
+                "source_whitelist_hash": value["source_whitelist_hash"],
+            }
+            for cell_key, value in cells.items()
+        }),
+    }
+    output = suite_path.parent / "canonical_release.json"
+    write_json(manifest, output)
+    print(f"[saved] {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -21,8 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.mechanism_analysis import run_mechanism_analysis
-from src.utils.io import ensure_dir, resolve_path
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
+from src.utils.io import ensure_dir, load_yaml, resolve_path
 from src.utils.logger import setup_logging
+from src.utils.run_context import experiment_scoped_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +36,10 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="Run PCV-MIA mechanism analysis.")
     parser.add_argument("--dataset", required=True)
+    parser.add_argument("--rag-config", default=str(PROJECT_ROOT / "configs" / "rag_config.yaml"))
+    parser.add_argument("--attack-config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
+    parser.add_argument("--retriever-backend", choices=["dense", "bm25", "hybrid"], default=None)
+    parser.add_argument("--generator-family", choices=["gemini", "qwen", "gpt", "llama"], default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
     return parser.parse_args()
@@ -45,15 +52,32 @@ def main() -> int:
         进程退出码,正常结束返回 0。
     """
     args = parse_args()
-    logger = setup_logging("pcv_mia", log_file=resolve_path("datasets/logs/mechanism.log"), level="INFO")
-    out_dir = ensure_dir(resolve_path("outputs/mechanisms"))
+    rag_config = load_yaml(args.rag_config)
+    attack_config = load_yaml(args.attack_config)
+    retriever_backend = args.retriever_backend or str(
+        rag_config.get("retrieval", {}).get("backend", "dense")
+    )
+    generator_identity, _ = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+    )
+    scope = {
+        "generator_family": generator_identity.generator_family,
+        "concrete_model": generator_identity.concrete_model,
+        "retriever_id": retriever_id_from_config(rag_config, retriever_backend),
+    }
+    logger = setup_logging("pcv_mia", log_file=resolve_path("artifacts/v20/logs/mechanism.log"), level="INFO")
+    out_dir = ensure_dir(
+        experiment_scoped_dir("artifacts/v20/mechanisms", args.dataset, **scope)
+    )
+    docstore_backend = "dense" if retriever_backend == "hybrid" else retriever_backend
     report = run_mechanism_analysis(
         dataset=args.dataset,
-        queries_path=resolve_path("outputs/stealth_filtered_queries") / f"{args.dataset}_paired_queries.jsonl",
-        rag_responses_path=resolve_path("outputs/rag_responses") / f"{args.dataset}_rag_responses.jsonl",
-        parsed_path=resolve_path("outputs/parsed_stance") / f"{args.dataset}_parsed_stance.jsonl",
-        scores_path=resolve_path("outputs/scores") / f"{args.dataset}_pcv_scores.jsonl",
-        docstore_path=resolve_path("indexes") / args.dataset / "docstore.jsonl",
+        queries_path=resolve_path(attack_config["paths"]["stealth_filtered_queries_dir"]) / f"{args.dataset}_paired_queries.jsonl",
+        rag_responses_path=experiment_scoped_dir(rag_config["paths"]["rag_responses_dir"], args.dataset, **scope) / f"{args.dataset}_rag_responses.jsonl",
+        parsed_path=experiment_scoped_dir(attack_config["paths"]["parsed_stance_dir"], args.dataset, **scope) / f"{args.dataset}_parsed_stance.jsonl",
+        scores_path=experiment_scoped_dir(attack_config["paths"]["scores_dir"], args.dataset, **scope) / f"{args.dataset}_pcv_scores.jsonl",
+        docstore_path=retriever_index_dir(rag_config, args.dataset, docstore_backend) / "docstore.jsonl",
         output_path=out_dir / f"{args.dataset}_mechanism_report.json",
         resume=not args.no_resume,
         force=args.force,

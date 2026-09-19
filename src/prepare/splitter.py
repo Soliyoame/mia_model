@@ -11,13 +11,14 @@ True_Non_Member(主要负类)、Spoof_Seed(仿冒非成员的种子,可选对照
 from __future__ import annotations
 
 import random
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..utils.hash import sha256_obj
-from ..utils.io import ensure_dir, read_jsonl, write_json, write_jsonl
+from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
@@ -50,18 +51,24 @@ def _source_exclusive_slices(
     records: list[dict[str, Any]],
     targets: dict[str, int],
     rng: random.Random,
+    per_source_cap: int | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], int]:
     """按"来源互斥"方式切分记录:同一来源的所有记录只会落进同一组。
 
     先把记录按 source_key 聚成桶并打乱顺序,再依次填满各组的目标数量;一旦某桶的记录
     超出当前组的剩余名额,多出来的部分直接丢弃(不跨组分配),以严格保证组间来源不重叠。
 
+    per_source_cap 用于按「独立文档数」控制规模:限制单个来源对一个组最多贡献的 chunk 数,
+    逼迫覆盖更多来源(覆盖文档数 ≈ 目标数 / per_source_cap),从而把有效独立样本数从 chunk
+    数拉回到文档数。None 表示不限制(单个来源可填满整组,旧行为)。
+
     参数:
-        records: 待切分记录列表。
-        targets: 各组的目标数量,如 {"KB_Member": 500, ...}。
-        rng:     随机数发生器(由固定 seed 构造,保证可复现)。
+        records:        待切分记录列表。
+        targets:        各组的目标数量,如 {"KB_Member": 500, ...}。
+        rng:            随机数发生器(由固定 seed 构造,保证可复现)。
+        per_source_cap: 每个来源对单个组最多贡献的 chunk 数;None=不限制。
     返回:
-        (各组记录字典, 因来源互斥而丢弃的记录数)。
+        (各组记录字典, 因来源互斥/cap 而丢弃的记录数)。
     异常:
         ValueError: 来源互斥约束下记录不够填满目标数量时抛出。
     """
@@ -86,14 +93,98 @@ def _source_exclusive_slices(
         source_rows = groups_by_source[source][:]
         rng.shuffle(source_rows)
         remaining = target - len(slices[group])
-        slices[group].extend(source_rows[:remaining])
-        # 同源记录超出当前组名额的部分丢弃,不跨组分配,以维持来源互斥。
-        discarded += max(0, len(source_rows) - remaining)
+        # per_source_cap:限制单个来源(原始文档)对当前组的最大贡献,逼迫覆盖更多来源,
+        # 从而把「有效独立样本数」从 chunk 数拉回到文档数(避免一组样本集中在极少数文档上)。
+        take = remaining if per_source_cap is None else min(remaining, per_source_cap)
+        slices[group].extend(source_rows[:take])
+        # 该来源未被本组选用的 chunk 一律丢弃:维持来源互斥 + per_source_cap 限额。
+        discarded += max(0, len(source_rows) - take)
 
     missing = {group: target - len(slices[group]) for group, target in targets.items() if len(slices[group]) < target}
     if missing:
         raise ValueError(f"Not enough source-exclusive records to satisfy split targets: {missing}")
     return slices, discarded
+
+
+def _source_count_slices(
+    records: list[dict[str, Any]],
+    targets: dict[str, int],
+    rng: random.Random,
+) -> tuple[dict[str, list[dict[str, Any]]], int]:
+    """Allocate exactly the requested number of complete sources to each group."""
+
+    groups_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in records:
+        source = _source_key(row)
+        if not source:
+            raise ValueError("Source-level split requires a non-empty source_key for every record")
+        groups_by_source[source].append(row)
+
+    required_sources = sum(targets.values())
+    source_keys = sorted(groups_by_source)
+    if len(source_keys) < required_sources:
+        raise ValueError(
+            f"Source-level split has {len(source_keys)} unique sources, "
+            f"but requires {required_sources}: {targets}"
+        )
+    rng.shuffle(source_keys)
+    slices: dict[str, list[dict[str, Any]]] = {name: [] for name in targets}
+    offset = 0
+    for group, source_target in targets.items():
+        selected_sources = source_keys[offset : offset + source_target]
+        offset += source_target
+        for source in selected_sources:
+            slices[group].extend(groups_by_source[source])
+    discarded = sum(len(groups_by_source[source]) for source in source_keys[offset:])
+    return slices, discarded
+
+
+def _deduplicate_complete_sources(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Deduplicate across sources without removing only part of a membership unit."""
+
+    by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in records:
+        source = _source_key(row)
+        if not source:
+            raise ValueError("Source-level split requires a non-empty source_key for every record")
+        by_source[source].append(row)
+
+    kept: list[dict[str, Any]] = []
+    claimed_hashes: set[str] = set()
+    dropped_sources = 0
+    dropped_rows = 0
+    within_source_duplicates = 0
+    for source in sorted(by_source):
+        source_rows: list[dict[str, Any]] = []
+        source_hashes: set[str] = set()
+        for row in by_source[source]:
+            text_hash = str(row.get("text_hash") or "")
+            if not text_hash or text_hash in source_hashes:
+                within_source_duplicates += 1
+                continue
+            source_hashes.add(text_hash)
+            source_rows.append(row)
+        if source_hashes & claimed_hashes:
+            dropped_sources += 1
+            dropped_rows += len(source_rows)
+            continue
+        claimed_hashes.update(source_hashes)
+        kept.extend(source_rows)
+    return kept, {
+        "dropped_cross_source_duplicates": dropped_sources,
+        "dropped_cross_source_rows": dropped_rows,
+        "dropped_within_source_duplicate_rows": within_source_duplicates,
+    }
+
+
+def deduplicate_complete_sources(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """公开正式 split 的完整 source 去重规则，供 eligibility 复用。"""
+
+    return _deduplicate_complete_sources(records)
 
 
 def split_dataset_pcv_mia(
@@ -106,6 +197,13 @@ def split_dataset_pcv_mia(
     reserve: int = 200,
     seed: int = 42,
     source_exclusive: bool = True,
+    per_source_cap: int | None = None,
+    target_unit: str = "records",
+    membership_unit: str | None = None,
+    split_scale: str | None = None,
+    min_entities_per_source: int | None = None,
+    eligible_source_keys: set[str] | None = None,
+    claim_eligibility_snapshot: dict[str, Any] | None = None,
     config_snapshot: dict[str, Any] | None = None,
     resume: bool = True,
     force: bool = False,
@@ -125,6 +223,8 @@ def split_dataset_pcv_mia(
         reserve:          Reserve 组目标数量。
         seed:             随机种子,保证切分可复现。
         source_exclusive: 是否启用来源互斥切分(同源文档不跨组)。
+        per_source_cap:   每个来源(原始文档)对单个组最多贡献的 chunk 数;None=不限制(旧行为)。
+                          用于按「独立文档数」而非 chunk 数控制规模:目标数 / per_source_cap ≈ 覆盖文档数。
         config_snapshot:  配置快照,写进 manifest 便于复现。
         resume:           断点续跑:各组文件与 manifest 都已存在则跳过。
         force:            强制重跑。
@@ -135,36 +235,131 @@ def split_dataset_pcv_mia(
         RuntimeError: 切分结果出现组间 text_hash 或来源重叠时抛出。
     """
     out_dir = ensure_dir(output_dir)
-    expected_paths = [out_dir / filename for filename in GROUP_FILENAMES.values()]
-    manifest_path = out_dir / "split_manifest.json"
-    # 断点续跑:各组文件非空且 manifest 存在则跳过。
-    if resume and not force and all(p.exists() and p.stat().st_size > 0 for p in expected_paths) and manifest_path.exists():
-        LOGGER.info("Skipping existing PCV-MIA split for %s: %s", dataset, out_dir)
-        return {"dataset": dataset, "output_dir": str(out_dir), "skipped_existing": True}
-
-    records: list[dict[str, Any]] = []
-    seen_hashes: set[str] = set()
-    # 按 text_hash 去重:重复正文只保留首次出现的一条。
-    for row in read_jsonl(processed_path):
-        text_hash = row.get("text_hash")
-        if not text_hash or text_hash in seen_hashes:
-            continue
-        seen_hashes.add(text_hash)
-        records.append(row)
-
     targets = {
         "KB_Member": int(kb_member),
         "True_Non_Member": int(true_non_member),
         "Spoof_Seed": int(spoof_seed),
         "Reserve": int(reserve),
     }
+    unit = str(target_unit or "records").strip().lower()
+    if unit not in {"records", "sources"}:
+        raise ValueError(f"Unknown split target_unit: {target_unit!r}")
+    if unit == "sources" and not source_exclusive:
+        raise ValueError("target_unit='sources' requires source_exclusive=True")
+
+    expected_paths = {group: out_dir / filename for group, filename in GROUP_FILENAMES.items()}
+    manifest_path = out_dir / "split_manifest.json"
+    outputs_ready = all(
+        path.exists() and (targets[group] == 0 or path.stat().st_size > 0)
+        for group, path in expected_paths.items()
+    )
+    # 断点续跑前先校验冻结协议；零目标组允许是合法空文件。
+    if resume and not force and outputs_ready and manifest_path.exists():
+        existing_manifest = read_json(manifest_path)
+        expected_protocol = {
+            "membership_unit": membership_unit,
+            "split_scale": split_scale,
+            "target_unit": unit,
+            "target_counts": targets,
+            "source_exclusive": bool(source_exclusive),
+            "per_source_cap": per_source_cap,
+            "min_entities_per_source": min_entities_per_source,
+            "claim_eligibility": claim_eligibility_snapshot,
+            "seed": int(seed),
+        }
+        protocol_mismatches = {
+            key: {"expected": expected, "actual": existing_manifest.get(key)}
+            for key, expected in expected_protocol.items()
+            if not (
+                key in {"membership_unit", "split_scale"} and expected is None
+            )
+            and existing_manifest.get(key) != expected
+        }
+        if protocol_mismatches:
+            raise RuntimeError(
+                f"Existing {dataset} split protocol does not match the requested run: "
+                f"{protocol_mismatches}. Rebuild Step 02 with --force."
+            )
+        LOGGER.info("Skipping existing PCV-MIA split for %s: %s", dataset, out_dir)
+        return {
+            **existing_manifest,
+            "output_dir": str(out_dir),
+            "skipped_existing": True,
+        }
+
+    input_records = [row for row in read_jsonl(processed_path) if row.get("text_hash")]
+    deduplication = {
+        "strategy": "record_hash_first" if unit == "records" else "complete_source_hash_owner",
+        "dropped_cross_source_duplicates": 0,
+        "dropped_cross_source_rows": 0,
+        "dropped_within_source_duplicate_rows": 0,
+    }
+    if unit == "sources":
+        records, source_dedup = _deduplicate_complete_sources(input_records)
+        deduplication.update(source_dedup)
+    else:
+        records = []
+        seen_hashes: set[str] = set()
+        # record 模式沿用旧协议：相同正文只保留第一条。
+        for row in input_records:
+            text_hash = str(row["text_hash"])
+            if text_hash in seen_hashes:
+                continue
+            seen_hashes.add(text_hash)
+            records.append(row)
+
+    source_eligibility = {
+        "min_entities_per_source": min_entities_per_source,
+        "sources_before": len({_source_key(row) for row in records}),
+        "sources_eligible": len({_source_key(row) for row in records}),
+        "sources_excluded": 0,
+    }
+    if unit == "sources" and eligible_source_keys is not None:
+        records = [row for row in records if _source_key(row) in eligible_source_keys]
+        remaining_sources = {_source_key(row) for row in records}
+        source_eligibility.update({
+            "claim_whitelist_size": len(eligible_source_keys),
+            "sources_after_claim_whitelist": len(remaining_sources),
+            "sources_eligible": len(remaining_sources),
+            "sources_excluded": source_eligibility["sources_before"] - len(remaining_sources),
+        })
+    if unit == "sources" and min_entities_per_source is not None:
+        threshold = int(min_entities_per_source)
+        if threshold < 1:
+            raise ValueError("min_entities_per_source must be positive")
+        entity_totals: Counter[str] = Counter()
+        for row in records:
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            entity_totals[_source_key(row)] += int(metadata.get("entity_count") or 0)
+        eligible_sources = {source for source, count in entity_totals.items() if count >= threshold}
+        records = [row for row in records if _source_key(row) in eligible_sources]
+        source_eligibility.update({
+            "sources_eligible": len(eligible_sources),
+            "sources_excluded": source_eligibility["sources_before"] - len(eligible_sources),
+        })
+
+    if dataset.lower() in {"pubmed", "pmc"} and membership_unit == "pmcid_article":
+        invalid_ids = sorted({
+            str(row.get("source_id") or "")
+            for row in records
+            if not re.fullmatch(r"PMC\d+", str(row.get("source_id") or ""), flags=re.IGNORECASE)
+        })
+        if invalid_ids:
+            raise RuntimeError(
+                "PubMed artifacts must use PMCID source IDs; rebuild from Step 01. "
+                f"Invalid source IDs include: {invalid_ids[:5]}"
+            )
+
     required = sum(targets.values())
-    if len(records) < required:
+    if unit == "records" and len(records) < required:
         raise ValueError(f"{dataset} has {len(records)} unique records, but PCV-MIA split requires {required}")
 
     rng = random.Random(seed)
-    if source_exclusive:
-        slices, discarded_source_chunks = _source_exclusive_slices(records, targets, rng)
+    if unit == "sources":
+        slices, discarded_source_chunks = _source_count_slices(records, targets, rng)
+        discarded_source_chunks += int(deduplication["dropped_cross_source_rows"])
+    elif source_exclusive:
+        slices, discarded_source_chunks = _source_exclusive_slices(records, targets, rng, per_source_cap=per_source_cap)
     else:
         # 非互斥模式:整体打乱后按目标数量顺序切片即可。
         rng.shuffle(records)
@@ -227,12 +422,21 @@ def split_dataset_pcv_mia(
         "dataset": dataset,
         "seed": seed,
         "source_exclusive": source_exclusive,
+        "target_unit": unit,
+        "membership_unit": membership_unit,
+        "split_scale": split_scale,
+        "target_counts": targets,
+        "per_source_cap": per_source_cap,
+        "min_entities_per_source": min_entities_per_source,
+        "source_eligibility": source_eligibility,
+        "claim_eligibility": claim_eligibility_snapshot,
         "counts": counts,
         "hashes": {group: sorted(values) for group, values in hash_sets.items()},
         # 各组哈希集合再算一个摘要,便于快速比对切分是否一致。
         "hash_summary": {group: sha256_obj(sorted(values)) for group, values in hash_sets.items()},
         "source_counts": {name: len(values) for name, values in source_sets.items()},
         "discarded_source_chunks": discarded_source_chunks,
+        "deduplication": deduplication,
         "source": str(processed_path),
         "created_at": created_at,
         "config_snapshot": config_snapshot or {},

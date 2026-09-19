@@ -1,0 +1,187 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "method_version": "pcv-rag-only-source-v20",
+  "api_calls_made": 0,
+  "environment": {
+    "python_executable": "D:\\python\\anaconda\\envs\\mia_model\\python.exe",
+    "torch_version": "2.11.0+cu130",
+    "cuda_available": true,
+    "cuda_device": "NVIDIA GeForce RTX 4060 Laptop GPU"
+  },
+  "generator": {
+    "family": "llama",
+    "status": "frozen",
+    "concrete_model": "meta/llama-3.1-70b-instruct",
+    "model_version": "meta/llama-3.1-70b-instruct",
+    "first_formal_call_at": null
+  },
+  "datasets": {
+    "edgar": {
+      "source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_hashes": {
+        "KB_Member": "305997b00766c4f71d6570cac3d8600c3102c8e7122fa3617ebb55fd00340a5b",
+        "True_Non_Member": "33da7f15cc57c39aec50589e981bb57a58daf97c5184e62b14749d706285a4d1",
+        "Reserve": "2568689bc5fd99d5c9606d9a352f0d51f7b624e0e08bff01b560eca5786cdd32"
+      },
+      "query_count": 7500,
+      "query_hash": "250a392f18db2e91a56a8ace8d75c79e9e96be8d2b8289f67dfe0dafba28ff0d",
+      "benchmark": {
+        "benchmark_hash": "1279aa0e569b9c0785cb94b2571ad7387ebdc342b963f28651dd3800a99d00e6"
+      },
+      "reserve_roles": {
+        "pilot_diagnostic": 5,
+        "conformal_calibration": 245,
+        "roles_file_hash": "3d8a7d2d2fc3a3fda14be78b2b655dcd5be1d77189cb4dbde73f902091397980"
+      },
+      "pilot": {
+        "source_count": 25,
+        "query_count": 150,
+        "planned_calls": 900,
+        "api_calls_made": 0,
+        "queries_hash": "175dfad9e18aefdd53ac57f7e9077c699ff5cb267b53ed0d91de7760b400e348"
+      },
+      "representative_chunks": {
+        "source_count": 1000,
+        "manifest_hash": "35f60e4ec4cffbf016374501e728bd27793ed7af21eb08986116a54523922821"
+      },
+      "indexes": {
+        "dense": {
+          "retriever_id": "BAAI/bge-base-en-v1.5",
+          "num_chunks": 66155,
+          "index_manifest_hash": "9195d9142ffaa27f0c6a99d7e78c06229bdc84666a08445a4b80a8f44219e1c1"
+        },
+        "bm25": {
+          "retriever_id": "bm25",
+          "num_chunks": 66155,
+          "index_manifest_hash": "a4e771e1335cdc2c3a68ae1a3d32cb8fcb2df65780d43b4cd3ba50f547a1de7f"
+        }
+      }
+    },
+    "enron": {
+      "source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_hashes": {
+        "KB_Member": "bab805ede2b11ea9140ab7c7a284d5cc74fdffd70970b03decf63f446c1f5e4f",
+        "True_Non_Member": "e63e056a831f7cd7bdf285c823b525d01c31b8aee87e5e00a93bce1ea7e634e4",
+        "Reserve": "d2c9b9429ceca6503b73c11ab37dafd7046095594b12b5f2b2ba75ef76a1b622"
+      },
+      "query_count": 7500,
+      "query_hash": "627405f676fed6420a1031165829a8f6f2bfe0c929c29109e8095b9c4bdd798f",
+      "benchmark": {
+        "benchmark_hash": "a25e237f88d8e4098ea4d001894ac0f74dc40e2bbf492133d5836481315fe13b"
+      },
+      "reserve_roles": {
+        "pilot_diagnostic": 5,
+        "conformal_calibration": 245,
+        "roles_file_hash": "6dbed56563469510ceac358baac67db60b4eaf072ebc80dae4aa511a5e15c7ab"
+      },
+      "pilot": {
+        "source_count": 25,
+        "query_count": 150,
+        "planned_calls": 900,
+        "api_calls_made": 0,
+        "queries_hash": "28bba63671f985407d245b4149d49068febb211926221ef2848a3f99c96631ea"
+      },
+      "representative_chunks": {
+        "source_count": 1000,
+        "manifest_hash": "adab44eeac57d57db2a79a22903fa25305925e2a38435eef9265a25f983f6c94"
+      },
+      "indexes": {
+        "dense": {
+          "retriever_id": "BAAI/bge-base-en-v1.5",
+          "num_chunks": 6581,
+          "index_manifest_hash": "3d739c4e3655872817be75c2b77f17667ebc3b9e7cdff53923ba9ad6ed4512bd"
+        },
+        "bm25": {
+          "retriever_id": "bm25",
+          "num_chunks": 6581,
+          "index_manifest_hash": "de9f07ab79c26cfee128c2b3331aba27596f808df5aa9a35c0b375603ff51406"
+        }
+      }
+    },
+    "pubmed": {
+      "source_counts": {
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Reserve": 250
+      },
+      "split_hashes": {
+        "KB_Member": "28272790afa62f632e4d82927ad6006ff9798d986907a962fd0942599e901834",
+        "True_Non_Member": "06715ababf1f86aee70fe6db408911ce26830d9c9ae60e5a679f3ba03af91a6c",
+        "Reserve": "4183e9c5e7aa7c3436ad92528b9febae4cd2e25a130ee340c1afbab9d4d7d338"
+      },
+      "query_count": 7500,
+      "query_hash": "cb47ed253ab48688b8055c7ad9985779ebe467c2cd36dad9bf795a642a2dd993",
+      "benchmark": {
+        "benchmark_hash": "2dfe77d70175049e6fc2c1d3dd8ddc3151eb230ebe9bcb99a539916ade5d29bb"
+      },
+      "reserve_roles": {
+        "pilot_diagnostic": 5,
+        "conformal_calibration": 245,
+        "roles_file_hash": "4d77592cca89a0749669e5b104121441b92ccb5c31d757dccdc5ee5517502298"
+      },
+      "pilot": {
+        "source_count": 25,
+        "query_count": 150,
+        "planned_calls": 900,
+        "api_calls_made": 0,
+        "queries_hash": "bb4f914fe75c26c97d8fad86231e5dcb4c505c90fdb49b0ad9eb5ca1e476a4fd"
+      },
+      "representative_chunks": {
+        "source_count": 1000,
+        "manifest_hash": "20572fa4f2ebd3ddb135324a40d3fef1f26dc54a79e78974ab259ec57fbec22d"
+      },
+      "indexes": {
+        "dense": {
+          "retriever_id": "BAAI/bge-base-en-v1.5",
+          "num_chunks": 31164,
+          "index_manifest_hash": "163cf40111ea44e699ffadd0d8ee0ac9dd8b15db6f5eb26d4c07baee673c5c2a"
+        },
+        "bm25": {
+          "retriever_id": "bm25",
+          "num_chunks": 31164,
+          "index_manifest_hash": "f82a61328c039be67e5db0b5cb86c113ab0d4a6208fe8caea039c76e70eac04e"
+        }
+      }
+    }
+  },
+  "execution_schedule": {
+    "request_count": 90000,
+    "schedule_hash": "38dd6a542df0ee2123eca84bbbfc5ba3b70f3726c7703e6695fefc9369c49312",
+    "cell_counts": {
+      "dense": 22500,
+      "bm25": 22500,
+      "hybrid": 22500,
+      "none": 22500
+    },
+    "dataset_counts": {
+      "edgar": 30000,
+      "enron": 30000,
+      "pubmed": 30000
+    }
+  },
+  "retrieval_gate": {
+    "completed_candidate_count": 9,
+    "selected_chunk_config": {
+      "chunk_config_id": "tokens-128-overlap-32",
+      "macro_recall_at_5": 0.8486666666666666,
+      "macro_mrr": 0.7635475308641976,
+      "macro_p95_latency_ms": 18.93329998711124
+    },
+    "base_bge_gate_passed": true
+  },
+  "response_state": {
+    "formal_response_or_result_files": 0,
+    "api_calls_made": 0
+  },
+  "release_controls_hash": "12ea8e196e395979cf225d1df76673f202dee64e7e07cf1fe82543d794013692",
+  "status": "passed",
+  "checks_hash": "34e2ffa355d46d942aa9b27b339a4d0c02dbf589a1aa99747e3a73a2f65fb619"
+}

@@ -26,16 +26,47 @@ scripts/ 目录下 15 个编号脚本(01~15)按顺序拼成子进程命令逐个
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.utils.io import load_yaml
+from src.utils.env import env_str
+from src.llm.factory import (
+    load_llm_profiles,
+    resolve_effective_llm_profile,
+    resolve_llm_profile_name,
+)
+from src.llm.generator_registry import resolve_generator_from_pipeline_config
+from src.rag.paths import retriever_id_from_config, retriever_index_dir
+from src.utils.dataset_paths import resolve_dataset_dir
+from src.utils.io import load_yaml, read_json, resolve_path, write_json
+from src.utils.run_context import (
+    CANONICAL_RUN_ROLES,
+    P0_PROTOCOL,
+    archive_provenance_files,
+    archive_experiment_run,
+    archived_query_source_whitelist,
+    archived_source_whitelist,
+    artifact_inventory,
+    benchmark_snapshot,
+    build_experiment_identity,
+    canonical_eligibility,
+    file_snapshot,
+    git_snapshot,
+    model_slug,
+    new_run_id,
+    preregistration_snapshot,
+    read_scale,
+    experiment_scoped_dir,
+)
+from src.utils.hash import sha256_file, sha256_obj
 
 
 StepArgsBuilder = Callable[[argparse.Namespace], list[str]]
@@ -93,6 +124,11 @@ def _dataset_args(args: argparse.Namespace, *extra: str) -> list[str]:
     return ["--dataset", args.dataset, *extra, *_common_flags(args)]
 
 
+def _generator_family_args(args: argparse.Namespace) -> list[str]:
+    family = getattr(args, "generator_family", None)
+    return ["--generator-family", family] if family else []
+
+
 def build_steps() -> list[PipelineStep]:
     """声明整条流水线的全部步骤(01~15)及各自的参数构造方式。
 
@@ -126,7 +162,11 @@ def build_steps() -> list[PipelineStep]:
             "build_rag_index",
             "03_build_rag_index.py",
             "build RAG index",
-            lambda args: _dataset_args(args, *_config_arg(args.rag_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.rag_config),
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+            ),
         ),
         PipelineStep(
             4,
@@ -185,6 +225,14 @@ def build_steps() -> list[PipelineStep]:
                 *_config_arg(args.rag_config),
                 # 仅当指定 --victim-profile 时才透传(选用哪个受害者 LLM 画像来生成回答)。
                 *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *(
+                    ["--generator-family", getattr(args, "generator_family", None)]
+                    if getattr(args, "generator_family", None)
+                    else []
+                ),
+                *(["--llm-only"] if args.llm_only else []),
+                *(["--skip-rag"] if args.run_role == "matched_control" else []),
             ),
         ),
         PipelineStep(
@@ -192,28 +240,63 @@ def build_steps() -> list[PipelineStep]:
             "parse_stance_and_score",
             "11_parse_stance_and_score.py",
             "parse stance and score",
-            lambda args: _dataset_args(args, *_config_arg(args.pcv_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.pcv_config),
+                "--rag-config",
+                args.rag_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
+                *(["--skip-llm-only"] if args.run_role == "main" else []),
+            ),
         ),
         PipelineStep(
             12,
             "run_baselines",
             "12_run_baselines.py",
             "run baselines",
-            lambda args: _dataset_args(args, *_config_arg(args.baseline_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.baseline_config),
+                "--rag-config",
+                args.rag_config,
+                *(
+                    ["--retriever-backend", args.retriever_backend]
+                    if args.retriever_backend
+                    else []
+                ),
+                *(["--methods", args.baseline_methods] if args.baseline_methods else []),
+                *_generator_family_args(args),
+            ),
         ),
         PipelineStep(
             13,
             "mechanism_analysis",
             "13_mechanism_analysis.py",
             "run mechanism analysis",
-            lambda args: _dataset_args(args),
+            lambda args: _dataset_args(
+                args,
+                "--rag-config",
+                args.rag_config,
+                "--attack-config",
+                args.pcv_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
+            ),
         ),
         PipelineStep(
             14,
             "run_defenses",
             "14_run_defenses.py",
             "run defenses",
-            lambda args: _dataset_args(args, *_config_arg(args.defense_config)),
+            lambda args: _dataset_args(
+                args,
+                *_config_arg(args.defense_config),
+                "--rag-config",
+                args.rag_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
+            ),
         ),
         PipelineStep(
             15,
@@ -222,6 +305,12 @@ def build_steps() -> list[PipelineStep]:
             "generate final report",
             lambda args: _dataset_args(
                 args,
+                "--rag-config",
+                args.rag_config,
+                "--attack-config",
+                args.pcv_config,
+                *(["--retriever-backend", args.retriever_backend] if args.retriever_backend else []),
+                *_generator_family_args(args),
                 # 仅当指定 --threshold 时才透传(报告里判定成员/非成员所用的打分阈值)。
                 *(["--threshold", str(args.threshold)] if args.threshold is not None else []),
             ),
@@ -277,12 +366,36 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run PCV-MIA pipeline stages with one command.")
     parser.add_argument("--dataset", default=None, help="Dataset name. Defaults to configs/experiment_config.yaml.")
     parser.add_argument("--experiment-config", default=str(PROJECT_ROOT / "configs" / "experiment_config.yaml"))
+    parser.add_argument("--canonical-config", default=str(PROJECT_ROOT / "configs" / "canonical_suite_v20_llama.yaml"))
     parser.add_argument("--from-step", type=int, default=1, choices=range(1, 16), metavar="N")
     parser.add_argument("--to-step", type=int, default=15, choices=range(1, 16), metavar="N")
     parser.add_argument("--only-steps", default="", help="Comma/range list, for example: 2-9,11,15.")
     parser.add_argument("--skip-steps", default="", help="Comma/range list to skip, for example: 4,10.")
     parser.add_argument("--scale", choices=["small", "formal"], default=None, help="Forwarded to step 02.")
     parser.add_argument("--victim-profile", default=None, help="Forwarded to step 10.")
+    parser.add_argument(
+        "--retriever-backend",
+        choices=["dense", "bm25", "hybrid"],
+        default=None,
+        help="Run exactly one retriever cell; forwarded to steps 03, 10 and 12.",
+    )
+    parser.add_argument(
+        "--generator-family",
+        choices=["gemini", "qwen", "gpt", "llama"],
+        default=None,
+        help="Generator family slot; concrete model must already be frozen in the registry.",
+    )
+    parser.add_argument(
+        "--baseline-methods",
+        default=None,
+        help="Optional comma-separated Step 12 override; canonical gates enforce the v19 method set.",
+    )
+    parser.add_argument("--run-role", choices=CANONICAL_RUN_ROLES, default="main")
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help="显式启用 matched LLM-only 归因对照；默认主运行仅调用 RAG",
+    )
     parser.add_argument("--sibling-profile", default=None, help="Forwarded to step 04.")
     parser.add_argument("--threshold", type=float, default=None, help="Forwarded to step 15.")
     parser.add_argument("--data-config", default=str(PROJECT_ROOT / "configs" / "data_config.yaml"))
@@ -292,8 +405,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-config", default=str(PROJECT_ROOT / "configs" / "baseline_config.yaml"))
     parser.add_argument("--defense-config", default=str(PROJECT_ROOT / "configs" / "defense_config.yaml"))
     parser.add_argument("--force", action="store_true", help="Forward --force to every selected stage.")
+    parser.add_argument(
+        "--force-from-step",
+        type=int,
+        choices=range(1, 16),
+        default=None,
+        metavar="N",
+        help="从第 N 步起强制重建；可让第 10 步 resume 只补失败请求、再强制重建第 11-15 步。",
+    )
     parser.add_argument("--no-resume", action="store_true", help="Forward --no-resume to every selected stage.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Optional human label appended to the start-time run id, e.g. 20260707-153012_baseline-fix.",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="显式复用固定 run id；其次读取 PCV_RUN_ID，否则生成开始时间戳。",
+    )
+    parser.add_argument(
+        "--no-archive",
+        action="store_true",
+        help="Skip collecting this run's products into outputs/runs/{dataset}/{run_id}/ at the end.",
+    )
+    parser.add_argument(
+        "--canonical-analyses",
+        action="store_true",
+        help="主流水线后运行离线消融、捷径诊断和三个在线强对照，再统一归档",
+    )
     return parser.parse_args()
 
 
@@ -321,6 +462,17 @@ def selected_steps(args: argparse.Namespace, experiment_config: dict) -> list[Pi
 
     selected: list[PipelineStep] = []
     for step in steps:
+        if args.run_role == "matched_control" and step.number != 10:
+            continue
+        if (
+            args.run_role == "main"
+            and not only
+            and str(args.retriever_backend or "dense") != "dense"
+            and step.number in {12, 13, 14}
+        ):
+            # Baseline、完整机制与 defense 是预注册的 BGE representative cells。
+            # 非 dense 主 cell 默认只跑主方法与报告；显式 --only-steps 仍可运行探索性分析。
+            continue
         # 是否落在 --from-step ~ --to-step 区间内。
         in_range = args.from_step <= step.number <= args.to_step
         # 未指定 --only-steps 时默认全选;指定后只保留白名单内的步骤。
@@ -345,7 +497,397 @@ def command_for_step(step: PipelineStep, args: argparse.Namespace) -> list[str]:
     返回:
         子进程命令的参数列表。
     """
-    return [sys.executable, str(PROJECT_ROOT / "scripts" / step.script), *step.build_args(args)]
+    step_args = step.build_args(args)
+    if args.force_from_step is not None and step.number >= args.force_from_step and "--force" not in step_args:
+        step_args.append("--force")
+    return [sys.executable, str(PROJECT_ROOT / "scripts" / step.script), *step_args]
+
+
+def canonical_analysis_commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
+    """构造显式 canonical 后处理命令；在线对照沿用普通 resume 语义。"""
+    concrete_model = str(getattr(args, "concrete_model", "") or "").strip()
+    if not concrete_model:
+        identity, _ = resolve_generator_from_pipeline_config(
+            load_yaml(Path(args.rag_config)),
+            family=getattr(args, "generator_family", None),
+            profile_name=getattr(args, "victim_profile", None),
+        )
+        concrete_model = identity.concrete_model
+    model = model_slug(concrete_model)
+    force = ["--force"] if args.force else []
+    common = ["--dataset", args.dataset]
+    commands: list[tuple[str, list[str]]] = [
+        (
+            "offline_ablation",
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "analyze_p0_ablation.py"),
+                *common,
+                "--model", model,
+                "--config", args.pcv_config,
+                "--seed", "42",
+            ],
+        ),
+        (
+            "shortcut_controls",
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "analyze_shortcut_controls.py"),
+                *common,
+                "--model", model,
+                "--attack-config", args.pcv_config,
+                "--rag-config", args.rag_config,
+                "--seed", "42",
+            ],
+        ),
+    ]
+    for variant in (
+        "random_same_type_counterfactual",
+        "independent_unpaired_query",
+        "no_stealth_filter",
+    ):
+        commands.extend([
+            (
+                f"prepare_query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_query_controls.py"),
+                    *common,
+                    "--variant", variant,
+                    "--config", args.pcv_config,
+                    "--seed", "42",
+                    *force,
+                ],
+            ),
+            (
+                f"run_query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "10_run_rag_and_llm_only.py"),
+                    *common,
+                    "--config", args.rag_config,
+                    "--variant-id", variant,
+                    *(["--victim-profile", args.victim_profile] if args.victim_profile else []),
+                    *(
+                        ["--retriever-backend", args.retriever_backend]
+                        if args.retriever_backend
+                        else []
+                    ),
+                    *_generator_family_args(args),
+                    *force,
+                ],
+            ),
+            (
+                f"query_control:{variant}",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "analyze_query_control.py"),
+                    *common,
+                    "--variant", variant,
+                    "--model", model,
+                    "--config", args.pcv_config,
+                    "--seed", "42",
+                    *force,
+                ],
+            ),
+        ])
+    return commands
+
+
+def _archive_run_products(
+    args: argparse.Namespace,
+    steps: list[PipelineStep],
+    executed: list[int],
+    failed_step: int | None,
+    run_id: str,
+    started: datetime,
+    canonical_analyses_completed: list[str] | None = None,
+    canonical_analysis_failed: str | None = None,
+) -> None:
+    """流水线收尾:把本次全部阶段产物拷进 run 文件夹,并写一份 run_manifest.json。
+
+    --dry-run 或 --no-archive 时直接跳过。无论成功或失败都归档(失败在 manifest 里标注
+    steps_failed),便于回看"这次到底跑出了什么"。归档中任何异常都不应连累流水线退出码,
+    故整体兜底吞掉并仅告警。
+
+    参数:
+        args:        解析后的命令行参数。
+        steps:       本次选中的步骤列表(用于记录 steps_selected)。
+        executed:    已成功执行的步骤编号。
+        failed_step: 首个失败的步骤编号;无失败为 None。
+        run_id:      本次运行标识(即 run 文件夹名)。
+        started:     流水线启动时刻(用于算耗时)。
+    """
+    if args.dry_run or args.no_archive:
+        return
+    finished = datetime.now()
+    try:
+        config_paths = {
+            "experiment": args.experiment_config,
+            "canonical": args.canonical_config,
+            "data": args.data_config,
+            "rag": args.rag_config,
+            "pcv": args.pcv_config,
+            "spoof": args.spoof_config,
+            "baseline": args.baseline_config,
+            "defense": args.defense_config,
+        }
+        data_config = load_yaml(Path(args.data_config))
+        split_dir = resolve_dataset_dir(data_config, "splits_dir", args.dataset)
+        rag_config = load_yaml(Path(args.rag_config))
+        pcv_config = load_yaml(Path(args.pcv_config))
+        baseline_config = load_yaml(Path(args.baseline_config))
+        defense_config = load_yaml(Path(args.defense_config))
+        retriever_backend = args.retriever_backend or str(
+            rag_config.get("retrieval", {}).get("backend", "dense")
+        )
+        generator_identity, effective_profile = resolve_generator_from_pipeline_config(
+            rag_config,
+            family=args.generator_family,
+            profile_name=args.victim_profile,
+        )
+        retriever_id = (
+            retriever_id_from_config(rag_config, retriever_backend)
+            if args.run_role == "main"
+            else "none"
+        )
+        index_backend = "dense" if retriever_backend == "hybrid" else retriever_backend
+        index_dir = retriever_index_dir(
+            rag_config,
+            args.dataset,
+            index_backend,
+        )
+        index_manifest_path = index_dir / "index_manifest.json"
+        index_manifest = read_json(index_manifest_path) if index_manifest_path.is_file() else {}
+        resolved_retriever_manifest = index_manifest
+        resolved_index_manifest_hash = (
+            sha256_file(index_manifest_path)
+            if index_manifest_path.is_file()
+            else None
+        )
+        if args.run_role == "main" and retriever_backend == "hybrid":
+            response_manifest_path = (
+                experiment_scoped_dir(
+                    rag_config["paths"]["rag_responses_dir"],
+                    args.dataset,
+                    generator_family=generator_identity.generator_family,
+                    concrete_model=generator_identity.concrete_model,
+                    retriever_id=retriever_id,
+                )
+                / f"{args.dataset}_rag_responses.manifest.json"
+            )
+            if response_manifest_path.is_file():
+                response_manifest = read_json(response_manifest_path)
+                resolved_index_manifest_hash = response_manifest.get(
+                    "index_manifest_hash"
+                )
+                resolved_retriever_manifest = (
+                    response_manifest.get("retriever_manifest") or {}
+                )
+        benchmark_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_attack_benchmark.jsonl"
+        )
+        benchmark_manifest_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_benchmark_manifest.json"
+        )
+        benchmark_hash_path = (
+            resolve_path(rag_config["paths"]["benchmark_dir"])
+            / f"{args.dataset}_attack_benchmark.sha256"
+        )
+        actual_benchmark_hash = (
+            sha256_file(benchmark_path) if benchmark_path.is_file() else ""
+        )
+        expected_benchmark_hash = (
+            benchmark_hash_path.read_text(encoding="utf-8").strip().split()[0]
+            if benchmark_hash_path.is_file()
+            else ""
+        )
+        provenance_paths = [
+            benchmark_path,
+            benchmark_manifest_path,
+            benchmark_hash_path,
+            split_dir / "split_manifest.json",
+            split_dir / "kb_member.jsonl",
+            split_dir / "true_non_member.jsonl",
+            split_dir / "reserve.jsonl",
+            index_manifest_path,
+            index_dir / "docstore.jsonl",
+            index_dir / str(index_manifest.get("index_filename") or "faiss.index"),
+        ]
+        if retriever_backend == "hybrid":
+            bm25_dir = retriever_index_dir(rag_config, args.dataset, "bm25")
+            bm25_manifest = (
+                read_json(bm25_dir / "index_manifest.json")
+                if (bm25_dir / "index_manifest.json").is_file()
+                else {}
+            )
+            provenance_paths.extend([
+                bm25_dir / "index_manifest.json",
+                bm25_dir / "docstore.jsonl",
+                bm25_dir / str(
+                    bm25_manifest.get("index_filename") or "bm25.index.json"
+                ),
+            ])
+        config_snapshots = {name: file_snapshot(path) for name, path in config_paths.items()}
+        input_provenance = [file_snapshot(path) for path in provenance_paths]
+        split_seed = int(data_config.get("split", {}).get("seed", -1))
+        victim_model = generator_identity.concrete_model
+        generator_version = generator_identity.generator_version
+        preregistration = preregistration_snapshot(
+            args.canonical_config,
+            dataset=args.dataset,
+            victim_model=victim_model,
+            run_role=args.run_role,
+            retriever_backend=(retriever_backend if args.run_role == "main" else "none"),
+        )
+        manifest: dict = {
+            "run_id": run_id,
+            "run_name": args.run_name or "",
+            "status": "invalid" if failed_step is not None or canonical_analysis_failed else "candidate",
+            "source": "pipeline (run_pipeline.py)",
+            "protocol": P0_PROTOCOL,
+            "run_role": args.run_role,
+            "dataset": args.dataset,
+            "scale": args.scale or read_scale(),
+            "split_seed": split_seed,
+            "started_at": started.strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": finished.strftime("%Y-%m-%d %H:%M:%S"),
+            "duration_seconds": round((finished - started).total_seconds(), 1),
+            "steps_selected": [s.number for s in steps],
+            "steps_run": executed,
+            "steps_failed": failed_step,
+            "canonical_analyses_completed": canonical_analyses_completed or [],
+            "canonical_analysis_failed": canonical_analysis_failed,
+            "victim_model": victim_model,
+            "victim_provider": "openai_compatible",
+            "victim_endpoint": str(effective_profile.get("base_url") or ""),
+            "generator_id": victim_model,
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
+            "generator_version": generator_version,
+            "retriever_backend": retriever_backend if args.run_role == "main" else None,
+            "retriever_id": retriever_id if args.run_role == "main" else None,
+            "retriever_manifest": (
+                resolved_retriever_manifest if args.run_role == "main" else None
+            ),
+            "index_manifest_hash": (
+                resolved_index_manifest_hash if args.run_role == "main" else None
+            ),
+            "query_hash": sha256_file(
+                resolve_path(rag_config["paths"]["queries_dir"])
+                / f"{args.dataset}_paired_queries.jsonl"
+            ),
+            "run_llm_only": bool(args.llm_only),
+            "benchmark": {
+                "benchmark_path": str(benchmark_path),
+                "benchmark_hash": actual_benchmark_hash,
+                "expected_hash": expected_benchmark_hash,
+                "hash_matches": bool(
+                    expected_benchmark_hash
+                    and actual_benchmark_hash == expected_benchmark_hash
+                ),
+            },
+            "git": git_snapshot(),
+            "effective_args": dict(vars(args)),
+            "configs": config_snapshots,
+            "preregistration": preregistration,
+            "input_provenance": input_provenance,
+            "command": "python " + " ".join(sys.argv),
+        }
+        cell_scope = {
+            "generator_family": generator_identity.generator_family,
+            "concrete_model": generator_identity.concrete_model,
+            "retriever_id": retriever_id,
+        }
+        flat_stage_dirs = {
+            "facts": pcv_config["paths"]["facts_dir"],
+            "paired_claims": pcv_config["paths"]["paired_claims_dir"],
+            "paired_queries": pcv_config["paths"]["paired_queries_dir"],
+            "stealth_filtered_queries": pcv_config["paths"]["stealth_filtered_queries_dir"],
+        }
+        cell_stage_dirs = {
+            "llm_only_responses": experiment_scoped_dir(
+                rag_config["paths"]["llm_only_responses_dir"],
+                args.dataset,
+                generator_family=generator_identity.generator_family,
+                concrete_model=generator_identity.concrete_model,
+                retriever_id="none",
+            ),
+        }
+        if args.run_role == "main":
+            cell_stage_dirs.update({
+                "rag_responses": experiment_scoped_dir(
+                    rag_config["paths"]["rag_responses_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "parsed_stance": experiment_scoped_dir(
+                    pcv_config["paths"]["parsed_stance_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "scores": experiment_scoped_dir(
+                    pcv_config["paths"]["scores_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "baselines": experiment_scoped_dir(
+                    baseline_config["paths"]["baselines_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "defenses": experiment_scoped_dir(
+                    defense_config["paths"]["defenses_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "mechanisms": experiment_scoped_dir(
+                    "artifacts/v20/mechanisms",
+                    args.dataset,
+                    **cell_scope,
+                ),
+                "reports": experiment_scoped_dir(
+                    rag_config["paths"]["reports_dir"],
+                    args.dataset,
+                    **cell_scope,
+                ),
+            })
+        root, archive = archive_experiment_run(
+            args.dataset,
+            run_id,
+            generator_family=generator_identity.generator_family,
+            concrete_model=generator_identity.concrete_model,
+            retriever_id=retriever_id,
+            runs_base=rag_config["paths"]["runs_dir"],
+            flat_stage_dirs=flat_stage_dirs,
+            cell_stage_dirs=cell_stage_dirs,
+        )
+        archive["provenance_files"] = archive_provenance_files(
+            root, [*config_snapshots.values(), *input_provenance]
+        )
+        archive["inventory"] = artifact_inventory(root)
+        archive["inventory_hash"] = sha256_obj(archive["inventory"])
+        manifest["archive"] = archive
+        whitelist = (
+            archived_query_source_whitelist(root)
+            if args.run_role == "matched_control"
+            else archived_source_whitelist(root)
+        )
+        manifest["source_whitelist"] = whitelist
+        manifest["experiment_identity"] = build_experiment_identity(
+            manifest, str(whitelist.get("source_whitelist_hash") or "")
+        )
+        manifest["canonical_eligibility"] = canonical_eligibility(manifest, root)
+        write_json(manifest, root / "run_manifest.json")
+        megabytes = archive["bytes"] / (1024 * 1024)
+        print(
+            f"[归档] {root}"
+            f"  ({archive['files']} 文件, {megabytes:.1f} MB)"
+        )
+    except Exception as exc:  # noqa: BLE001 - 归档失败不应连累流水线主流程
+        print(f"[归档] 跳过(归档时出错,不影响流水线): {exc}", file=sys.stderr)
 
 
 def main() -> int:
@@ -358,6 +900,34 @@ def main() -> int:
     experiment_config = load_yaml(Path(args.experiment_config))
     # 未显式指定数据集时，回退到实验配置里的默认数据集(再兜底为 "enron")。
     args.dataset = args.dataset or str(experiment_config.get("default_dataset", "enron"))
+    # profile 也必须落实为单个明确模型，并写入本进程环境供所有 model-scoped 子目录复用。
+    # 这只解析配置，不构造客户端、不触发 API。
+    rag_config = load_yaml(Path(args.rag_config))
+    generator_identity, effective_profile = resolve_generator_from_pipeline_config(
+        rag_config,
+        family=args.generator_family,
+        profile_name=args.victim_profile,
+    )
+    args.generator_family = generator_identity.generator_family
+    args.concrete_model = generator_identity.concrete_model
+    profiles = load_llm_profiles(rag_config)
+    profile_name = resolve_llm_profile_name(
+        "victim",
+        cli_profile=args.victim_profile,
+        config_profile=rag_config.get("generation", {}).get("victim_profile"),
+    )
+    effective_profile = resolve_effective_llm_profile(
+        profiles,
+        "victim",
+        profile_name=profile_name,
+    )
+    effective_model = str(effective_profile.get("model") or "").strip()
+    if effective_model and not env_str("PCV_VICTIM_MODEL", ""):
+        os.environ["PCV_VICTIM_MODEL"] = effective_model
+    os.environ["PCV_GENERATOR_FAMILY"] = generator_identity.generator_family
+    if args.run_role == "matched_control" and not args.llm_only:
+        print("error: matched_control requires --llm-only", file=sys.stderr)
+        return 2
     try:
         steps = selected_steps(args, experiment_config)
     except (ValueError, argparse.ArgumentTypeError) as exc:
@@ -372,6 +942,19 @@ def main() -> int:
     print(f"Dataset: {args.dataset}")
     print("Selected steps: " + ", ".join(f"{step.number:02d}" for step in steps))
 
+    # 启动即盖一个"开始时间"戳作为 run_id,并 export 给所有子步骤(subprocess 默认继承本进程
+    # 环境)。末端脚本(15/可行性/L2)的 current_run_id() 届时读回同一个 id,整套产物归到同一
+    # run 文件夹——这也一并修好了过去"各末端脚本各生成各自时间戳"的老问题。
+    explicit_run_id = str(args.run_id or "").strip()
+    inherited_run_id = os.environ.get("PCV_RUN_ID", "").strip()
+    run_id = explicit_run_id or inherited_run_id or new_run_id(args.run_name)
+    started = datetime.now()
+    if not args.dry_run:
+        os.environ["PCV_RUN_ID"] = run_id
+    print(f"Run: {run_id}")
+
+    executed: list[int] = []
+    failed_step: int | None = None
     for step in steps:
         command = command_for_step(step, args)
         printable = " ".join(command)
@@ -384,9 +967,66 @@ def main() -> int:
         # 在项目根目录下同步执行该步骤脚本。
         result = subprocess.run(command, cwd=PROJECT_ROOT)
         if result.returncode != 0:
-            # 任一步失败立即中止后续步骤，并把它的退出码原样返回给调用方。
+            # 记录首个失败步骤并中止后续;失败也照常归档(便于回看半成品),退出码原样透传。
             print(f"Step {step.number:02d} failed with exit code {result.returncode}.")
+            failed_step = step.number
+            _archive_run_products(args, steps, executed, failed_step, run_id, started)
             return result.returncode
+        executed.append(step.number)
+
+    analyses_completed: list[str] = []
+    failed_analysis: str | None = None
+    if args.canonical_analyses:
+        if (
+            args.run_role != "main"
+            or args.llm_only
+            or str(args.retriever_backend or "dense") != "dense"
+        ):
+            print(
+                "error: --canonical-analyses is only valid for the dense RAG-only main run",
+                file=sys.stderr,
+            )
+            failed_analysis = "invalid_run_role"
+        else:
+            for name, command in canonical_analysis_commands(args):
+                print(f"\n[analysis] {name}")
+                print(" ".join(command))
+                if args.dry_run:
+                    continue
+                result = subprocess.run(command, cwd=PROJECT_ROOT)
+                if result.returncode != 0:
+                    failed_analysis = name
+                    print(f"Canonical analysis {name} failed with exit code {result.returncode}.")
+                    _archive_run_products(
+                        args,
+                        steps,
+                        executed,
+                        failed_step,
+                        run_id,
+                        started,
+                        analyses_completed,
+                        failed_analysis,
+                    )
+                    return result.returncode
+                if name in {
+                    "offline_ablation",
+                    "shortcut_controls",
+                    "query_control:random_same_type_counterfactual",
+                    "query_control:independent_unpaired_query",
+                    "query_control:no_stealth_filter",
+                }:
+                    analyses_completed.append(name)
+
+    _archive_run_products(
+        args,
+        steps,
+        executed,
+        failed_step,
+        run_id,
+        started,
+        analyses_completed,
+        failed_analysis,
+    )
     return 0
 
 

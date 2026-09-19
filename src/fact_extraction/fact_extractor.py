@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +31,20 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
-from ..attack.entity_extractor import EntityExtractor
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..attack.entity_extractor import EXTRACTOR_VERSION, EntityExtractor
+from ..attack.entity_type_policy import (
+    ENTITY_TYPE_POLICY_SHA256,
+    ENTITY_TYPE_POLICY_VERSION,
+)
+from ..attack.local_ner import load_local_ner_model
+from ..attack.semantic_entity_resolver import (
+    SemanticResolverRuntime,
+    SemanticResolverProtocolError,
+    load_semantic_entity_resolver,
+    resolve_semantic_runtime,
+)
+from ..utils.hash import sha256_file, sha256_obj
+from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
@@ -169,74 +182,284 @@ def extract_facts_file(
     min_importance: float = 0.6,
     min_replaceability: float = 0.6,
     min_privacy_specificity: float = 0.5,
+    guarantee_min_facts: int = 1,
+    ner_config: dict[str, Any] | None = None,
+    semantic_resolver_config: dict[str, Any] | None = None,
+    semantic_resolver_runtime: SemanticResolverRuntime | None = None,
+    dataset: str | None = None,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
     """Extract verifiable fact units from an attack benchmark JSONL.
 
-    中文说明：第 06 步主入口。对基准里的每篇文档抽实体、按阈值筛掉低质量的，再把合格实体
-    包装成"事实单元"(含主语/关系/实体/上下文/支撑句)写出。
+    中文说明：第 06 步主入口(方案 D：保覆盖 + 质量加权)。对每篇文档抽实体、把合格实体包装成
+    "事实单元"。**三道阈值与 _is_generic_fact 不再是淘汰线，而是"优选标准"**：先选满足阈值的
+    高质量事实(primary)，若某文档不足 guarantee_min_facts，则从未达标的事实里按可攻击性补齐
+    (fallback)。每条事实写入 quality_weight(=attackability_score) 与 selection_tier，质量控制
+    下放到第 11 步的加权聚合：低质量事实权重小、贡献被自动压低，而不再被整篇丢弃。
 
     参数:
         benchmark_path:          攻击基准文件。
         output_path:             事实输出路径(并派生 .manifest/.errors)。
-        max_facts_per_doc:       每篇文档最多产出几条事实。
+        max_facts_per_doc:       每篇文档最多产出几条事实(优选上限)。
         max_entities_per_doc:    每篇文档最多抽几个候选实体。
         max_samples:             最多处理多少篇文档;None 不限。
-        min_importance:          实体重要性下限(低于则跳过)。
-        min_replaceability:      实体可替换性下限。
-        min_privacy_specificity: 实体隐私特异性下限。
+        min_importance:          实体重要性优选阈值(不达标降级为 fallback，不再丢弃)。
+        min_replaceability:      实体可替换性优选阈值。
+        min_privacy_specificity: 实体隐私特异性优选阈值。
+        guarantee_min_facts:     每篇文档保底产出几条(只要有可成句的实体)；用于消除
+                                 "可抽取性=组别"的 selection bias 并保证评估覆盖率。
+        semantic_resolver_config:v6.3 本地 precision cascade 与模型锁配置。
+        dataset:                 数据集名；启用 resolver 时必须提供。
         resume:                  断点续跑:产物已存在则跳过。
         force:                   强制重跑。
     返回:
-        manifest(字典):事实数量与分布统计;若跳过则带 skipped_existing。
+        manifest(字典):事实数量、按 tier/组/类型的分布、覆盖率、零候选文档数;若跳过则带 skipped_existing。
     """
     output = Path(output_path)
     manifest_path = output.with_suffix(".manifest.json")
     error_path = output.with_suffix(".errors.jsonl")
+    semantic_cfg = dict(semantic_resolver_config or {})
+    semantic_enabled = bool(semantic_cfg.get("enabled", False))
+    if semantic_enabled and not dataset:
+        raise ValueError("Enabled v6.3 semantic resolver requires an explicit dataset")
+    semantic_resolver, semantic_metadata = (
+        load_semantic_entity_resolver(
+            semantic_cfg,
+            dataset=str(dataset or ""),
+        )
+        if semantic_resolver_runtime is None
+        else resolve_semantic_runtime(
+            semantic_cfg,
+            dataset=str(dataset or ""),
+            runtime=semantic_resolver_runtime,
+        )
+    )
+    benchmark_hash = sha256_file(benchmark_path)
+    semantic_config_hash = sha256_obj(semantic_cfg)
     # 断点续跑。
     if resume and not force and output.exists() and output.stat().st_size > 0 and manifest_path.exists():
+        existing = read_json(manifest_path)
+        if existing.get("extractor_version") != EXTRACTOR_VERSION:
+            raise RuntimeError(
+                "Existing facts do not match the v19 extractor protocol: "
+                f"expected extractor_version={EXTRACTOR_VERSION!r}, "
+                f"actual={existing.get('extractor_version')!r}. Rebuild Step 06 with --force."
+            )
+        policy_expected = {
+            "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+            "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
+        }
+        policy_mismatches = {
+            key: {"expected": value, "actual": existing.get(key)}
+            for key, value in policy_expected.items()
+            if existing.get(key) != value
+        }
+        if policy_mismatches:
+            raise RuntimeError(
+                "Existing facts do not match the frozen entity policy: "
+                f"{policy_mismatches}. Rebuild Step 06 with --force."
+            )
+        if semantic_enabled:
+            expected = {
+                "input_benchmark_hash": benchmark_hash,
+                "semantic_resolver_config_hash": semantic_config_hash,
+                "semantic_entity_resolver": semantic_metadata.to_dict(),
+                "dataset": str(dataset),
+            }
+            mismatches = {
+                key: {"expected": value, "actual": existing.get(key)}
+                for key, value in expected.items()
+                if existing.get(key) != value
+            }
+            if mismatches:
+                raise RuntimeError(
+                    "Existing v6.3 facts are not bound to the current benchmark/"
+                    f"semantic model lock: {mismatches}. Rebuild Step 06 with --force."
+                )
         LOGGER.info("Skipping existing facts: %s", output)
-        return {"output_path": str(output), "skipped_existing": True}
+        return {**existing, "output_path": str(output), "skipped_existing": True}
 
-    extractor = EntityExtractor()
+    ner_model, ner_metadata = load_local_ner_model(ner_config)
+    ner_cfg = dict(ner_config or {})
+    ner_batch_size = max(1, int(ner_cfg.get("batch_size", 32)))
+    semantic_batch_size = max(1, int(semantic_cfg.get("batch_size", 8)))
+    if semantic_metadata.enabled and ner_metadata.enabled:
+        raise ValueError(
+            "v6.3 semantic resolver already includes transformer NER; "
+            "legacy fact_extraction.ner must be disabled"
+        )
+    extractor = EntityExtractor(
+        ner_model=ner_model,
+        ner_model_name=ner_metadata.model,
+        enable_ner=ner_metadata.enabled,
+        ner_confidence_threshold=float(ner_cfg.get("confidence_threshold", 0.75)),
+        semantic_resolver=semantic_resolver,
+        require_semantic_resolver=semantic_metadata.enabled,
+    )
     facts: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     samples = 0
     by_group: Counter[str] = Counter()   # 按分组统计事实数
     by_type: Counter[str] = Counter()    # 按实体类型统计事实数
+    by_tier: Counter[str] = Counter()    # 按 primary/fallback 统计事实数
+    docs_with_fact: Counter[str] = Counter()   # 每组"产出>=1条事实"的文档数
+    docs_total: Counter[str] = Counter()       # 每组文档总数
+    zero_candidate_docs = 0                    # 连一个可成句实体都没有的文档数(不可约)
 
-    for row in tqdm(read_jsonl(benchmark_path), desc="extract facts", unit="doc"):
-        # 到达样本上限就停。
-        if max_samples is not None and samples >= max_samples:
-            break
+    row_iter = read_jsonl(benchmark_path)
+    if max_samples is not None:
+        row_iter = islice(row_iter, max_samples)
+
+    if semantic_metadata.enabled:
+        assert semantic_resolver is not None
+
+        def semantic_rows():
+            while True:
+                batch = list(islice(row_iter, semantic_batch_size))
+                if not batch:
+                    return
+                texts = [str(row.get("text") or "") for row in batch]
+                predictions = semantic_resolver.predict_batch(
+                    texts,
+                    dataset=str(dataset or ""),
+                    batch_size=semantic_batch_size,
+                    trace_contexts=[
+                        {
+                            "dataset": str(dataset or ""),
+                            "source_key": str(
+                                row.get("source_key")
+                                or row.get("source_id")
+                                or row.get("doc_id")
+                                or ""
+                            ),
+                        }
+                        for row in batch
+                    ],
+                )
+                for row, semantic_predictions in zip(
+                    batch,
+                    predictions,
+                    strict=True,
+                ):
+                    yield row, None, semantic_predictions
+
+        processed_rows = semantic_rows()
+        ner_processing_mode = "disabled_for_semantic_precision_cascade"
+        semantic_processing_mode = "batch"
+    elif ner_metadata.enabled and ner_model is not None and hasattr(ner_model, "pipe"):
+        text_rows = ((str(row.get("text") or ""), row) for row in row_iter)
+        processed_rows = (
+            (row, ner_output, None)
+            for ner_output, row in ner_model.pipe(
+                text_rows,
+                as_tuples=True,
+                batch_size=ner_batch_size,
+            )
+        )
+        ner_processing_mode = "batch_pipe"
+        semantic_processing_mode = "disabled"
+    else:
+        processed_rows = ((row, None, None) for row in row_iter)
+        ner_processing_mode = "per_document"
+        semantic_processing_mode = "disabled"
+
+    for row, ner_output, semantic_predictions in tqdm(
+        processed_rows,
+        desc="extract facts",
+        unit="doc",
+    ):
         samples += 1
+        group = str(row["group"])
+        docs_total[group] += 1
         try:
             text = str(row.get("text") or "")
-            # 先抽候选实体。
-            entities = extractor.extract(text, max_entities=max_entities_per_doc)
-            kept_for_doc = 0
+            # 抽候选实体(保底覆盖:即便都不过门槛，也会返回最好的若干个)。
+            entities = extractor.extract(
+                text,
+                max_entities=max_entities_per_doc,
+                guarantee_min=max(1, guarantee_min_facts),
+                ner_output=ner_output,
+                dataset=str(row.get("dataset") or dataset or ""),
+                semantic_predictions=semantic_predictions,
+            )
+            # 先把所有能"成句"的实体做成候选事实，并标好 tier，再统一挑选。
+            candidate_facts: list[dict[str, Any]] = []
             for ent in entities:
-                # 本文档已凑够事实数就停。
-                if kept_for_doc >= max_facts_per_doc:
-                    break
+                entity_text = str(ent.get("text") or "")
+                # 复用 entity_extractor 已用正确 finditer 偏移算好的支撑句;它定位准确。
+                # (不要用 _sentence_for_span 基于 text.find 重算——邮件头等重复短行会令 find
+                #  返回错误位置，把实体误配到无关句子，从而被下面的"实体在句中"检查误杀。)
+                sentence = str(
+                    ent.get("supporting_sentence")
+                    or _sentence_for_span(text, int(ent.get("start", 0)), int(ent.get("end", 0)))
+                )
+                # 结构性硬要求:实体必须真出现在所定位句子里(否则无法构造可替换的声明)。
+                if not entity_text or entity_text not in sentence:
+                    continue
                 importance = float(ent.get("importance", 0.0))
                 replaceability = float(ent.get("replaceability", 0.0))
                 privacy_specificity = float(ent.get("privacy_specificity", 0.0))
-                # 三项分数任一不达标就跳过这个实体。
-                if importance < min_importance or replaceability < min_replaceability or privacy_specificity < min_privacy_specificity:
-                    continue
-                entity_text = str(ent.get("text") or "")
-                sentence = _sentence_for_span(text, int(ent.get("start", 0)), int(ent.get("end", 0)))
-                # 实体必须真的出现在所定位的句子里,且该句不能太泛。
-                if not entity_text or entity_text not in sentence or _is_generic_fact(sentence, str(ent.get("type"))):
-                    continue
-                # 生成事实 id 并组装事实单元。
-                fact_id = f"fact_{row['audit_id']}_{kept_for_doc + 1:02d}"
+                # 优选条件:过实体硬门槛 + 三道阈值 + 句子不太泛。任一不满足 → 降级为 fallback。
+                meets_threshold = (
+                    importance >= min_importance
+                    and replaceability >= min_replaceability
+                    and privacy_specificity >= min_privacy_specificity
+                )
+                gate_passed = bool(ent.get("gate_passed", True))
+                is_generic = _is_generic_fact(sentence, str(ent.get("type")))
+                tier = "primary" if (gate_passed and meets_threshold and not is_generic) else "fallback"
+                em = ent.get("entity_metadata") if isinstance(ent.get("entity_metadata"), dict) else ent
+                # 质量权重 = 可攻击性分(检验2 证明它预测信号信噪比)；兜底用三项均值。
+                quality_weight = float(
+                    ent.get("attackability_score")
+                    or (em.get("attackability_score") if isinstance(em, dict) else None)
+                    or ((importance + replaceability + privacy_specificity) / 3.0)
+                )
+                candidate_facts.append(
+                    {
+                        "entity": ent,
+                        "entity_text": entity_text,
+                        "sentence": sentence,
+                        "importance": importance,
+                        "replaceability": replaceability,
+                        "privacy_specificity": privacy_specificity,
+                        "tier": tier,
+                        "quality_weight": round(quality_weight, 4),
+                    }
+                )
+
+            if not candidate_facts:
+                # 连一个可成句的候选都没有:这是方案 D 也无法挽救的不可约样本。
+                zero_candidate_docs += 1
+                continue
+
+            # 挑选:primary 优先(按可攻击性降序)，最多 max_facts_per_doc；
+            # 若不足 guarantee_min_facts，再从 fallback 按可攻击性降序补齐到保底数。
+            primary = sorted(
+                [c for c in candidate_facts if c["tier"] == "primary"],
+                key=lambda c: -c["quality_weight"],
+            )
+            fallback = sorted(
+                [c for c in candidate_facts if c["tier"] == "fallback"],
+                key=lambda c: -c["quality_weight"],
+            )
+            chosen = primary[:max_facts_per_doc]
+            if len(chosen) < max(1, guarantee_min_facts):
+                need = max(1, guarantee_min_facts) - len(chosen)
+                chosen = chosen + fallback[:need]
+
+            for idx, cf in enumerate(chosen, start=1):
+                ent = cf["entity"]
+                entity_text = cf["entity_text"]
+                sentence = cf["sentence"]
+                fact_id = f"fact_{row['audit_id']}_{idx:02d}"
                 fact = {
                     "fact_id": fact_id,
                     "audit_id": row["audit_id"],
                     "doc_id": row.get("doc_id"),
+                    "source_id": row.get("source_id") or row.get("doc_id"),
+                    "source_key": row.get("source_key") or row.get("source_id") or row.get("doc_id"),
                     "dataset": row["dataset"],
                     "group": row["group"],
                     "subject": _subject_from_sentence(sentence, entity_text),
@@ -247,21 +470,37 @@ def extract_facts_file(
                     "supporting_sentence": sentence,
                     # factual_claim 暂时直接用支撑句(将来可换成更规范的声明)。
                     "factual_claim": sentence,
-                    "importance": importance,
-                    "replaceability": replaceability,
-                    "privacy_specificity": privacy_specificity,
+                    # 绑定实体在 factual_claim 中的确切 occurrence，避免同一句出现相同
+                    # 数值/名称时 Step 07 总是误替换第一次出现。
+                    "claim_entity_span": ent.get("entity_sentence_span"),
+                    "importance": cf["importance"],
+                    "replaceability": cf["replaceability"],
+                    "privacy_specificity": cf["privacy_specificity"],
+                    # 方案 D 新增:质量权重(供第 11 步加权聚合)与质量分层标记(供三口径对比)。
+                    "quality_weight": cf["quality_weight"],
+                    "selection_tier": cf["tier"],
                     "entity_metadata": ent,
+                    "extractor_version": EXTRACTOR_VERSION,
+                    "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+                    "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
                 }
                 facts.append(fact)
-                kept_for_doc += 1
-                by_group[str(row["group"])] += 1
+                by_group[group] += 1
                 by_type[str(ent.get("type"))] += 1
+                by_tier[cf["tier"]] += 1
+            if chosen:
+                docs_with_fact[group] += 1
+        except SemanticResolverProtocolError:
+            # 模型/锁/schema/推理异常是正式协议错误，不能被当作单篇坏样本吞掉。
+            raise
         except Exception as exc:  # keep bad examples auditable without aborting a long run
             # 单篇出错不中断整体:记下错误,继续下一篇。
             errors.append({"audit_id": row.get("audit_id"), "error": str(exc)})
 
     write_jsonl(facts, output)
     write_jsonl(errors, error_path)
+    # 每组覆盖率(产出>=1条事实的文档占比)，用于核验 selection bias 是否已被消除。
+    coverage = {g: (docs_with_fact[g] / docs_total[g] if docs_total[g] else 0.0) for g in docs_total}
     manifest = {
         "output_path": str(output),
         "error_path": str(error_path),
@@ -270,8 +509,31 @@ def extract_facts_file(
         "facts": len(facts),
         "facts_by_group": dict(by_group),
         "facts_by_entity_type": dict(by_type),
+        "facts_by_tier": dict(by_tier),
+        "docs_with_fact_by_group": dict(docs_with_fact),
+        "docs_total_by_group": dict(docs_total),
+        "coverage_by_group": coverage,
+        "zero_candidate_docs": zero_candidate_docs,
         "max_facts_per_doc": max_facts_per_doc,
+        "guarantee_min_facts": guarantee_min_facts,
+        "extractor_version": EXTRACTOR_VERSION,
+        "entity_policy_version": ENTITY_TYPE_POLICY_VERSION,
+        "entity_policy_sha256": ENTITY_TYPE_POLICY_SHA256,
+        "dataset": str(dataset or ""),
+        "input_benchmark_hash": benchmark_hash,
+        "semantic_resolver_config_hash": semantic_config_hash,
+        "local_ner": {
+            **ner_metadata.to_dict(),
+            "processing_mode": ner_processing_mode,
+            "batch_size": ner_batch_size,
+        },
+        "semantic_entity_resolver": semantic_metadata.to_dict(),
+        "semantic_processing_mode": semantic_processing_mode,
+        "semantic_batch_size": semantic_batch_size,
     }
     write_json(manifest, manifest_path)
-    LOGGER.info("Extracted facts: samples=%s facts=%s errors=%s", samples, len(facts), len(errors))
+    LOGGER.info(
+        "Extracted facts: samples=%s facts=%s (primary=%s fallback=%s) zero_candidate_docs=%s errors=%s",
+        samples, len(facts), by_tier.get("primary", 0), by_tier.get("fallback", 0), zero_candidate_docs, len(errors),
+    )
     return manifest

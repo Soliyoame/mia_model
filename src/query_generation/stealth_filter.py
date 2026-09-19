@@ -14,7 +14,11 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
+from collections.abc import Iterable, Iterator
+from itertools import islice
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 try:
@@ -24,21 +28,184 @@ except ImportError:  # pragma: no cover
     tqdm = lambda x, **_: x
 
 from ..rag.embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model, cosine_similarity
-from ..utils.io import read_jsonl, write_json, write_jsonl
+from ..utils.hash import sha256_file, sha256_obj, sha256_text
+from ..utils.io import read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from .diverse_slot_questions import QUERY_TYPE as DIVERSE_QUERY_TYPE
+from .lexical_overlap import diversity_statistics, lexical_copy_scores, normalized_tokens
 
 
 LOGGER = get_logger(__name__)
 
+
+def _select_text_unique_pairs(
+    ranked: list[tuple[tuple[Any, ...], str, list[dict[str, Any]]]],
+    required: int,
+) -> tuple[list[int], int]:
+    """Return the best-ranked compatible pair indices and duplicate count."""
+
+    query_sets: list[frozenset[str]] = []
+    duplicate_pairs = 0
+    for _, _, members in ranked:
+        queries = [str(member.get("query") or "") for member in members]
+        query_set = frozenset(queries)
+        if len(queries) != 2 or len(query_set) != 2 or not all(queries):
+            query_sets.append(frozenset())
+            duplicate_pairs += 1
+        else:
+            query_sets.append(query_set)
+
+    greedy: list[int] = []
+    used: set[str] = set()
+    for index, query_set in enumerate(query_sets):
+        if not query_set or used.intersection(query_set):
+            if query_set:
+                duplicate_pairs += 1
+            continue
+        greedy.append(index)
+        used.update(query_set)
+        if len(greedy) == required:
+            return greedy, duplicate_pairs
+
+    # Greedy normally succeeds.  If a high-ranked pair blocks two later pairs,
+    # search only to the required depth and return the first rank-optimal plan.
+    def search(start: int, chosen: list[int], occupied: set[str]) -> list[int] | None:
+        if len(chosen) == required:
+            return list(chosen)
+        if len(query_sets) - start < required - len(chosen):
+            return None
+        for index in range(start, len(query_sets)):
+            query_set = query_sets[index]
+            if not query_set or occupied.intersection(query_set):
+                continue
+            result = search(index + 1, [*chosen, index], occupied | set(query_set))
+            if result is not None:
+                return result
+        return None
+
+    exact = search(0, [], set())
+    return (exact if exact is not None else greedy), duplicate_pairs
+
+
+def select_fixed_pairs_per_source(
+    accepted_rows: list[dict[str, Any]],
+    rejected_rows: list[dict[str, Any]],
+    pairs_per_source: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Select a deterministic, response-independent pair budget per source."""
+
+    required = int(pairs_per_source)
+    if required < 1:
+        raise ValueError("pairs_per_source must be a positive integer")
+    by_source: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in accepted_rows:
+        source_key = str(row.get("source_key") or row.get("source_id") or "")
+        if not source_key:
+            raise ValueError(f"Fixed-budget query row is missing source_key: {row.get('query_id')}")
+        pair_key = f"{row.get('pair_id')}::{row.get('query_type') or 'default'}"
+        by_source.setdefault(source_key, {}).setdefault(pair_key, []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    rejected = list(rejected_rows)
+    insufficient_sources: dict[str, int] = {}
+    selected_pair_ids: list[str] = []
+    duplicate_query_text_pairs = 0
+    for source_key, source_pairs in sorted(by_source.items()):
+        ranked: list[tuple[tuple[Any, ...], str, list[dict[str, Any]]]] = []
+        for pair_key, members in source_pairs.items():
+            claim_types = sorted(str(member.get("claim_type")) for member in members)
+            if claim_types != ["counterfactual", "true"]:
+                for member in members:
+                    member["accepted"] = False
+                    member["reject_reason"] = "fixed_budget_incomplete_pair"
+                    rejected.append(member)
+                continue
+            quality = min(float(member.get("quality_weight") or 0.0) for member in members)
+            naturalness = min(float(member.get("naturalness_score") or 0.0) for member in members)
+            lexical_copy = max(
+                float(member.get("five_gram_containment") or 0.0)
+                for member in members
+            )
+            semantic_relevance = min(
+                float(member.get("query_chunk_similarity") or member.get("query_doc_similarity") or 0.0)
+                for member in members
+            )
+            ranked.append(
+                (
+                    (-quality, -naturalness, lexical_copy, -semantic_relevance, pair_key),
+                    pair_key,
+                    members,
+                )
+            )
+        ranked.sort(key=lambda item: item[0])
+        selected_indices, source_duplicate_pairs = _select_text_unique_pairs(ranked, required)
+        duplicate_query_text_pairs += source_duplicate_pairs
+        if len(selected_indices) < required:
+            insufficient_sources[source_key] = len(selected_indices)
+            reason = f"insufficient_unique_source_pairs:{len(selected_indices)}<{required}"
+            for _, _, members in ranked:
+                for member in members:
+                    member["accepted"] = False
+                    member["reject_reason"] = reason
+                    rejected.append(member)
+            continue
+        selected_rank_by_index = {
+            candidate_index: selected_rank
+            for selected_rank, candidate_index in enumerate(selected_indices, start=1)
+        }
+        selected_query_texts = {
+            str(member.get("query") or "")
+            for candidate_index in selected_indices
+            for member in ranked[candidate_index][2]
+        }
+        for candidate_index, (_, pair_key, members) in enumerate(ranked):
+            chosen = candidate_index in selected_rank_by_index
+            rank = selected_rank_by_index.get(candidate_index, candidate_index + 1)
+            for member in members:
+                member["accepted"] = chosen
+                member["fixed_budget_pairs_per_source"] = required
+                member["fixed_budget_pair_rank"] = rank
+                member["logical_victim_calls_per_source"] = required * 2
+                if chosen:
+                    member["reject_reason"] = None
+                    selected.append(member)
+                else:
+                    member_queries = {str(item.get("query") or "") for item in members}
+                    member["reject_reason"] = (
+                        "fixed_budget_duplicate_query_text"
+                        if member_queries & selected_query_texts
+                        else "fixed_budget_not_selected"
+                    )
+                    rejected.append(member)
+            if chosen:
+                selected_pair_ids.append(f"{source_key}::{pair_key}")
+
+    selected.sort(key=lambda row: (str(row.get("source_key")), int(row["fixed_budget_pair_rank"]), str(row.get("claim_type"))))
+    stats = {
+        "pairs_per_source": required,
+        "queries_per_source": required * 2,
+        "eligible_sources": len(by_source) - len(insufficient_sources),
+        "insufficient_sources": insufficient_sources,
+        "selected_pairs": len(selected_pair_ids),
+        "query_text_uniqueness_enforced": True,
+        "duplicate_query_text_pairs": duplicate_query_text_pairs,
+        "fixed_budget_plan_hash": sha256_obj(sorted(selected_pair_ids)),
+    }
+    return selected, rejected, stats
+
 # 危险词:出现这些就说明查询在直接打探知识库/上下文,极易暴露攻击意图。
+# 注意:此处只收"高特异性"的探测短语。像单独的 database / indexed 这类词在正常业务文本
+# (合同、财报、技术文档)里很常见,放进来会大量误杀正常查询,故不再单列。
+# 反例:裸 \bmembership\b 已移除——它在 EDGAR 财报/合同里高频出现于正规语境
+# ("membership units"、"Membership Unit Subscription Agreement" 等 LLC 权益术语),
+# 实测真攻击命中 0、误杀 2,违反本表"只收高特异性短语"的原则。改用下方两条高特异性写法。
 DANGEROUS_PATTERNS = [
     r"repeat context",
     r"hidden document",
     r"system prompt",
-    r"\bdatabase\b",
-    r"\bindexed\b",
     r"knowledge base membership",
-    r"\bmembership\b",
+    r"membership inference",
+    r"membership (?:of|in) (?:the |your )?(?:knowledge base|database|index|corpus|vector store)",
     r"training data",
     r"private context",
     r"show me the context",
@@ -99,6 +266,103 @@ def _score_query_with_embedder(query: str, conflict_text: str, embedder) -> dict
     }
 
 
+def _score_query_batch_with_embedder(
+    query_reference_pairs: list[tuple[str, str]],
+    embedder,
+) -> list[dict[str, Any]]:
+    """批量计算与逐条评分完全相同的 stealth 特征。"""
+
+    if not query_reference_pairs:
+        return []
+    flattened_texts = [
+        text
+        for query, reference in query_reference_pairs
+        for text in (query, reference)
+    ]
+    vectors = embedder.encode(flattened_texts)
+    expected_vectors = len(query_reference_pairs) * 2
+    if len(vectors) != expected_vectors:
+        raise ValueError(
+            "Embedding backend returned an unexpected number of vectors: "
+            f"expected={expected_vectors}, actual={len(vectors)}"
+        )
+
+    results: list[dict[str, Any]] = []
+    for index, (query, _) in enumerate(query_reference_pairs):
+        lower = query.lower()
+        results.append(
+            {
+                "naturalness_score": _naturalness_score(query),
+                "context_probe_score": 1.0 if CONTEXT_PROBE_RE.search(query) else 0.0,
+                "prompt_injection_score": 1.0 if INJECTION_RE.search(query) else 0.0,
+                "query_doc_similarity": cosine_similarity(vectors[index * 2], vectors[index * 2 + 1]),
+                "dangerous_hits": [
+                    pattern for pattern in DANGEROUS_PATTERNS if re.search(pattern, lower)
+                ],
+            }
+        )
+    return results
+
+
+def _iter_query_scores(
+    rows: Iterable[dict[str, Any]],
+    benchmark_lookup: dict[str, str],
+    embedder,
+    batch_size: int,
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """批量记录 query→claim 与 query→原始 chunk 的语义诊断。"""
+
+    if batch_size < 1:
+        raise ValueError("embedding_batch_size must be a positive integer")
+    row_iterator = iter(rows)
+    while batch_rows := list(islice(row_iterator, batch_size)):
+        triples: list[tuple[str, str, str]] = []
+        for row in batch_rows:
+            source_key = str(
+                row.get("source_key") or row.get("source_id") or row.get("doc_id") or ""
+            )
+            chunk = benchmark_lookup.get(source_key)
+            if chunk is None:
+                if str(row.get("query_type") or "") == DIVERSE_QUERY_TYPE:
+                    raise RuntimeError(
+                        f"Original benchmark chunk is missing for diverse query source {source_key!r}"
+                    )
+                chunk = str(row.get("source_text") or row.get("true_claim") or "")
+            claim = str(row.get("claim") or row.get("true_claim") or "")
+            triples.append((str(row["query"]), claim, chunk))
+
+        flattened = [text for triple in triples for text in triple]
+        vectors = embedder.encode(flattened)
+        expected_vectors = len(triples) * 3
+        if len(vectors) != expected_vectors:
+            raise ValueError(
+                "Embedding backend returned an unexpected number of vectors: "
+                f"expected={expected_vectors}, actual={len(vectors)}"
+            )
+        for index, (row, (query, _, chunk)) in enumerate(zip(batch_rows, triples, strict=True)):
+            query_vector = vectors[index * 3]
+            lower = query.lower()
+            lexical = lexical_copy_scores(
+                str(row.get("question_template") or query),
+                chunk,
+                entity_values=(
+                    str(row.get("original_entity") or row.get("expected_entity") or ""),
+                    str(row.get("paired_counterfactual_entity") or ""),
+                ),
+            )
+            yield row, {
+                "naturalness_score": _naturalness_score(query),
+                "context_probe_score": 1.0 if CONTEXT_PROBE_RE.search(query) else 0.0,
+                "prompt_injection_score": 1.0 if INJECTION_RE.search(query) else 0.0,
+                "query_claim_similarity": cosine_similarity(query_vector, vectors[index * 3 + 1]),
+                "query_chunk_similarity": cosine_similarity(query_vector, vectors[index * 3 + 2]),
+                "dangerous_hits": [
+                    pattern for pattern in DANGEROUS_PATTERNS if re.search(pattern, lower)
+                ],
+                **lexical,
+            }
+
+
 def _naturalness_score(query: str) -> float:
     """估计查询读起来有多"自然像人话"(0~1，越高越自然)。
 
@@ -113,8 +377,10 @@ def _naturalness_score(query: str) -> float:
     if not words:
         return 0.0
     length = len(words)
-    # 词数在 18~90 之间最自然;偏离 45 越远分越低(最低 0.2)。
-    length_score = 1.0 if 18 <= length <= 90 else max(0.2, 1.0 - abs(length - 45) / 100)
+    # 词数甜区 10~90 视为自然。下限从 18 下调到 10:第 08 步已把回答格式 tail 交给第 10 步
+    # runner,核验问句普遍更短("前缀 + 短 claim"常只有十几词),沿用 18 会把正常短问句误判为
+    # 不自然;偏离甜区时按距 45 越远分越低(最低 0.2)。
+    length_score = 1.0 if 10 <= length <= 90 else max(0.2, 1.0 - abs(length - 45) / 100)
     # 正常以 ? 或 . 结尾更像人话。
     punctuation_score = 0.9 if query.strip().endswith(("?", ".")) else 0.7
     # 含 {{ 模板符或 ``` 代码块,显得不自然,扣到 0.6。
@@ -127,19 +393,30 @@ def filter_stealth_queries(
     queries_path: str | Path,
     output_path: str | Path,
     rejected_path: str | Path | None = None,
+    benchmark_path: str | Path | None = None,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_local_files_only: bool = False,
     min_naturalness: float = 0.55,
     max_context_probe: float = 0.5,
     max_prompt_injection: float = 0.5,
     min_similarity: float = 0.05,
     max_similarity: float = 0.95,
+    max_five_gram_containment: float = 0.35,
+    max_longest_common_token_run: int = 8,
+    max_dataset_duplicate_template_rate: float = 0.01,
+    max_dataset_opening_4gram_rate: float = 0.15,
+    pairs_per_source: int | None = None,
+    embedding_batch_size: int = 256,
     resume: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
     """过滤太像攻击、context probing 或 prompt injection 的 query。
 
-    中文说明：第 09 步主入口。逐条给查询打分，按一串阈值判定"接受"或"拒绝"，分别写到
-    accepted 和 rejected 两个文件。被拒绝的会记下原因。
+    中文说明：第 09 步主入口。先逐条给查询打分并做"单条自检"，再**按 pair 整体**判定
+    接受或拒绝——Q+ 与 Q- 必须共进退,只要对内任一条触发拒绝条件就整对剔除。这样能保证
+    进入第 10 步的永远是完整配对,避免只剩半对、下游 score_pair 把缺失一边按 0 计入而
+    系统性扭曲 cvg。结果分别写到 accepted 和 rejected 两个文件,被拒绝的会记下原因
+    (自身触发的记本身原因,被同伴连累的记 pair_partner_rejected)。
 
     参数:
         queries_path:         上一步的查询文件。
@@ -149,78 +426,309 @@ def filter_stealth_queries(
         min_naturalness:      自然度下限(更低则拒)。
         max_context_probe:    上下文探测分上限(更高则拒)。
         max_prompt_injection: 注入分上限(更高则拒)。
-        min_similarity:       与文档相似度下限(太低=跑题,拒)。
-        max_similarity:       与文档相似度上限(太高=几乎照抄文档,易暴露,拒)。
+        min_similarity/max_similarity: 仅兼容旧调用，当前协议忽略。
+        max_five_gram_containment: 实体遮蔽后 query 5-gram 在原始 chunk 中的比例上限。
+        max_longest_common_token_run: 实体遮蔽后最长连续公共 token 串上限。
         resume:               断点续跑:产物已存在则跳过。
         force:                强制重跑。
     返回:
-        manifest(字典):通过/拒绝数量与隐蔽检测率;若跳过则带 skipped_existing。
+        manifest(字典):通过/拒绝的条数与配对数、隐蔽检测率与整对拒绝率;
+        若跳过则带 skipped_existing。
     """
     output = Path(output_path)
+    del min_similarity, max_similarity  # 兼容旧调用；embedding 不再参与隐蔽性拒绝。
     # 没指定拒绝文件路径就自动命名。
     rejected = Path(rejected_path) if rejected_path else output.with_name(output.stem + "_rejected.jsonl")
     manifest_path = output.with_suffix(".manifest.json")
+    if force:
+        for path in (output, rejected, manifest_path):
+            path.unlink(missing_ok=True)
+    benchmark_hash = (
+        sha256_file(benchmark_path)
+        if benchmark_path is not None and Path(benchmark_path).is_file()
+        else None
+    )
+    filter_identity = {
+        "protocol": "lexical_chunk_stealth_v1",
+        "queries_hash": (
+            sha256_file(queries_path) if Path(queries_path).is_file() else None
+        ),
+        "benchmark_hash": benchmark_hash,
+        "embedding_model": embedding_model,
+        "embedding_local_files_only": bool(embedding_local_files_only),
+        "min_naturalness": float(min_naturalness),
+        "max_context_probe": float(max_context_probe),
+        "max_prompt_injection": float(max_prompt_injection),
+        "max_five_gram_containment": float(max_five_gram_containment),
+        "max_longest_common_token_run": int(max_longest_common_token_run),
+        "max_dataset_duplicate_template_rate": float(max_dataset_duplicate_template_rate),
+        "max_dataset_opening_4gram_rate": float(max_dataset_opening_4gram_rate),
+        "pairs_per_source": pairs_per_source,
+    }
+    filter_identity_hash = sha256_obj(filter_identity)
     # 断点续跑。
     if resume and not force and output.exists() and output.stat().st_size > 0 and manifest_path.exists():
+        existing = read_json(manifest_path)
+        fixed_budget = existing.get("fixed_budget") or {}
+        actual_pairs = fixed_budget.get("pairs_per_source") if fixed_budget.get("enabled") else None
+        if actual_pairs != pairs_per_source:
+            raise RuntimeError(
+                "Existing stealth queries do not match the requested fixed source budget: "
+                f"expected pairs_per_source={pairs_per_source}, actual={actual_pairs}. "
+                "Rebuild Step 09 with --force."
+            )
+        if pairs_per_source is not None and fixed_budget.get("query_text_uniqueness_enforced") is not True:
+            raise RuntimeError(
+                "Existing stealth queries do not enforce unique query text per source. "
+                "Rebuild Step 09 with --force."
+            )
+        if str(existing.get("filter_identity_hash") or "") != filter_identity_hash:
+            raise RuntimeError(
+                "Existing stealth queries do not match the lexical-chunk filter identity. "
+                "Rebuild Step 09 with --force."
+            )
         LOGGER.info("Skipping existing stealth filtered queries: %s", output)
-        return {"output_path": str(output), "skipped_existing": True}
+        return {**existing, "output_path": str(output), "skipped_existing": True}
+
+    query_rows = list(read_jsonl(queries_path))
+    formal_diverse = any(
+        str(row.get("query_type") or "") == DIVERSE_QUERY_TYPE
+        for row in query_rows
+    )
+    if formal_diverse:
+        if benchmark_path is None:
+            raise RuntimeError(
+                "diverse_slotted_verification requires benchmark_path for original-chunk binding"
+            )
+    benchmark_lookup: dict[str, str] = {}
+    if benchmark_path is not None:
+        for benchmark_row in read_jsonl(benchmark_path):
+            source_key = str(
+                benchmark_row.get("source_key")
+                or benchmark_row.get("source_id")
+                or benchmark_row.get("doc_id")
+                or ""
+            )
+            source_text = str(benchmark_row.get("text") or "")
+            if not source_key or not source_text:
+                raise RuntimeError("Benchmark row is missing source identity or original text")
+            if source_key in benchmark_lookup:
+                raise RuntimeError(f"Duplicate benchmark source_key: {source_key}")
+            benchmark_lookup[source_key] = source_text
+
+    pair_templates: dict[str, str] = {}
+    for row in query_rows:
+        pair_key = f"{row.get('pair_id')}::{row.get('query_type') or 'default'}"
+        template = str(row.get("question_template") or "")
+        if template:
+            existing_template = pair_templates.setdefault(pair_key, template)
+            if existing_template != template:
+                raise RuntimeError(f"Paired queries use inconsistent question templates: {pair_key}")
+    diversity = diversity_statistics(list(pair_templates.values()))
+    if pair_templates and diversity["duplicate_template_rate"] > max_dataset_duplicate_template_rate:
+        raise RuntimeError(f"Dataset duplicate-template gate failed: {diversity}")
+    if pair_templates and diversity["dominant_opening_4gram_rate"] > max_dataset_opening_4gram_rate:
+        raise RuntimeError(f"Dataset opening-concentration gate failed: {diversity}")
+
+    # 只加载一次向量模型，embedding 仅记录语义保真与检索相关度。
+    embedder = build_embedding_model(
+        embedding_model,
+        backend="auto",
+        local_files_only=bool(embedding_local_files_only),
+    )
+    # 第一遍:逐条打分并做"单条自检",记录每条自身是否触发拒绝条件(此时还不下最终结论)。
+    scored: list[dict[str, Any]] = []
+    score_iterator = _iter_query_scores(
+        query_rows,
+        benchmark_lookup,
+        embedder,
+        int(embedding_batch_size),
+    )
+    for row, scores in tqdm(score_iterator, desc="stealth filter", unit="query"):
+        # 选一个"参照文本"来算相似度:优先原文/真实声明,层层兜底。
+        # 单条自检:命中第一个条件即记下原因(短路,优先级从高到低)。
+        self_reason = None
+        if scores["dangerous_hits"]:
+            self_reason = "dangerous_terms:" + ",".join(scores["dangerous_hits"])
+        elif scores["prompt_injection_score"] > max_prompt_injection:
+            self_reason = "prompt_injection"
+        elif scores["context_probe_score"] > max_context_probe:
+            self_reason = "context_probe"
+        elif scores["naturalness_score"] < min_naturalness:
+            self_reason = "low_naturalness"
+        elif scores["five_gram_containment"] > max_five_gram_containment:
+            self_reason = "five_gram_copy"
+        elif scores["longest_common_token_run"] > max_longest_common_token_run:
+            self_reason = "longest_copy_run"
+        # 把分数和单条自检结果并进原记录(self_reject_reason 仅为中间诊断字段)。
+        scored.append(
+            {
+                **row,
+                "naturalness_score": scores["naturalness_score"],
+                "context_probe_score": scores["context_probe_score"],
+                "prompt_injection_score": scores["prompt_injection_score"],
+                "query_claim_similarity": scores["query_claim_similarity"],
+                "query_chunk_similarity": scores["query_chunk_similarity"],
+                # 兼容现有离线分析字段；语义相似度不再是隐蔽性门禁。
+                "query_doc_similarity": scores["query_chunk_similarity"],
+                "five_gram_containment": scores["five_gram_containment"],
+                "longest_common_token_run": scores["longest_common_token_run"],
+                "lexical_masked_query": scores["masked_query"],
+                "reference_chunk_hash": sha256_text(
+                    benchmark_lookup.get(
+                        str(
+                            row.get("source_key")
+                            or row.get("source_id")
+                            or row.get("doc_id")
+                            or ""
+                        ),
+                        str(row.get("source_text") or row.get("true_claim") or ""),
+                    )
+                ),
+                "self_reject_reason": self_reason,
+            }
+        )
+
+    # 第二遍:按 logical pair(pair_id + query_type)整体接受/拒绝。
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in scored:
+        key = f"{r.get('pair_id') or r.get('query_id')}::{r.get('query_type') or 'default'}"
+        groups.setdefault(key, []).append(r)
 
     accepted_rows: list[dict[str, Any]] = []
     rejected_rows: list[dict[str, Any]] = []
-    # 只加载一次向量模型,后面所有查询复用它。
-    embedder = build_embedding_model(embedding_model, backend="auto")
-    for row in tqdm(read_jsonl(queries_path), desc="stealth filter", unit="query"):
-        # 选一个"参照文本"来算相似度:优先原文/真实声明,层层兜底。
-        reference_text = (
-            row.get("source_text")
-            or row.get("true_claim")
-            or row.get("claim")
-            or row.get("conflict_text")
-            or row.get("query")
-            or ""
+    accepted_pairs = 0
+    rejected_pairs = 0
+    for members in groups.values():
+        claim_types = [str(m.get("claim_type")) for m in members]
+        metadata_consistent = all(
+            len({str(m.get(field)) for m in members}) == 1
+            for field in ("pair_id", "query_type", "source_key", "group")
         )
-        scores = _score_query_with_embedder(row["query"], str(reference_text), embedder)
-        # 依次检查各拒绝条件,命中第一个就给出拒绝原因(短路,优先级从高到低)。
-        reject_reason = None
-        if scores["dangerous_hits"]:
-            reject_reason = "dangerous_terms:" + ",".join(scores["dangerous_hits"])
-        elif scores["prompt_injection_score"] > max_prompt_injection:
-            reject_reason = "prompt_injection"
-        elif scores["context_probe_score"] > max_context_probe:
-            reject_reason = "context_probe"
-        elif scores["naturalness_score"] < min_naturalness:
-            reject_reason = "low_naturalness"
-        elif scores["query_doc_similarity"] < min_similarity:
-            reject_reason = "too_dissimilar"
-        elif scores["query_doc_similarity"] > max_similarity:
-            reject_reason = "too_similar"
-
-        # 把分数和判定结果并进原记录。
-        out = {
-            **row,
-            "naturalness_score": scores["naturalness_score"],
-            "context_probe_score": scores["context_probe_score"],
-            "prompt_injection_score": scores["prompt_injection_score"],
-            "query_doc_similarity": scores["query_doc_similarity"],
-            "accepted": reject_reason is None,
-            "reject_reason": reject_reason,
-        }
-        # 没有拒绝原因 → 通过;否则 → 拒绝。
-        if reject_reason is None:
-            accepted_rows.append(out)
+        structurally_complete = sorted(claim_types) == ["counterfactual", "true"] and metadata_consistent
+        if not structurally_complete:
+            for member in members:
+                member["self_reject_reason"] = member.get("self_reject_reason") or "incomplete_pair"
+        # 对内任一条触发拒绝条件,则整对拒绝。
+        failing = [m for m in members if m.get("self_reject_reason")]
+        if failing:
+            rejected_pairs += 1
+            # 被同伴连累的成员标 pair_partner_rejected,注明是谁、因何被拒,便于诊断。
+            partner_reason = "pair_partner_rejected:" + ";".join(
+                f"{m.get('claim_type')}={m.get('self_reject_reason')}" for m in failing
+            )
+            for m in members:
+                m["accepted"] = False
+                m["reject_reason"] = m.get("self_reject_reason") or partner_reason
+                rejected_rows.append(m)
         else:
-            rejected_rows.append(out)
+            accepted_pairs += 1
+            for m in members:
+                m["accepted"] = True
+                m["reject_reason"] = None
+                accepted_rows.append(m)
+
+    fixed_budget_stats: dict[str, Any] = {"enabled": False}
+    if pairs_per_source is not None:
+        accepted_rows, rejected_rows, fixed_budget_stats = select_fixed_pairs_per_source(
+            accepted_rows,
+            rejected_rows,
+            pairs_per_source,
+        )
+        fixed_budget_stats["enabled"] = True
+    accepted_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in accepted_rows})
+    rejected_pairs = len({f"{row.get('pair_id')}::{row.get('query_type')}" for row in rejected_rows})
+
+    if formal_diverse and pairs_per_source is not None:
+        expected_sources = {
+            str(row.get("source_key") or row.get("source_id") or "")
+            for row in query_rows
+        }
+        retained_sources = {
+            str(row.get("source_key") or row.get("source_id") or "")
+            for row in accepted_rows
+        }
+        missing_sources = sorted(expected_sources - retained_sources)
+        if missing_sources:
+            write_jsonl(rejected_rows, rejected)
+            close_embedder = getattr(embedder, "close", None)
+            if callable(close_embedder):
+                close_embedder()
+            write_json(
+                {
+                    "status": "failed_closed",
+                    "reason": "fixed_budget_or_gate_failure",
+                    "missing_source_count": len(missing_sources),
+                    "missing_sources": missing_sources,
+                    "input_queries_hash": filter_identity["queries_hash"],
+                    "input_benchmark_hash": benchmark_hash,
+                    "filter_identity": filter_identity,
+                    "filter_identity_hash": filter_identity_hash,
+                },
+                manifest_path,
+            )
+            raise RuntimeError(
+                "Diverse Step 09 failed closed instead of deleting pairs/sources: "
+                f"{len(missing_sources)} sources lost the fixed query budget"
+            )
 
     write_jsonl(accepted_rows, output)
     write_jsonl(rejected_rows, rejected)
+    audit_rows = [
+        row for row in scored if str(row.get("claim_type") or "") == "true"
+    ]
+    word_counts = [
+        len(normalized_tokens(str(row.get("question_template") or row.get("query") or "")))
+        for row in audit_rows
+    ]
+    five_gram_values = [float(row["five_gram_containment"]) for row in audit_rows]
+    copy_runs = [int(row["longest_common_token_run"]) for row in audit_rows]
+    reject_reasons = Counter(
+        str(row.get("reject_reason") or "") for row in rejected_rows
+    )
     manifest = {
         "output_path": str(output),
         "rejected_path": str(rejected),
         "accepted": len(accepted_rows),
         "rejected": len(rejected_rows),
-        # 隐蔽检测率 = 被拒绝数 / 总数(衡量原始查询有多容易被识破)。
+        "accepted_pairs": accepted_pairs,
+        "rejected_pairs": rejected_pairs,
+        # 隐蔽检测率(按 query):被拒绝条数 / 总条数。
         "stealth_detection_rate": len(rejected_rows) / max(1, len(accepted_rows) + len(rejected_rows)),
+        # 整对拒绝率(按 pair):有多少完整配对因隐蔽性问题被整对剔除。
+        "pair_rejection_rate": rejected_pairs / max(1, accepted_pairs + rejected_pairs),
+        "fixed_budget": fixed_budget_stats,
+        "embedding_model": embedding_model,
+        "embedding_local_files_only": bool(embedding_local_files_only),
+        "embedding_batch_size": int(embedding_batch_size),
+        "embedding_role": "diagnostic_only",
+        "lexical_copy_protocol": "entity_masked_query_vs_original_chunk",
+        "max_five_gram_containment": float(max_five_gram_containment),
+        "max_longest_common_token_run": int(max_longest_common_token_run),
+        "lexical_metrics": {
+            "five_gram_containment_median": median(five_gram_values) if five_gram_values else None,
+            "longest_common_token_run_median": median(copy_runs) if copy_runs else None,
+            "longest_common_token_run_max": max(copy_runs, default=None),
+        },
+        "question_word_count": {
+            "min": min(word_counts, default=None),
+            "median": median(word_counts) if word_counts else None,
+            "max": max(word_counts, default=None),
+            "values": word_counts,
+        },
+        "diversity": diversity,
+        "reject_reason_counts": dict(reject_reasons),
+        "filter_identity": filter_identity,
+        "filter_identity_hash": filter_identity_hash,
+        "input_queries_hash": filter_identity["queries_hash"],
+        "input_benchmark_hash": benchmark_hash,
+        "output_hash": sha256_file(output),
+        "rejected_output_hash": sha256_file(rejected),
+        "query_types": sorted({str(row.get("query_type") or "") for row in accepted_rows}),
     }
     write_json(manifest, output.with_suffix(".manifest.json"))
     LOGGER.info("Stealth filter accepted=%s rejected=%s", len(accepted_rows), len(rejected_rows))
+    close_embedder = getattr(embedder, "close", None)
+    if callable(close_embedder):
+        close_embedder()
     return manifest

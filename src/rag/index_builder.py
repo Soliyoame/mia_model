@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,9 +32,13 @@ except ImportError:  # pragma: no cover
 
 import numpy as np
 
-from .embeddings import DEFAULT_EMBEDDING_MODEL, build_embedding_model
+from .embeddings import (
+    DEFAULT_BGE_QUERY_INSTRUCTION,
+    DEFAULT_EMBEDDING_MODEL,
+    build_embedding_model,
+)
 from ..utils.hash import sha256_file, sha256_obj, sha256_text
-from ..utils.io import ensure_dir, read_jsonl, write_json, write_jsonl
+from ..utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
 
 
@@ -80,6 +86,42 @@ def chunk_for_rag(text: str, chunk_size: int = 500, chunk_overlap: int = 50) -> 
     return chunks
 
 
+def chunk_for_rag_tokens(
+    text: str,
+    tokenizer: Any,
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> list[str]:
+    """使用冻结 retriever tokenizer 按真实 token 滑窗切块。"""
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise ValueError("chunk_overlap must satisfy 0 <= overlap < chunk_size")
+    token_ids = list(tokenizer.encode(text or "", add_special_tokens=False))
+    if not token_ids:
+        return []
+    step = chunk_size - chunk_overlap
+    chunks: list[str] = []
+    for start in range(0, len(token_ids), step):
+        token_window = token_ids[start : start + chunk_size]
+        if not token_window:
+            break
+        chunk = str(
+            tokenizer.decode(
+                token_window,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        ).strip()
+        if chunk:
+            chunks.append(chunk)
+        if start + chunk_size >= len(token_ids):
+            break
+    return chunks
+
+
 def _write_index(index_path: Path, vectors: np.ndarray) -> str:
     """写入向量索引，优先 FAISS，失败则写 JSON fallback。
 
@@ -116,27 +158,71 @@ def _write_index(index_path: Path, vectors: np.ndarray) -> str:
         return "json_vector_fallback"
 
 
+def _bm25_tokens(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+", (text or "").casefold())
+
+
+def _write_bm25_index(index_path: Path, docstore: list[dict[str, Any]]) -> str:
+    """Write a deterministic inverted BM25 index without external services."""
+
+    postings: dict[str, list[list[int]]] = defaultdict(list)
+    doc_lengths: list[int] = []
+    for doc_index, row in enumerate(docstore):
+        counts = Counter(_bm25_tokens(str(row.get("text") or "")))
+        doc_lengths.append(sum(counts.values()))
+        for term, frequency in sorted(counts.items()):
+            postings[term].append([doc_index, int(frequency)])
+    payload = {
+        "backend": "bm25",
+        "version": "bm25_v1",
+        "k1": 1.5,
+        "b": 0.75,
+        "num_docs": len(docstore),
+        "avg_doc_length": sum(doc_lengths) / max(1, len(doc_lengths)),
+        "doc_lengths": doc_lengths,
+        "postings": dict(sorted(postings.items())),
+    }
+    tmp_path = index_path.parent / (index_path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(index_path)
+    return "bm25_inverted_index_v1"
+
+
 def build_rag_index(
     dataset: str,
     kb_member_path: str | Path,
     output_dir: str | Path,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_backend: str = "auto",
+    embedding_local_files_only: bool = False,
     embedding_dim: int = 384,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     resume: bool = True,
     force: bool = False,
     config_snapshot: dict[str, Any] | None = None,
+    allowed_group: str = "KB_Member",
+    retriever_backend: str = "dense",
+    embedding_revision: str | None = None,
+    query_instruction: str = DEFAULT_BGE_QUERY_INSTRUCTION,
+    chunking_unit: str = "words",
+    tokenizer_model: str | None = None,
+    tokenizer_revision: str | None = None,
+    tokenizer_local_files_only: bool | None = None,
 ) -> dict[str, Any]:
-    """只用 KB_Member 构建 RAG index。
+    """构建 RAG index（默认只允许 KB_Member；L2 shadow 模式可指定 Reserve）。
 
-    中文说明：本函数是第 03 步的主入口。流程是：读入成员文档 → 严格校验它们确实
-    都是 KB_Member → 逐篇切块 → 把所有块编码成向量 → 写索引、写 docstore、写 manifest。
+    中文说明：本函数是第 03 步的主入口。流程是：读入文档 → 严格校验它们的 group
+    都等于 allowed_group → 逐篇切块 → 把所有块编码成向量 → 写索引、docstore、manifest。
+
+    安全边界：主知识库 allowed_group 固定为 "KB_Member"（成员推理的前提，绝不能松动）。
+    唯一的例外是 L2 的 shadow 索引——它用 Reserve（同分布、非成员、与评估组 source 互斥）
+    构建，用来估计"非成员零分布"，因此调用方需显式传 allowed_group="Reserve"。shadow
+    索引绝不参与"判定某文档是否成员"的 victim 检索，只服务于 per-example 先验校准。
 
     参数:
         dataset:           数据集名字(如 "enron")，仅用于记录与日志。
-        kb_member_path:    成员文档(KB_Member)的 jsonl 文件路径，是唯一允许入库的数据。
+        kb_member_path:    要建索引的文档 jsonl 路径(主库=KB_Member；shadow=Reserve 子集)。
         output_dir:        索引输出目录。
         embedding_model:   使用的向量模型名。
         embedding_backend: 向量后端("auto" 表示自动选真实模型)。
@@ -146,47 +232,171 @@ def build_rag_index(
         resume:            为 True 时，若索引已存在则跳过(断点续跑)。
         force:             为 True 时强制重建，忽略已存在的结果。
         config_snapshot:   本次运行的配置快照，写进 manifest 便于复现实验。
+        allowed_group:     唯一允许入库的 group(默认 "KB_Member"；L2 shadow 传 "Reserve")。
     返回:
         manifest(字典)：记录本次建库的全部元信息；若跳过则返回带 skipped_existing 的字典。
     异常:
-        RuntimeError: 当输入混入了非 KB_Member 文档、或没切出任何块时抛出。
+        RuntimeError: 当输入混入了非 allowed_group 文档、或没切出任何块时抛出。
     """
     # 确保输出目录存在(不存在则创建)。
     out_dir = ensure_dir(output_dir)
-    index_path = out_dir / "faiss.index"
+    if allowed_group != "KB_Member" and any(
+        part.casefold() == "indexes" for part in out_dir.parts
+    ):
+        raise RuntimeError(
+            f"{allowed_group} dev/shadow data cannot be written under a formal 'indexes' directory: "
+            f"{out_dir}"
+        )
+    backend_name = str(retriever_backend or "dense").strip().lower()
+    if backend_name in {"minilm", "vector", "faiss"}:
+        backend_name = "dense"
+    if backend_name not in {"dense", "bm25"}:
+        raise ValueError(f"Unknown retriever_backend: {retriever_backend!r}")
+    normalized_chunking_unit = str(chunking_unit or "words").strip().casefold()
+    if normalized_chunking_unit not in {"words", "tokens"}:
+        raise ValueError(f"Unknown chunking_unit: {chunking_unit!r}")
+    if (
+        allowed_group == "KB_Member"
+        and backend_name == "dense"
+        and "minilm" in str(embedding_model).casefold()
+    ):
+        raise ValueError(
+            "MiniLM is retired from formal PCV-MIA indexes. "
+            "Use BAAI/bge-base-en-v1.5 or archive the run as legacy."
+        )
+    index_path = out_dir / ("faiss.index" if backend_name == "dense" else "bm25.index.json")
     docstore_path = out_dir / "docstore.jsonl"
     manifest_path = out_dir / "index_manifest.json"
-    # 断点续跑：开启 resume、未强制 force，且三个产物文件都在，就直接跳过不重建。
+    kb_hash = sha256_file(kb_member_path)
+    # 断点续跑只能复用协议完全一致的索引；否则必须显式 --force 重建。
     if resume and not force and index_path.exists() and docstore_path.exists() and manifest_path.exists():
+        existing_manifest = read_json(manifest_path)
+        expected_protocol = {
+            "dataset": dataset,
+            "retriever_backend": backend_name,
+            "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+            "embedding_revision": embedding_revision if backend_name == "dense" else None,
+            "chunk_size": int(chunk_size),
+            "chunk_overlap": int(chunk_overlap),
+            "chunking_unit": normalized_chunking_unit,
+            "tokenizer_model": (
+                str(tokenizer_model or embedding_model)
+                if normalized_chunking_unit == "tokens"
+                else None
+            ),
+            "tokenizer_revision": (
+                tokenizer_revision or embedding_revision
+                if normalized_chunking_unit == "tokens"
+                else None
+            ),
+            "kb_hash": kb_hash,
+        }
+        mismatches = {
+            key: {"expected": expected, "actual": existing_manifest.get(key)}
+            for key, expected in expected_protocol.items()
+            if existing_manifest.get(key) != expected
+        }
+        actual_allowed = (
+            existing_manifest.get("security_boundary", {}).get("allowed_groups") or []
+        )
+        if actual_allowed != [allowed_group]:
+            mismatches["allowed_groups"] = {
+                "expected": [allowed_group],
+                "actual": actual_allowed,
+            }
+        for artifact_name, artifact_path, manifest_key in (
+            ("docstore", docstore_path, "docstore_hash"),
+            ("index", index_path, "index_hash"),
+        ):
+            expected_hash = str(existing_manifest.get(manifest_key) or "")
+            actual_hash = sha256_file(artifact_path)
+            if not expected_hash or actual_hash != expected_hash:
+                mismatches[f"{artifact_name}_hash"] = {
+                    "expected": expected_hash or None,
+                    "actual": actual_hash,
+                }
+        if mismatches:
+            raise RuntimeError(
+                f"Existing {dataset}/{backend_name} index protocol does not match the requested run: "
+                f"{mismatches}. Rebuild Step 03 with --force."
+            )
         LOGGER.info("Skipping existing RAG index for %s: %s", dataset, out_dir)
-        return {"dataset": dataset, "output_dir": str(out_dir), "skipped_existing": True}
+        return {
+            **existing_manifest,
+            "output_dir": str(out_dir),
+            "skipped_existing": True,
+        }
 
     rows = list(read_jsonl(kb_member_path))
-    # 安全闸门：只要发现任何一条不是 KB_Member，立即报错，绝不让非成员污染索引。
-    if any(row.get("group") != "KB_Member" for row in rows):
+    # 安全闸门：只要发现任何一条 group 不等于 allowed_group，立即报错。
+    # 主库 allowed_group="KB_Member"，绝不让非成员污染；shadow 显式传 "Reserve"。
+    if any(row.get("group") != allowed_group for row in rows):
         # 挑出前 5 条违规文档的 id 放进报错信息，方便定位问题。
-        bad = [row.get("doc_id") for row in rows if row.get("group") != "KB_Member"][:5]
-        raise RuntimeError(f"RAG index can only be built from KB_Member. Bad rows: {bad}")
+        bad = [row.get("doc_id") for row in rows if row.get("group") != allowed_group][:5]
+        raise RuntimeError(f"RAG index can only be built from {allowed_group}. Bad rows: {bad}")
+
+    embedder = None
+    tokenizer = None
+    if backend_name == "dense":
+        embedder = build_embedding_model(
+            embedding_model,
+            backend=embedding_backend,
+            dim=embedding_dim,
+            local_files_only=bool(embedding_local_files_only),
+            revision=embedding_revision,
+            query_instruction=query_instruction,
+        )
+        tokenizer = getattr(embedder, "tokenizer", None)
+    if normalized_chunking_unit == "tokens" and tokenizer is None:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_model or embedding_model,
+            revision=tokenizer_revision or embedding_revision,
+            local_files_only=(
+                bool(embedding_local_files_only)
+                if tokenizer_local_files_only is None
+                else bool(tokenizer_local_files_only)
+            ),
+        )
 
     docstore: list[dict[str, Any]] = []
     # 逐篇文档切块，并为每个块构造一条记录存进 docstore。
     for row in tqdm(rows, desc=f"chunk index {dataset}", unit="doc"):
         # 优先用 doc_id，没有就退而用 sample_id 作为文档标识。
         doc_id = str(row.get("doc_id") or row.get("sample_id"))
-        for chunk_idx, chunk in enumerate(chunk_for_rag(row["text"], chunk_size=chunk_size, chunk_overlap=chunk_overlap)):
+        chunks = (
+            chunk_for_rag_tokens(
+                row["text"],
+                tokenizer,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            if normalized_chunking_unit == "tokens"
+            else chunk_for_rag(
+                row["text"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+        )
+        for chunk_idx, chunk in enumerate(chunks):
             docstore.append(
                 {
                     # 块编号 = 文档id + "_c" + 两位序号，保证全局唯一。
                     "chunk_id": f"{doc_id}_c{chunk_idx:02d}",
                     "doc_id": doc_id,
                     "dataset": dataset,
-                    "group": "KB_Member",
+                    "group": allowed_group,
+                    "source_id": row.get("source_id") or doc_id,
+                    "source_key": row.get("source_key") or row.get("source_id") or doc_id,
                     "text": chunk,
                     # 记录文本 hash，便于校验与追踪。
                     "text_hash": sha256_text(chunk),
                     "metadata": {
                         "chunk_index": chunk_idx,
                         "source_doc_id": doc_id,
+                        "source_id": row.get("source_id") or doc_id,
+                        "source_key": row.get("source_key") or row.get("source_id") or doc_id,
                         "source_text_hash": row.get("text_hash"),
                     },
                 }
@@ -196,38 +406,69 @@ def build_rag_index(
     if not docstore:
         raise RuntimeError(f"No chunks were generated for {dataset}: {kb_member_path}")
 
-    # 创建向量模型，并把每个块的文本批量编码成向量矩阵。
-    embedder = build_embedding_model(embedding_model, backend=embedding_backend, dim=embedding_dim)
-    vectors = embedder.encode([row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")])
-    # 写向量索引(faiss 或 json 兜底)，拿到实际使用的后端名。
-    backend = _write_index(index_path, vectors)
+    embedder_name: str | None = None
+    actual_embedding_dim: int | None = None
+    if backend_name == "dense":
+        assert embedder is not None
+        encode_documents = getattr(embedder, "encode_documents", embedder.encode)
+        vectors = encode_documents(
+            [row["text"] for row in tqdm(docstore, desc=f"embed {dataset}", unit="chunk")]
+        )
+        storage_backend = _write_index(index_path, vectors)
+        embedder_name = embedder.name
+        actual_embedding_dim = int(vectors.shape[1])
+        retriever_id = str(embedding_model)
+        close = getattr(embedder, "close", None)
+        if callable(close):
+            close()
+    else:
+        storage_backend = _write_bm25_index(index_path, docstore)
+        retriever_id = "bm25"
     # 写 docstore(所有块的清单)。
     write_jsonl(docstore, docstore_path)
     # 记录创建时间(UTC，带时区)。
     created_at = datetime.now(timezone.utc).isoformat()
     manifest = {
         "dataset": dataset,
-        "embedding_model": embedder.name,
-        "requested_embedding_model": embedding_model,
-        "embedding_backend": backend,
-        "embedding_dim": int(vectors.shape[1]),
+        "retriever_backend": backend_name,
+        "retriever_id": retriever_id,
+        "index_filename": index_path.name,
+        "embedding_model": embedder_name,
+        "requested_embedding_model": embedding_model if backend_name == "dense" else None,
+        "embedding_revision": embedding_revision if backend_name == "dense" else None,
+        "query_instruction": query_instruction if backend_name == "dense" else None,
+        "embedding_backend": storage_backend if backend_name == "dense" else None,
+        "embedding_local_files_only": bool(embedding_local_files_only) if backend_name == "dense" else None,
+        "embedding_dim": actual_embedding_dim,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
+        "chunking_unit": normalized_chunking_unit,
+        "tokenizer_model": (
+            str(tokenizer_model or embedding_model)
+            if normalized_chunking_unit == "tokens"
+            else None
+        ),
+        "tokenizer_revision": (
+            tokenizer_revision or embedding_revision
+            if normalized_chunking_unit == "tokens"
+            else None
+        ),
         "num_docs": len(rows),
         "num_chunks": len(docstore),
         # 对关键文件算 hash，写进 manifest，用于实验复现与完整性校验。
-        "kb_hash": sha256_file(kb_member_path),
+        "kb_hash": kb_hash,
         "docstore_hash": sha256_file(docstore_path),
         "index_hash": sha256_file(index_path),
         "created_at": created_at,
         "config_hash": sha256_obj(config_snapshot or {}),
         "config_snapshot": config_snapshot or {},
-        # 把"安全边界"也写进 manifest，明确声明只允许成员、禁止哪些分组。
+        # 把"安全边界"也写进 manifest，明确声明只允许哪个 group。
         "security_boundary": {
-            "allowed_groups": ["KB_Member"],
-            "forbidden_groups": ["True_Non_Member", "Spoof_Seed", "Spoofed_Non_Member", "Reserve"],
+            "allowed_groups": [allowed_group],
+            "forbidden_groups": [g for g in ["KB_Member", "True_Non_Member", "Spoof_Seed", "Spoofed_Non_Member", "Reserve"] if g != allowed_group],
+            "is_shadow_index": allowed_group != "KB_Member",
         },
     }
     write_json(manifest, manifest_path)
-    LOGGER.info("Built RAG index for %s: docs=%s chunks=%s backend=%s", dataset, len(rows), len(docstore), backend)
+    LOGGER.info("Built RAG index for %s: docs=%s chunks=%s backend=%s", dataset, len(rows), len(docstore), backend_name)
     return manifest

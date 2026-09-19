@@ -1,0 +1,130 @@
+{
+  "source_count": 1250,
+  "normalized_exact_hash_groups": 0,
+  "candidate_pair_count": 24,
+  "near_duplicate_pair_count": 14,
+  "cross_group_pair_count": 0,
+  "cross_group_overlap": [],
+  "pairs": [
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00001387",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00001389",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.99593496
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00005590",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00005594",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.94552529
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00009679",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00009686",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.88343558
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00020228",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00020328",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.94715447
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00021282",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00031070",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.90332326
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00021295",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00030601",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.955
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033525",
+      "left_group": "Reserve",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00034077",
+      "right_group": "Reserve",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.99615385
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033657",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00036315",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.92820513
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033742",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033765",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.90990991
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033742",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033785",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.90990991
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033765",
+      "left_group": "KB_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00033785",
+      "right_group": "KB_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.90990991
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00048844",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00048927",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 1.0
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050008",
+      "left_group": "True_Non_Member",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00050014",
+      "right_group": "True_Non_Member",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.96836983
+    },
+    {
+      "left_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00051540",
+      "left_group": "Reserve",
+      "right_source_key": "D:\\MIA\\mia_model\\datasets\\raw\\extracted\\enron\\emails.csv::emails_00051544",
+      "right_group": "Reserve",
+      "method": "minhash_candidate_jaccard",
+      "jaccard": 0.85123967
+    }
+  ],
+  "jaccard_threshold": 0.85,
+  "minhash_permutations": 64,
+  "minhash_bands": 8,
+  "passed": true,
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "enron",
+  "source_store_hash": "c4ddf8ec1b35437f22af6307e66c561c88404e0185c8c2fe772c92665ebb1b47",
+  "policy": "cross-group clusters require deterministic cluster-level regrouping before any API call"
+}

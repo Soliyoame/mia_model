@@ -1,0 +1,21 @@
+protocol_version: pcv-mia-v20
+
+claim_pair_audit:
+  datasets: [edgar, enron, pubmed]
+  canonical_requirement: false
+  mode: automated_validator_and_ai_assisted_precheck
+  human_template_retained_for_audit: true
+
+stance_parser_audit:
+  datasets: [edgar, enron, pubmed]
+  canonical_requirement: false
+  generator: meta/llama-3.1-70b-instruct
+  automatic_parse_rate_minimum: 0.99
+  report_human_parser_f1: false
+
+canonical_release:
+  require_all_claim_pair_reports: false
+  require_all_stance_reports: false
+  require_automated_validator_pass: true
+  require_stance_parse_rate: true
+  require_no_duplicate_reports: true

@@ -18,13 +18,362 @@ import re
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
+from ..utils.hash import short_hash
+from .entity_type_policy import SEMANTIC_REPLACEMENT_CANDIDATES
+
+
+ATTACK_FIRST_GENERATION_PROTOCOL = "v21_entity_policy_counterfactual_r1"
 
 # 下面几组是"候选替换库":当要替换地点/人名/机构/产品/项目名时，从这里挑一个不同的。
-LOCATION_CANDIDATES = ["California", "Texas", "New York", "London", "Canada", "Germany"]
-PERSON_CANDIDATES = ["Jordan Ellis", "Taylor Morgan", "Alex Carter", "Morgan Lee", "Casey Brooks"]
-ORG_CANDIDATES = ["Orion Services Inc", "Northstar Logistics LLC", "Harborview Group", "Summit Data Corp"]
-PRODUCT_CANDIDATES = ["Atlas Platform", "Beacon System", "Meridian Service", "Nova Device"]
-PROJECT_CANDIDATES = ["Project Atlas", "Project Beacon", "Program Meridian", "Initiative Nova"]
+# 库适当扩大,配合 _candidate_replacement 的哈希选择,让不同原值落到不同假值、跨文档不雷同
+# (固定且过小的库会使反事实高度重复,容易被模型先验识破,从而抬高 cvg_llm 假阳性)。
+LOCATION_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_geographic_location"]
+)
+DEFINITE_ARTICLE_LOCATION_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["definite_article_location"]
+)
+PERSON_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["multi_token_person_name"]
+)
+ORG_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_organization"]
+)
+PRODUCT_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["named_product"]
+)
+PROJECT_CANDIDATES = list(
+    SEMANTIC_REPLACEMENT_CANDIDATES["titled_project_name"]
+)
+
+_DEFINITE_ARTICLE_LOCATIONS = frozenset(
+    {
+        "bahamas",
+        "czech republic",
+        "european economic area",
+        "european union",
+        "gambia",
+        "middle east",
+        "netherlands",
+        "nordic region",
+        "philippines",
+        "u.s.",
+        "united arab emirates",
+        "united kingdom",
+        "united states",
+        "united states of america",
+    }
+)
+_COUNTRY_LOCATIONS = frozenset(
+    {
+        "australia",
+        "brazil",
+        "canada",
+        "china",
+        "czech republic",
+        "france",
+        "germany",
+        "india",
+        "ireland",
+        "italy",
+        "japan",
+        "korea",
+        "malaysia",
+        "mexico",
+        "netherlands",
+        "peru",
+        "philippines",
+        "singapore",
+        "spain",
+        "u.s.",
+        "united arab emirates",
+        "united kingdom",
+        "united states",
+        "united states of america",
+    }
+)
+_STATE_OR_PROVINCE_LOCATIONS = frozenset(
+    {
+        "british columbia",
+        "california",
+        "colorado",
+        "florida",
+        "missouri",
+        "new jersey",
+        "ontario",
+        "quebec",
+        "sabah",
+        "texas",
+    }
+)
+_CITY_LOCATIONS = frozenset(
+    {
+        "abu dhabi",
+        "austin",
+        "boston",
+        "dallas",
+        "dublin",
+        "dubai",
+        "houston",
+        "jeddah",
+        "kota kinabalu",
+        "lawrence",
+        "london",
+        "manhattan",
+        "montreal",
+        "paris",
+        "sydney",
+        "tokyo",
+        "toronto",
+        "xuzhou city",
+    }
+)
+_REGION_LOCATIONS = frozenset(
+    {
+        "africa",
+        "asia",
+        "asia-pacific region",
+        "europe",
+        "european economic area",
+        "european union",
+        "latin america",
+        "middle east",
+        "nordic region",
+    }
+)
+_ATTACK_LOCATION_CANDIDATES: dict[str, list[str]] = {
+    "country": ["Canada", "Germany", "Australia", "France"],
+    "country_definite": [
+        "United Kingdom",
+        "United Arab Emirates",
+        "Netherlands",
+        "Philippines",
+    ],
+    "state_or_province": ["Texas", "California", "Ontario", "Florida"],
+    "city": ["Tokyo", "Paris", "Dublin", "Toronto"],
+    "city_explicit": [
+        "Suzhou City",
+        "Quebec City",
+        "Kansas City",
+        "Panama City",
+    ],
+    "region": ["Europe", "Asia", "Africa", "Latin America"],
+    "region_definite": [
+        "European Economic Area",
+        "Middle East",
+        "Asia-Pacific region",
+        "Nordic region",
+    ],
+    "compound_location": [
+        "Austin, Texas",
+        "Toronto, Canada",
+        "Dublin, Ireland",
+        "Sydney, Australia",
+    ],
+}
+_ATTACK_PRODUCT_CANDIDATES: dict[str, list[str]] = {
+    "drug_or_biologic": [
+        "Velunatide",
+        "Nexorimab",
+        "Somarelin",
+        "Talveradine",
+    ],
+    "lab_kit_or_reagent": [
+        "Quantiva RNA Kit",
+        "BioTrace Cytokine Array",
+        "LuminaGreen Dye",
+        "GenePure RT Kit",
+    ],
+    "device_or_instrument": [
+        "Axion SP7",
+        "NovaSeq 3500",
+        "Metrica IMU X2",
+        "OptiScan 500",
+    ],
+    "software_or_system": [
+        "Orion OS 11",
+        "Meridian Analytics Suite",
+        "Atlas Control System",
+        "Beacon Platform",
+    ],
+    "service_or_plan": [
+        "Horizon Advantage Plan",
+        "Northstar Tax Service",
+        "Meridian Water Services",
+        "Summit Care Plan",
+    ],
+    "consumer_or_industrial_product": [
+        "Harbor Overnighter Bag",
+        "Cedar Color Stain",
+        "Atlas Worklight",
+        "Northstar Filter",
+    ],
+}
+_PRODUCT_VALUE_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "lab_kit_or_reagent",
+        re.compile(
+            r"\b(?:kit|toolkit|reagent|assay|array|cytokine|sybr|quantitect|dye)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "device_or_instrument",
+        re.compile(
+            r"\b(?:device|instrument|microscope|sequencer|notebook|computer|"
+            r"imu|sensor|analy[sz]er|console|scanner|hiseq|leica\s+sp\d+|"
+            r"presario)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "software_or_system",
+        re.compile(
+            r"\b(?:windows|software|platform|operating system|analytics suite|"
+            r"paging system|control system)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "service_or_plan",
+        re.compile(
+            r"\b(?:service|services|advantage|insurance plan|premium plan|"
+            r"franchise)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "consumer_or_industrial_product",
+        re.compile(
+            r"\b(?:bag|worklight|filter|industrial product|color stain)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_PRODUCT_CONTEXT_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "drug_or_biologic",
+        re.compile(
+            r"\b(?:drug|medication|therap(?:y|eutic)|human growth hormone|"
+            r"vaccine|dose|pharmaceutical|treatment of|clinical candidate)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "lab_kit_or_reagent",
+        re.compile(
+            r"\b(?:pcr|rna|dna|plasma samples?|analytes?|laboratory reagent|"
+            r"intercalating dye|reverse transcription)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "device_or_instrument",
+        re.compile(
+            r"\b(?:microscopy|sequencing was carried out|desktop computer|"
+            r"measurements? were taken|sensor data|confocal)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "software_or_system",
+        re.compile(
+            r"\b(?:installed|software|operating system|application suite|"
+            r"developers?|switches)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "service_or_plan",
+        re.compile(
+            r"\b(?:premium revenues?|service lines?|monthly service|"
+            r"franchise|risk adjustment payment)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "consumer_or_industrial_product",
+        re.compile(
+            r"\b(?:special offer|rebate|per yd|per lb|retail product)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+def requires_definite_article(value: str) -> bool:
+    """Return whether a bare location name normally uses an external ``the``."""
+
+    compact = " ".join((value or "").casefold().split())
+    return compact in _DEFINITE_ARTICLE_LOCATIONS
+
+
+def infer_attack_subtype(
+    value: str,
+    entity_type: str,
+    *,
+    context: str | None = None,
+) -> str | None:
+    """Infer only coarse subtypes whose mismatch creates an obvious shortcut."""
+
+    compact = " ".join((value or "").casefold().split())
+    kind = (entity_type or "").upper()
+    if kind == "LOCATION":
+        if "," in compact:
+            return "compound_location"
+        if compact.endswith(" city"):
+            return "city_explicit"
+        if compact in _COUNTRY_LOCATIONS:
+            return "country"
+        if compact in _STATE_OR_PROVINCE_LOCATIONS:
+            return "state_or_province"
+        if compact in _CITY_LOCATIONS:
+            return "city"
+        if compact in _REGION_LOCATIONS:
+            return "region"
+        return None
+    if kind != "PRODUCT":
+        return None
+
+    for subtype, pattern in _PRODUCT_VALUE_CUES:
+        if pattern.search(compact):
+            return subtype
+    context_text = " ".join((context or "").casefold().split())
+    for subtype, pattern in _PRODUCT_CONTEXT_CUES:
+        if pattern.search(context_text):
+            return subtype
+    return None
+
+
+def _attack_location_pool(value: str, subtype: str) -> list[str] | None:
+    if subtype == "country":
+        key = "country_definite" if requires_definite_article(value) else "country"
+        return _ATTACK_LOCATION_CANDIDATES[key]
+    if subtype == "region":
+        key = "region_definite" if requires_definite_article(value) else "region"
+        return _ATTACK_LOCATION_CANDIDATES[key]
+    return _ATTACK_LOCATION_CANDIDATES.get(subtype)
+
+
+SEMANTIC_SUBTYPE_CANDIDATES = SEMANTIC_REPLACEMENT_CANDIDATES
+CONTRACT_TERM_REPLACEMENTS = {
+    "effective date": "expiration date",
+    "expiration date": "effective date",
+    "termination": "renewal",
+    "renewal": "termination",
+    "confidentiality": "non-disclosure",
+    "non-disclosure": "confidentiality",
+    "indemnification": "warranty",
+    "indemnity": "warranty",
+    "warranty": "indemnification",
+    "governing law": "choice of law",
+    "choice of law": "governing law",
+    "assignment": "delegation",
+    "delegation": "assignment",
+    "liability": "indemnity",
+    "payment term": "license term",
+    "license term": "payment term",
+}
 
 
 def _shift_number(value: str, factor: float) -> str:
@@ -46,14 +395,40 @@ def _shift_number(value: str, factor: float) -> str:
     raw = match.group(0)
     # 去掉逗号转成浮点数再缩放;至少为 1,避免出现 0 或负数。
     number = float(raw.replace(",", ""))
-    shifted = max(1, number * factor)
+    shifted = max(1.0, number * factor)
+    # 扰动方向:factor>=1 往大改,否则往小改;在"舍入后又变回原值"时用来强制偏移一格。
+    direction = 1 if factor >= 1.0 else -1
     # 原数有小数就保留两位小数格式,否则按整数(带千分位)渲染。
     if "." in raw:
-        rendered = f"{shifted:,.2f}"
+        new_number = round(shifted, 2)
+        # 小值乘以接近 1 的 factor,两位小数舍入后可能等于原值(如 0.01*1.05→0.01)。
+        # 这会让反事实==真值而被上游丢弃,故强制至少偏移 0.01。
+        if new_number == round(number, 2):
+            new_number = round(number + direction * 0.01, 2)
+        new_number = max(0.01, new_number)
+        rendered = f"{new_number:,.2f}"
     else:
-        rendered = f"{int(round(shifted)):,}"
+        # 整数同理:Python round 是银行家舍入,10*1.05=10.5→round→10、2*1.25=2.5→round→2,
+        # 小整数会原地不动。检测到没变就强制 ±1,确保一定产生同类型的不同值。
+        new_int = int(round(shifted))
+        if new_int == int(number):
+            new_int = int(number) + direction
+        new_int = max(1, new_int)
+        rendered = f"{new_int:,}"
     # 把新数字拼回原字符串中数字所在的位置(前缀 + 新数 + 后缀)。
     return value[: match.start()] + rendered + value[match.end() :]
+
+
+def _shift_year(value: str, amount: int) -> str:
+    """Shift a four-digit year without introducing thousands separators."""
+
+    stripped = value.strip()
+    if re.fullmatch(r"(?:19|20)\d{2}", stripped) is None:
+        return _shift_number(value, 1.05)
+    year = int(stripped) + amount
+    if year > 2099:
+        year = int(stripped) - amount
+    return str(year)
 
 
 def _shift_date(value: str, days: int) -> str:
@@ -135,7 +510,18 @@ def _shift_duration(value: str, factor: float) -> str:
     返回:
         缩放后的时长字符串。
     """
-    return _shift_number(value, factor)
+    shifted = _shift_number(value, factor)
+    number_match = re.search(r"\d+(?:,\d{3})*(?:\.\d+)?", shifted)
+    unit_match = re.search(r"\b(minutes?|hours?|days?|weeks?|months?|years?|quarters?)\b", shifted, re.IGNORECASE)
+    if number_match is None or unit_match is None:
+        return shifted
+    number = float(number_match.group(0).replace(",", ""))
+    unit = unit_match.group(0)
+    singular = unit[:-1] if unit.casefold().endswith("s") else unit
+    rendered_unit = singular if number == 1.0 else singular + "s"
+    if unit[:1].isupper():
+        rendered_unit = rendered_unit[:1].upper() + rendered_unit[1:]
+    return shifted[: unit_match.start()] + rendered_unit + shifted[unit_match.end() :]
 
 
 def _perturb_email(value: str) -> str:
@@ -269,23 +655,74 @@ def _perturb_phone(value: str, amount: int) -> str:
 def _candidate_replacement(value: str, candidates: list[str], medium: bool) -> str:
     """从候选库里挑一个"与原值不同"的替换项。
 
+    用原值的稳定哈希来选,达到两个目的:
+      (1) 不同原值映射到不同假值,跨文档不再雷同——固定取库里第一个会让所有 PERSON 反事实
+          都变成同一个名字,模型容易凭先验识破,从而抬高 cvg_llm 假阳性;
+      (2) 同一原值每次得到相同假值,确定可复现,不引入随机种子。
+
     参数:
         value:      原始值。
         candidates: 候选替换库。
-        medium:     中等扰动时跳过第一个候选(从更靠后的项里挑),让替换差异更大。
+        medium:     中等扰动时在哈希定位基础上再偏移一位,让替换差异更大。
     返回:
-        一个与原值不同的候选;若都相同则原样返回。
+        一个与原值不同的候选;若候选都与原值相同则原样返回。
     """
-    # medium 模式下从第二个候选起选(差异更大),否则用全部候选。
-    pool = candidates[1:] if medium and len(candidates) > 1 else candidates
-    for candidate in pool:
-        # 选第一个与原值不同的(忽略大小写)。
-        if candidate.lower() != value.lower():
-            return candidate
-    return value
+    # 先排除与原值相同的候选(忽略大小写),保证一定换成不同的值。
+    pool = [candidate for candidate in candidates if candidate.lower() != value.lower()]
+    if not pool:
+        return value
+    # 用原值的稳定哈希定位,使不同原值落到不同候选(确定性、可复现)。
+    idx = int(short_hash(value.lower()), 16) % len(pool)
+    # medium 模式再偏移一位,扩大与原值的差异。
+    if medium and len(pool) > 1:
+        idx = (idx + 1) % len(pool)
+    return pool[idx]
 
 
-def perturb_entity_value(value: str, entity_type: str, level: str = "light") -> str:
+def _article_compatible_candidates(
+    value: str,
+    candidates: list[str],
+    context: str | None,
+) -> list[str]:
+    """Keep a frozen external ``a``/``an`` frame grammatical when detectable."""
+
+    if not context:
+        return candidates
+    match = re.search(re.escape(value), context, re.IGNORECASE)
+    if match is None:
+        return candidates
+    article_match = re.search(r"\b(a|an)\s+$", context[: match.start()], re.IGNORECASE)
+    if article_match is None:
+        return candidates
+    article = article_match.group(1).casefold()
+    filtered: list[str] = []
+    for candidate in candidates:
+        first_letter = next(
+            (
+                character.casefold()
+                for character in candidate
+                if character.isalpha()
+            ),
+            "",
+        )
+        if not first_letter:
+            continue
+        vowel_initial = first_letter in {"a", "e", "i", "o", "u"}
+        if (article == "an" and vowel_initial) or (
+            article == "a" and not vowel_initial
+        ):
+            filtered.append(candidate)
+    return filtered or candidates
+
+
+def perturb_entity_value(
+    value: str,
+    entity_type: str,
+    level: str = "light",
+    *,
+    semantic_subtype_name: str | None = None,
+    context: str | None = None,
+) -> str:
     """Generate a same-type counterfactual value for a fact entity.
 
     中文说明：本文件的总入口。根据实体类型，调用对应的扰动函数，生成一个"同类型但不同
@@ -295,12 +732,48 @@ def perturb_entity_value(value: str, entity_type: str, level: str = "light") -> 
         value:       原始实体值。
         entity_type: 实体类型(MONEY/DATE/EMAIL/PERSON/ORG... 等)。
         level:       扰动强度,"light"(默认)或 "medium"(改得更多)。
+        semantic_subtype_name: v6.3 resolver 冻结的语义子型；提供时从对应池替换。
+        context:      包含实体的完整 claim；仅用于判断明显 LOCATION/PRODUCT 大类。
     返回:
         同类型的反事实假值;未知类型则在原值后加 " revised" 兜底。
     """
     # medium 标志:是否使用更大的扰动幅度。
     medium = level == "medium"
+    kind = (entity_type or "").upper()
+    attack_subtype = infer_attack_subtype(
+        value,
+        kind,
+        context=context,
+    )
+    if kind == "LOCATION" and attack_subtype is not None:
+        location_pool = _attack_location_pool(value, attack_subtype)
+        if location_pool:
+            return _candidate_replacement(
+                value,
+                _article_compatible_candidates(value, location_pool, context),
+                medium,
+            )
+    if kind == "PRODUCT" and attack_subtype is not None:
+        product_pool = _ATTACK_PRODUCT_CANDIDATES.get(attack_subtype)
+        if product_pool:
+            return _candidate_replacement(
+                value,
+                _article_compatible_candidates(value, product_pool, context),
+                medium,
+            )
+
+    subtype_pool = SEMANTIC_SUBTYPE_CANDIDATES.get(
+        str(semantic_subtype_name or "")
+    )
+    if subtype_pool:
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, subtype_pool, context),
+            medium,
+        )
     # —— 按实体类型分派到对应的扰动逻辑 ——
+    if entity_type == "NUMERIC_VALUE" and re.fullmatch(r"(?:19|20)\d{2}", value.strip()):
+        return _shift_year(value, 2 if medium else 1)
     if entity_type in {"MONEY", "MEDICAL_VALUE", "NUMERIC_VALUE"}:
         return _shift_number(value, 1.15 if medium else 1.05)
     if entity_type == "PERCENT":
@@ -322,20 +795,46 @@ def perturb_entity_value(value: str, entity_type: str, level: str = "light") -> 
     if entity_type == "IDENTIFIER":
         return _perturb_identifier(value, 50 if medium else 7)
     if entity_type == "CONTRACT_TERM":
-        # 合同条款:在 renewal(续约) 和 termination(终止) 之间互换。
-        return "renewal" if value.lower() != "renewal" else "termination"
+        # 按合同语义子类替换，避免把 liability/confidentiality 一律改成 renewal。
+        compact = " ".join(value.casefold().split())
+        replacement = CONTRACT_TERM_REPLACEMENTS.get(compact)
+        if replacement is not None:
+            return replacement
+        return "renewal" if compact != "renewal" else "termination"
     if entity_type == "LOCATION":
-        return _candidate_replacement(value, LOCATION_CANDIDATES, medium)
+        article_class = requires_definite_article(value)
+        candidates = DEFINITE_ARTICLE_LOCATION_CANDIDATES if article_class else LOCATION_CANDIDATES
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, candidates, context),
+            medium,
+        )
     if entity_type == "PERSON":
-        return _candidate_replacement(value, PERSON_CANDIDATES, medium)
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, PERSON_CANDIDATES, context),
+            medium,
+        )
     if entity_type == "ORG":
         # 机构字段里若其实是邮箱,按邮箱方式扰动。
         if "@" in value:
             return _perturb_email(value)
-        return _candidate_replacement(value, ORG_CANDIDATES, medium)
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, ORG_CANDIDATES, context),
+            medium,
+        )
     if entity_type == "PRODUCT":
-        return _candidate_replacement(value, PRODUCT_CANDIDATES, medium)
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, PRODUCT_CANDIDATES, context),
+            medium,
+        )
     if entity_type == "PROJECT_NAME":
-        return _candidate_replacement(value, PROJECT_CANDIDATES, medium)
+        return _candidate_replacement(
+            value,
+            _article_compatible_candidates(value, PROJECT_CANDIDATES, context),
+            medium,
+        )
     # 未知类型的兜底:加一个 " revised" 后缀,至少保证值发生了变化。
     return value + " revised"

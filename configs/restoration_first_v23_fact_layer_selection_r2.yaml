@@ -1,0 +1,41 @@
+protocol_version: pcv-mia-v23
+method_version: pcv-restoration-first-v23-fact-layer-selection
+specification_version: pcv-restoration-first-v23-fact-layer-selection-r2
+source_fact_specification_version: pcv-restoration-first-v23-fact-layer-r1
+required_pairs_per_source: 3
+maximum_pairs_per_original_entity: 2
+require_distinct_fact_signatures: true
+quality_filters:
+  reject_mail_metadata: true
+  mail_header_labels: [from, to, cc, bcc, subject, sent, date, message-id, content-type, start date]
+  always_embedded_mail_header_labels: [subject, message-id, content-type]
+  minimum_embedded_mail_header_count: 2
+  reject_metadata_prefixes: [author contributions, table]
+  reject_structured_numeric_formal_entities: true
+  generic_original_values:
+    - company
+    - the company
+    - organization
+    - the organization
+  reject_all_caps_person_surfaces: true
+  person_incompatible_terms:
+    - characteristics
+    - company
+    - department
+    - hand
+    - information
+    - median
+    - mice
+    - mouse
+    - organization
+    - product
+    - revision
+    - session
+    - syndrome
+    - system
+    - team
+  person_incompatible_exact_values:
+    - middle eastern
+    - thermo fisher
+    - united states
+external_calls_performed: 0

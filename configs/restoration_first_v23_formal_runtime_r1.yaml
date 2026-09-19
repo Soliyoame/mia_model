@@ -1,0 +1,185 @@
+protocol_version: pcv-mia-v23
+method_version: pcv-restoration-first-v23-formal-runtime
+specification_version: pcv-restoration-first-v23-formal-runtime-r1
+status: implementation_authorized_freeze_only
+
+design:
+  config_path: configs/restoration_first_v23.yaml
+  config_sha256: 5c3c74c9af80c0c095c92c9e9f20fc618e80195c8c4e0c74f80162501dac0cc0
+  manifest_path: configs/restoration_first_v23.design_manifest.json
+  manifest_sha256: 6a7163830f36b65247b7d6222f5adecfb18c85695a885cc0384128c81ffbd6fe
+  specification_version: pcv-restoration-first-v23-design-r6
+  preregistration_path: "研究记录/PCV-MIA_v23_Restoration-First_协议预注册_20260812.md"
+  preregistration_sha256: aea0b5eb858b58a079491e37a6f58d806a35a54b146d33d6aa79e75749139cd1
+
+frozen_r2:
+  preparation_freeze:
+    path: configs/restoration_first_v23_fresh_audit_preparation_r2.freeze.json
+    file_sha256: f51640c9385a4cebc94b1ffe4a59c8e377c6ad4ef5f427ef1d40dd2e1a8614c6
+    identity_sha256: 4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19
+    policy_identity_sha256: 20b0972141748e0b8f7b6ed1565df3294a3215dc1b49f5ffaccc4b41975dcc72
+    execution_reservation_revision: f004bc7511305c17066c0e869c708b828aa58d13f3a7ccc0d94a59f034f4934b
+  compatibility_envelope:
+    path: configs/restoration_first_v23_fresh_audit_compatibility_r1.json
+    file_sha256: 5d27179db3e25a8c2bcae3a55940c75543d0a241e987dcfe56714c119c2c3ca4
+    identity_sha256: 388a8a99b704422dceed3254aa672dda2a4d1fe8397ba76ee4c0bbbee64d68fc
+  datasets:
+    edgar:
+      manifest_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/datasets/edgar/dataset_manifest.json
+      manifest_sha256: 8106c4218d12e8b976968ea7e3db1d9e0b3b873eef8cdd1a84975c687e80e004
+      dataset_identity_sha256: 39beeeee95dc464050c7068c15744de48f9e8e03ad438b95a53cbd23f06110aa
+      evaluated_source_count: 106
+      selected_source_count: 100
+      selected_pair_count: 300
+    enron:
+      manifest_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/datasets/enron/dataset_manifest.json
+      manifest_sha256: 597cb9f9a66777eb747591fcd9015b6907b43ee36f376b0e8ab7bcaaf781f920
+      dataset_identity_sha256: cdd27cfb745ef58876db26c70b837cc9689e9e4cba0ae9fccb536619f2b2dbb5
+      evaluated_source_count: 665
+      selected_source_count: 100
+      selected_pair_count: 300
+    pubmed:
+      manifest_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/datasets/pubmed/dataset_manifest.json
+      manifest_sha256: b97a306335532c8d98a3341205b6189836f32685ec81f8bd4cd36389aab065db
+      dataset_identity_sha256: 1fb181e18968106bd9cd05593e57f8526ba5b46c714687a9640bd0c985f7dd35
+      evaluated_source_count: 107
+      selected_source_count: 100
+      selected_pair_count: 300
+  blind_packet:
+    manifest_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/blind_packet_manifest.json
+    manifest_sha256: bbe1479a6e679e052a7e1b6312afdcca72ee803806d61a1d129ada68f363e587
+    packet_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/blind_packets.jsonl
+    packet_sha256: 2a63f8f56d5309b40108c48719f3188b323fcd5b85f2fcb6916d701eb34cc743
+    row_count: 900
+  ai_diagnostic:
+    authorization_path: artifacts/v23/governance/run_authorizations/aed7737ca2c698f9c289b19d99f50ce0810cabe2ddf77e760d355d15340a6aab.json
+    authorization_file_sha256: 53535bb06c16dc5aa12278d51d9b70c53138bff50dd5641be2f17360c8694b8f
+    authorization_id: aed7737ca2c698f9c289b19d99f50ce0810cabe2ddf77e760d355d15340a6aab
+    manifest_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/ai_audit/ai_audit_manifest.json
+    manifest_sha256: 1fa1a3547c0a20da9b6b34e1f591f8cbd9d5c7b8c360f87f2d8eea4708960d27
+    audit_identity_sha256: 467c29448144182f3907462c5eeddeaeee87ce5eced8d98cb9f1497556338b67
+    labels_path: artifacts/v23/audit/4b90c510e7108c767f515ad6f2c13c068ceca7e778ba5c09f142dd66c8cb5b19/ai_audit/ai_audit_labels.jsonl
+    labels_sha256: 7d0902360c3cd29ffbfa714d7a2ff5fd9dc32edd2c78494f2171519d38edf824
+    pass_count: 875
+    uncertain_count: 25
+    fail_count: 0
+    status: completed_ai_only_diagnostic
+    diagnostic_only: true
+    accepted_as_human_validation: false
+    accepted_as_formal_gate: false
+
+formal_contract:
+  dataset_order: [edgar, enron, pubmed]
+  evaluation_unit: source_document
+  fact_specification_version: pcv-restoration-first-v23-fact-layer-r1
+  selection_specification_version: pcv-restoration-first-v23-fact-layer-selection-r2
+  target_eligible_sources_per_dataset: 2250
+  selected_pairs_per_source: 3
+  queries_per_pair: 2
+  queries_per_source_per_backend: 6
+  rag_backends: [dense, bm25, hybrid]
+  split_counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+  main_index_allowed_group: KB_Member
+  shadow_index_allowed_group: Reserve
+  formal_scan_requires_canonical_human_blind_audit: false
+  ai_diagnostic_may_satisfy_human_gate: false
+  formal_scan_gate:
+    kind: v23_ai_audit_plus_project_owner_human_verification_gate
+    status: passed
+    packet_manifest_sha256: bbe1479a6e679e052a7e1b6312afdcca72ee803806d61a1d129ada68f363e587
+    ai_audit_identity_sha256: 467c29448144182f3907462c5eeddeaeee87ce5eced8d98cb9f1497556338b67
+    ai_manifest_sha256: 1fa1a3547c0a20da9b6b34e1f591f8cbd9d5c7b8c360f87f2d8eea4708960d27
+    ai_labels_sha256: 7d0902360c3cd29ffbfa714d7a2ff5fd9dc32edd2c78494f2171519d38edf824
+    ai_diagnostic_remains_diagnostic_only: true
+    ai_diagnostic_alone_accepted_as_formal_gate: false
+    project_owner_human_verification_performed: true
+    project_owner_human_verification_result: matches_bound_ai_audit_result
+    project_owner_human_verification_attestation: user_instruction_2026_08_24
+    independent_human_blind_audit_performed: false
+    separate_human_label_artifact_available: false
+    cohen_kappa_claim_allowed: false
+    combined_gate_accepted: true
+  formal_scan_order: frozen_v22_source_order_after_prior_consumption_exclusion
+  formal_scan_reservation_unit: one_source_before_content_read
+  stop_after_exact_eligible_count: true
+  selection_after_split_forbidden: true
+  forbidden_selection_inputs: [membership, membership_label, split, group, victim_response, llm_only_response, retriever_output, retrieval_rank, retrieval_score, attack_score, attack_auc, auc]
+  stage_order: [formal_source_scan, source_exclusive_split, reserve_only_shadow_gate, release_finalize, luna_query_generation, main_index_build_and_retriever_matrix, matched_rag_and_llm_only_victim_runs, parsing_scoring_and_source_level_evaluation]
+  formal_source_scan:
+    authorization_directory: artifacts/v23/governance/run_authorizations
+    budget_directory: artifacts/v23/governance/authorization_budgets
+    consumption_ledger_path: artifacts/v23/governance/consumed_source_ledger.jsonl
+    ledger_anchor_directory: artifacts/v23/governance/ledger_anchors
+    formal_output_root: artifacts/v23/formal
+    formal_pair_output_root: artifacts/v23/selection/formal
+    reservation_batch_size: 1
+    target_selected_source_count: 2250
+    pairs_per_selected_source: 3
+    protocol_revision_namespace: formal_runtime_identity_sha256
+    first_dataset: edgar
+    first_dataset_maximum_source_reads: 3710
+    source_content_read_requires_durable_ledger_anchor: true
+    stop_immediately_at_target: true
+
+runtime_bundle:
+  freeze_path: configs/restoration_first_v23_formal_runtime_r1.freeze.json
+  snapshot_mode: exact_worktree_file_sha256_closure
+  code_commit_role: freeze_time_provenance_only
+  clean_worktree_required: false
+  dependency_lock_path: requirements.txt
+  model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+  expected_python_executable: D:/python/anaconda/envs/mia_model/python.exe
+  implementation_files:
+    - configs/entity_type_policy_v21_r1.yaml
+    - configs/restoration_first_v23.design_manifest.json
+    - configs/restoration_first_v23.yaml
+    - configs/restoration_first_v23_fact_layer_r1.yaml
+    - configs/restoration_first_v23_fact_layer_selection_r2.yaml
+    - configs/restoration_first_v23_formal_runtime_r1.yaml
+    - configs/semantic_entity_models_v6_3.lock.yaml
+    - requirements.txt
+    - scripts/46_freeze_v23_formal_runtime.py
+    - src/attack/attackability_selector.py
+    - src/attack/entity_extractor.py
+    - src/attack/entity_type_policy.py
+    - src/attack/perturbation_generator.py
+    - src/attack/restoration_first_v23.py
+    - src/attack/restoration_first_v23_fact_layer.py
+    - src/attack/restoration_first_v23_fact_layer_selection_r2.py
+    - src/attack/semantic_entity_resolver.py
+    - src/evaluation/restoration_first_v23.py
+    - src/prepare/restoration_first_v23.py
+    - src/prepare/restoration_first_v23_fact_layer.py
+    - src/prepare/restoration_first_v23_fact_layer_selection_r2.py
+    - src/prepare/restoration_first_v23_formal_runtime.py
+    - src/prepare/restoration_first_v23_fresh_audit_preparation.py
+    - src/prepare/restoration_first_v23_fresh_audit_preparation_r2.py
+    - src/rag/embeddings.py
+    - src/rag/index_builder.py
+    - src/rag/retriever.py
+    - src/utils/hash.py
+    - src/utils/io.py
+    - src/utils/logger.py
+    - src/utils/stage_identity.py
+    - "研究记录/PCV-MIA_v23_Restoration-First_协议预注册_20260812.md"
+
+authorization_boundary:
+  current_authorized_stage: formal_runtime_implementation_and_freeze
+  local_offline_validation_allowed: true
+  formal_test_allowed: false
+  gpu_long_task_allowed: false
+  api_allowed: false
+  victim_allowed: false
+  llm_only_allowed: false
+  retriever_allowed: false
+  paid_calls_allowed: false
+  membership_access_allowed: false
+  victim_response_access_allowed: false
+  retriever_output_access_allowed: false
+  auc_access_allowed: false
+  fresh_reserve_access_allowed: false
+  packet_rebuild_allowed: false
+  external_calls_performed: 0

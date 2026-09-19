@@ -1,0 +1,53 @@
+logging: {level: INFO, file: artifacts/v21/logs/baselines.log}
+paths:
+  scores_dir: artifacts/v21/scores
+  baselines_dir: artifacts/v21/baselines
+  facts_dir: artifacts/v21/facts
+  queries_dir: artifacts/v21/stealth_filtered_queries
+  splits_dir: artifacts/v21/splits
+  representative_manifest_dir: artifacts/v21/release_controls/representative_chunks
+  ia_shadow_answers_dir: artifacts/v21/ia_shadow_answers
+baseline:
+  protocol_version: pcv-mia-v21
+  retriever_backend: dense
+  retriever_id: BAAI/bge-base-en-v1.5
+  victim_calls_per_source:
+    PCV-MIA: 6
+    MEntA: 5
+    IA: 5
+    S2MIA: 1
+    MBA: 1
+    DCMI: 2
+  formal_method_policy:
+    full_generator: google/gemma-2-2b-it
+    full_methods: [S2MIA, MBA, IA, DCMI, MEntA]
+    extension_methods: []
+  methods: [S2MIA, MBA, IA, DCMI, MEntA]
+  threshold: 0.3
+  ia:
+    preparation_script: scripts/29_prepare_ia_shadow_answers.py
+    query_generator_profile: luna_query_generator
+    shadow_profile: qwen3_4b_ia_shadow
+    candidates_per_source: 30
+    selected_pairs_per_source: 5
+    require_dataset_manifest_before_victim: true
+    human_audit_pairs_per_dataset: 200
+  menta:
+    protocol_version: menta-controlled-bridge-v21
+    adaptation: source_level_representative_chunk
+    query_manifest_dir: artifacts/v21/release_controls/menta_inputs
+    queries_per_source: 5
+    query_generation_role: luna_query_generator
+    bridge_datasets: [nfcorpus, scidocs, trec-covid]
+    bridge_retriever: sentence-transformers/all-mpnet-base-v2
+    bridge_top_k: 3
+    disclosure: controlled_bridge_not_exact_reproduction
+    nli:
+      model_id: tasksource/deberta-base-long-nli
+      revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+      snapshot_dir: models/menta/deberta-base-long-nli
+      local_files_only: true
+      device: cuda
+      require_cuda: true
+      batch_size: 16
+      max_length: 1280

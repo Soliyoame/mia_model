@@ -1,0 +1,18 @@
+{
+  "protocol_version": "pcv-mia-v20",
+  "dataset": "pubmed",
+  "status": "read_only_ground_truth_source_store",
+  "group_counts": {
+    "KB_Member": 500,
+    "Reserve": 250,
+    "True_Non_Member": 500
+  },
+  "source_count": 1250,
+  "input_hashes": {
+    "KB_Member": "28272790afa62f632e4d82927ad6006ff9798d986907a962fd0942599e901834",
+    "True_Non_Member": "06715ababf1f86aee70fe6db408911ce26830d9c9ae60e5a679f3ba03af91a6c",
+    "Reserve": "4183e9c5e7aa7c3436ad92528b9febae4cd2e25a130ee340c1afbab9d4d7d338"
+  },
+  "source_keys_hash": "6a145697be6e50f68755cd38a5a25820b5dbf759a5fafce4fa1acd709de36968",
+  "store_hash": "579b23d47461ab8e401f3948e415b9a281f28d517552111cb67785bf661d40e1"
+}

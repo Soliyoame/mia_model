@@ -26,9 +26,75 @@ except ImportError:  # pragma: no cover
 
 from ..utils.io import read_jsonl, write_json, write_jsonl
 from ..utils.logger import get_logger
+from ..rag.runner import compact_response_rows, response_is_success
 
 
 LOGGER = get_logger(__name__)
+
+
+def parse_hybrid_response(
+    response: str | bytes | None,
+    *,
+    generator_error: bool = False,
+) -> dict[str, Any]:
+    """为 V24 混合评分读取明确立场，不用实体出现或关键词片段推断支持。"""
+    result: dict[str, Any] = {
+        "raw_response": response if isinstance(response, str) else None,
+        "parse_status": "invalid",
+        "stance": None,
+        "correction_entity": None,
+    }
+    if generator_error:
+        return {**result, "parse_status": "generator_error"}
+    if isinstance(response, bytes):
+        try:
+            response = response.decode("utf-8")
+        except UnicodeDecodeError:
+            return result
+        result["raw_response"] = response
+    if response is None or (isinstance(response, str) and not response.strip()):
+        return {**result, "parse_status": "missing"}
+    if not isinstance(response, str):
+        return result
+    text = response.strip()
+
+    def unique_fields(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        fields = dict(items)
+        if len(fields) != len(items):
+            raise ValueError("duplicate_response_field")
+        return fields
+
+    if text.startswith("{"):
+        try:
+            value = json.loads(text, object_pairs_hook=unique_fields)
+        except (ValueError, TypeError):
+            return result
+        if not isinstance(value, dict) or set(value) != {"stance", "correction_entity"}:
+            return result
+        stance, correction = value["stance"], value["correction_entity"]
+        if not isinstance(stance, str) or stance not in {"supported", "contradicted", "insufficient"}:
+            return result
+        if correction is not None and not isinstance(correction, str):
+            return result
+        correction = (correction.strip() or None) if isinstance(correction, str) else None
+        if stance != "contradicted" and correction is not None:
+            return result
+    else:
+        token = text.casefold().replace("’", "'").rstrip(".!").strip()
+        correction = None
+        if token in {"yes", "consistent"}:
+            stance = "supported"
+        elif token in {"no", "inconsistent"}:
+            stance = "contradicted"
+        elif token in {"i don't know", "i do not know"}:
+            stance = "insufficient"
+        else:
+            match = re.fullmatch(r"inconsistent\s*:\s*(.*)", text, flags=re.IGNORECASE | re.DOTALL)
+            if match is None:
+                return result
+            stance, correction = "contradicted", match.group(1).strip() or None
+    # 否定但没有更正值是合法行为，由评分层给零恢复分。
+    return {**result, "parse_status": "parsed", "stance": stance, "correction_entity": correction}
 
 # 下面四个正则用来从回答文字里"嗅探"模型的态度。re.IGNORECASE 表示不区分大小写。
 # UNKNOWN_RE: 命中表示模型说"我不知道/无法核实/信息不足"。
@@ -218,10 +284,14 @@ def parse_stance_response(response_row: dict[str, Any], query_row: dict[str, Any
         "pair_id": query_row.get("pair_id") or response_row.get("pair_id"),
         "fact_id": query_row.get("fact_id") or response_row.get("fact_id"),
         "audit_id": response_row.get("audit_id") or query_row.get("audit_id"),
+        "doc_id": response_row.get("doc_id") or query_row.get("doc_id"),
+        "source_id": response_row.get("source_id") or query_row.get("source_id") or query_row.get("doc_id"),
+        "source_key": response_row.get("source_key") or query_row.get("source_key") or query_row.get("source_id") or query_row.get("doc_id"),
         "dataset": response_row.get("dataset") or query_row.get("dataset"),
         "group": response_row.get("group") or query_row.get("group"),
         "claim_type": claim_type,
         "query_type": query_row.get("query_type"),
+        "variant_id": query_row.get("variant_id") or response_row.get("variant_id") or "full_pvs",
         "entity_type": query_row.get("entity_type") or response_row.get("entity_type"),
         "expected_entity": original,
         "counterfactual_entity": counterfactual,
@@ -244,7 +314,7 @@ def parse_stance_files(
     dataset: str,
     queries_path: str | Path,
     rag_responses_path: str | Path,
-    llm_responses_path: str | Path,
+    llm_responses_path: str | Path | None,
     output_path: str | Path,
     resume: bool = True,
     force: bool = False,
@@ -258,7 +328,7 @@ def parse_stance_files(
         dataset:             数据集名。
         queries_path:        查询文件,用来按 query_id 找到每条回答对应的查询。
         rag_responses_path:  RAG 模式回答文件。
-        llm_responses_path:  LLM-only 模式回答文件。
+        llm_responses_path:  LLM-only 模式回答文件；为 None 时只解析 RAG。
         output_path:         立场记录的输出路径(并派生 manifest)。
         resume:              断点续跑:结果已存在则跳过。
         force:               强制重跑。
@@ -273,19 +343,48 @@ def parse_stance_files(
         return {"dataset": dataset, "output_path": str(output), "skipped_existing": True}
 
     # 把查询读成"query_id → 查询行"的字典,便于快速配对。
-    queries = {row["query_id"]: row for row in read_jsonl(queries_path)}
+    query_rows = list(read_jsonl(queries_path))
+    queries = {str(row["query_id"]): row for row in query_rows}
     rows: list[dict[str, Any]] = []
-    # 依次处理 RAG 和 LLM-only 两个回答文件。
-    for path in [rag_responses_path, llm_responses_path]:
-        for response_row in tqdm(read_jsonl(path), desc=f"parse stance {Path(path).name}", unit="resp"):
-            # 用 query_id 找到这条回答对应的查询;找不到就跳过(数据不完整)。
-            query_row = queries.get(response_row.get("query_id"))
-            if not query_row:
+    integrity: dict[str, Any] = {}
+    # main canonical run 显式传 None，只解析 RAG；旧调用仍可同时解析两套回答。
+    response_sources: list[tuple[str, str | Path]] = [("rag", rag_responses_path)]
+    if llm_responses_path is not None:
+        response_sources.append(("llm_only", llm_responses_path))
+    for mode, path in response_sources:
+        response_path = Path(path)
+        raw = list(read_jsonl(response_path)) if response_path.exists() else []
+        compacted, stats = compact_response_rows(raw)
+        valid_ids: set[str] = set()
+        unknown_query_ids = 0
+        for response_row in tqdm(compacted, desc=f"parse stance {Path(path).name}", unit="resp"):
+            if not response_is_success(response_row):
                 continue
+            # 用 query_id 找到这条回答对应的查询;找不到就跳过(数据不完整)。
+            query_id = str(response_row.get("query_id") or "")
+            query_row = queries.get(query_id)
+            if not query_row:
+                unknown_query_ids += 1
+                continue
+            valid_ids.add(query_id)
             rows.append(parse_stance_response(response_row, query_row))
+        expected = set(queries)
+        integrity[mode] = {
+            **stats,
+            "parsed": len(valid_ids),
+            "missing": len(expected - valid_ids),
+            "unknown_query_ids": unknown_query_ids,
+        }
 
     write_jsonl(rows, output)
-    manifest = {"dataset": dataset, "output_path": str(output), "parsed_responses": len(rows)}
+    manifest = {
+        "dataset": dataset,
+        "output_path": str(output),
+        "planned_queries": len(queries),
+        "query_duplicates": len(query_rows) - len(queries),
+        "parsed_responses": len(rows),
+        "integrity": integrity,
+    }
     write_json(manifest, manifest_path)
     LOGGER.info("Parsed stance rows: %s", len(rows))
     return manifest

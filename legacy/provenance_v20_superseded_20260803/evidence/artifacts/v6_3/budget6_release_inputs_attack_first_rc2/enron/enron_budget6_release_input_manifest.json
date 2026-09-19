@@ -1,0 +1,55 @@
+{
+  "dataset": "enron",
+  "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+  "scan_plan_sha256": "27aee760f30395092fd8e864e8eb0db4580af3d12f0cd532c91da161f9af2bfe",
+  "scan_checkpoint_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_budget6_release_checkpoint.json",
+  "scan_checkpoint_sha256": "b891654ada758fb4468f6d3e343212206620cecd13a992cf71a020cd695b8114",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "semantic_resolver_protocol": "local_claim_pair_v6_3_precision_cascade",
+  "semantic_schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "gliner_inference_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "status": "complete",
+  "candidate_hashes": {
+    "facts": "325d8da6cd3e78fac80847a36c995f7be29ae719b967ed61d03056dc3dd00a8c",
+    "claims": "004bb3d89e90117207494a571d2ec9221f840a381def461eacb0bbb731127ba1",
+    "queries": "a48a33ac6c600349ec5a2fb505bc160aebe7dc6da0ffd383abb08c9d74a68f84",
+    "stealth": "a48a33ac6c600349ec5a2fb505bc160aebe7dc6da0ffd383abb08c9d74a68f84"
+  },
+  "claim_eligibility_sha256": "a5ffe8073e13c9c3559dfe66b16dfb34e01e3235649a0ad37df7e3f1f71b9efa",
+  "query_eligibility_sha256": "1d25d00a858b633ad00992c46599ec5426e4fb73926054207dd1c8e7118e8f5c",
+  "stealth_manifest_sha256": "c4333bf32fa00de7a05875de2ef85968de718ba2dc9bbd3b7be2654b33b41716",
+  "finalization_sha256": "e1c397facf3b20644be2b9e71a9e269022576a960cd3c92e1f66dc8eba7a9f19",
+  "whitelist_hash": "7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327",
+  "fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61",
+  "upstream_provenance": [
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_selected_claims_rc2.jsonl",
+      "sha256": "bf607a0278f1a4648a501d78f95709783fd83dd4b102033a3bf4ece138915d96"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_selected_queries_rc2.jsonl",
+      "sha256": "998dde172964eaafeb27fe92438dc21cdb53913b0efefc1c2bcb89b17337ef56"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_eligible_source_keys_rc2.json",
+      "sha256": "d0e90001beef008ff16902321d5c8f1064033abcd02072e2f6dcbd6b28219c06"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_attack_first_rc2_manifest.json",
+      "sha256": "f30489cf84e64cf776edbde635801c81f43333c90d112b32607084b88b3b7cba"
+    }
+  ],
+  "fact_provenance": [
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\enron\\enron_selected_facts_rc2.jsonl",
+      "sha256": "95fe81f6e6e031941472b92462d6127e849bb33186cac45f8c61459be6de7316"
+    }
+  ]
+}

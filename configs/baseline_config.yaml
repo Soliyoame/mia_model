@@ -2,19 +2,63 @@
 
 logging:
   level: INFO
-  file: datasets/logs/baselines.log
+  file: artifacts/v20/logs/baselines.log
 
 paths:
-  scores_dir: outputs/scores
-  baselines_dir: outputs/baselines
+  scores_dir: artifacts/v20/scores
+  baselines_dir: artifacts/v20/baselines
+  # PCV 分数按 audit_id 标识、baseline 按 doc_id;并表需经 facts 文件的 audit_id→doc_id 映射桥对齐。
+  facts_dir: outputs/facts
+  queries_dir: artifacts/v6_3/stealth_filtered_queries
+  splits_dir: artifacts/v6_3/splits
+  representative_manifest_dir: artifacts/v20/release_controls/representative_chunks
 
 baseline:
-  threshold: 0.5
+  retriever_backend: dense
+  retriever_id: BAAI/bge-base-en-v1.5
+  representative_chunk:
+    enabled: true
+    chunk_size: 128
+    chunk_overlap: 32
+    selection: max_bge_cosine_over_six_frozen_queries
+    tie_break: chunk_id_lexicographic
+    shared_across_methods: true
+  victim_calls_per_source:
+    DCMI: 2
+    IA: 5
+    MBA: 1
+    MEntA: 5
+    RAG-MIA: 1
+    S2MIA: 1
+  menta:
+    protocol_version: menta-source-adapted-v2
+    adaptation: source_level_representative_chunk
+    query_manifest_dir: artifacts/v20/release_controls/menta_inputs
+    queries_per_source: 5
+    query_generation_role: sibling
+    nli:
+      model_id: tasksource/deberta-base-long-nli
+      revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+      snapshot_dir: models/menta/deberta-base-long-nli
+      local_files_only: true
+      device: cuda
+      require_cuda: true
+      batch_size: 16
+      max_length: 1280
+  # v20 formal matrix selects methods for the current single Generator only.
+  formal_method_policy:
+    full_generator: meta/llama-3.1-70b-instruct
+    full_methods: [RAG-MIA, S2MIA, MBA, IA, DCMI, MEntA]
+    extension_methods: []
+
+  # 把分数转成成员/非成员判定时用的阈值(用于固定阈值指标;AUC/Acc@best 不受其影响)。
+  threshold: 0.3
+  # 真实受害查询版 baseline(见 src/baselines/victim_harness.py)。
+  # 纯黑盒:RAG-MIA / S2MIA(s) / MBA / IA / DCMI / MEntA。PCV-MIA 由第 12 步从第 11 步分数自动并入对照表。
   methods:
-    - Direct RAG-MIA
-    - S2MIA
-    - MBA
-    - RAG-leaks / difficulty-calibrated similarity baseline
-    - E-MIA / exam-style QA baseline
-    - IA / Interrogation Attack
-    - PCV-MIA new version
+    - RAG-MIA   # 直接询问 yes/no(地板线),1 次 victim/目标
+    - S2MIA     # 前半段→续写→语义余弦(仅 s,纯黑盒),1 次/目标
+    - MBA       # 随机 mask→填空→填对率,1 次/目标
+    - IA        # 审问式:多 yes/no 问题一致率(需 attacker LLM,≈top_k 次/目标,贵)
+    - DCMI      # 差分校准:base−扰动(需 attacker LLM),2 次/目标
+    - MEntA     # 冻结 summary+5 个自然问题→本地 NLI 蕴含分,5 次 victim/目标

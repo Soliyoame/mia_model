@@ -1,0 +1,72 @@
+{
+  "created_at": "2026-07-28T04:58:45.952350+00:00",
+  "promotion_protocol": "formal_fixed_pair_promotion_v2",
+  "dataset": "enron",
+  "benchmark_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\benchmarks\\enron_attack_benchmark.jsonl",
+  "benchmark_hash": "d88261e3ee51f35a92a7a4369431c5d27e7ff9eb56b4c8db45a8f431a6da7d9e",
+  "benchmark_manifest_hash": "097d3ad972d94c9a9e487bf1f70d17b3832f0daca38835c734dfc7d54c72a48d",
+  "query_eligibility_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_query_eligible_sources.json",
+  "query_eligibility_hash": "1d25d00a858b633ad00992c46599ec5426e4fb73926054207dd1c8e7118e8f5c",
+  "query_eligibility_protocol": "pre_split_local_query_eligibility_v6_3_attack_first_rc2_budget6_release_v1_unique_query_text",
+  "query_eligibility_whitelist_hash": "7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327",
+  "upstream_fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61",
+  "formal_fixed_budget_plan_hash": "a1cc3e9ac2fba469dbcc122ae4a516674bea2443df2d9eb57711cfaecc71cc61",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "source_counts_by_group": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "pair_counts_by_group": {
+    "True_Non_Member": 1500,
+    "KB_Member": 1500,
+    "Reserve": 750
+  },
+  "query_counts_by_group": {
+    "True_Non_Member": 3000,
+    "Reserve": 1500,
+    "KB_Member": 3000
+  },
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\facts\\enron_facts.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\facts\\enron_facts.errors.jsonl",
+  "facts": 3750,
+  "facts_by_group": {
+    "Reserve": 750,
+    "KB_Member": 1500,
+    "True_Non_Member": 1500
+  },
+  "facts_by_entity_type": {
+    "PERSON": 413,
+    "NUMERIC_VALUE": 570,
+    "PRODUCT": 254,
+    "MONEY": 529,
+    "PERCENT": 303,
+    "PHONE": 103,
+    "LOCATION": 192,
+    "DATE": 343,
+    "SECTION_ID": 7,
+    "TIME": 103,
+    "ORG": 686,
+    "MEDICAL_VALUE": 175,
+    "IDENTIFIER": 23,
+    "DURATION": 39,
+    "EMAIL": 3,
+    "URL": 4,
+    "PROJECT_NAME": 3
+  },
+  "facts_by_tier": {
+    "primary": 3405,
+    "fallback": 345
+  },
+  "promotion_scope": "facts_referenced_by_frozen_formal_pair_plan",
+  "output_hash": "d88261e3ee51f35a92a7a4369431c5d27e7ff9eb56b4c8db45a8f431a6da7d9e",
+  "error_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "post_regroup_output_hash": "d88261e3ee51f35a92a7a4369431c5d27e7ff9eb56b4c8db45a8f431a6da7d9e",
+  "post_regroup_at": "2026-07-31T02:51:13.502303+00:00",
+  "near_duplicate_regrouping_hash": "e88690d1a285ec22fcbfac6e605652d2c3c769fd742dc3795c42bca3d7a88102",
+  "split_manifest_hash": "4b62721b54274ac510667ef21f8780e34d2783b74c1d419a103ba3629af8fd22"
+}

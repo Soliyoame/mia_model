@@ -1,0 +1,35 @@
+logging:
+  level: INFO
+  file: artifacts/v21/formal_entity_policy_r2/logs/enron_promotion.log
+paths:
+  processed_dir: artifacts/v21/enron_full/processed
+  splits_dir: artifacts/v21/formal_entity_policy_r2/splits
+  benchmark_dir: artifacts/v21/formal_entity_policy_r2/benchmarks
+dataset_paths:
+  enron:
+    splits_dir: artifacts/v21/formal_entity_policy_r2/splits/enron
+preprocess:
+  min_chars: 300
+  max_chars: 2000
+  target_chars: 1000
+  require_entity: true
+  require_numeric: false
+  min_entities: 2
+split:
+  seed: 42
+  source_exclusive: true
+  scale: formal
+  formal:
+    target_unit: sources
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Spoof_Seed: 0
+    Reserve: 250
+    per_source_cap: null
+datasets:
+  enron:
+    input_path: artifacts/v21/enron_full/sampling/enron_screening_pool_150000.jsonl
+    limit: null
+    source_limit: null
+    source_eligibility_path: artifacts/v21/entity_policy_r2/enron_capacity_promotion/enron_capacity_qualified_primary_manifest.json
+    membership_unit: complete_email

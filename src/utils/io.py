@@ -225,6 +225,15 @@ def write_jsonl(records: Iterable[dict[str, Any]], path: str | Path, append: boo
     return count
 
 
+def write_jsonl_atomic(records: Iterable[dict[str, Any]], path: str | Path) -> int:
+    """原子覆盖 JSONL：完整写入临时文件后再替换目标文件。"""
+    p = ensure_parent(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    count = write_jsonl(records, tmp, append=False)
+    tmp.replace(p)
+    return count
+
+
 def append_jsonl_record(record: dict[str, Any], path: str | Path) -> None:
     """向 JSONL 文件追加一条记录(常用于断点续跑时逐条落盘)。"""
     p = ensure_parent(path)

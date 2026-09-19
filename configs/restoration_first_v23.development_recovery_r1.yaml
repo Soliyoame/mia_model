@@ -1,0 +1,36 @@
+kind: pcv_v23_development_pilot_recovery_contract
+recovery_revision: pcv-restoration-first-v23-design-r6-execution-e1-development-recovery-r1
+base_execution_revision: pcv-restoration-first-v23-design-r6-execution-e1
+scope: zero_source_result_operational_failure_before_canonical_development_output
+allowed_datasets: [edgar, enron, pubmed]
+
+reservation_prerequisite:
+  validation_mode: latest_prior_passed_revision_development_only
+  active_revision_reservation_must_be_absent: true
+  current_ledger_tip_must_equal_prior_reservation_final_tip: true
+  development_batch_identity_must_remain_exact: true
+  fresh_audit_reserve_reuse_authorized: false
+
+partial_attempt_recovery:
+  prior_protocol_revision_must_differ: true
+  prior_authorization_must_validate: true
+  prior_budget_journal_must_validate: true
+  minimum_prior_budget_charge_count: 1
+  prior_source_result_count: 0
+  prior_checkpoint_must_be_absent: true
+  canonical_selected_pairs_must_be_absent: true
+  canonical_pilot_manifest_must_be_absent: true
+  unexpected_legacy_entries_rejected: true
+
+artifact_layout:
+  source_results_path_pattern: artifacts/v23/selection/development/<dataset>/attempts/<attempt_id>/source_results
+  canonical_selected_pairs_path_pattern: artifacts/v23/selection/development/<dataset>/selected_pairs.jsonl
+  canonical_pilot_manifest_path_pattern: artifacts/v23/selection/development/<dataset>/pilot_manifest.json
+  recovery_attestation_path_pattern: artifacts/v23/governance/development_pilot_recoveries/<authorization_id>.json
+
+invariants:
+  old_authorization_budget_and_partial_artifacts_immutable: true
+  recovery_attestation_required_before_new_source_visibility: true
+  membership_victim_llm_only_retriever_auc_visible: false
+  external_calls_allowed: false
+  failed_or_nonempty_prior_attempt_auto_recovery: false

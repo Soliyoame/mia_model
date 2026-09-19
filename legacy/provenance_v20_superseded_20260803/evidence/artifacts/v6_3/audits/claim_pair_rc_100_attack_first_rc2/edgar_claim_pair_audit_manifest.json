@@ -1,0 +1,43 @@
+{
+  "dataset": "edgar",
+  "seed": 42,
+  "sample_size": 100,
+  "source_count": 100,
+  "strata": {
+    "Eligibility_Candidate::DATE": 10,
+    "Eligibility_Candidate::IDENTIFIER": 5,
+    "Eligibility_Candidate::LOCATION": 10,
+    "Eligibility_Candidate::MEDICAL_VALUE": 10,
+    "Eligibility_Candidate::MONEY": 10,
+    "Eligibility_Candidate::NUMERIC_VALUE": 9,
+    "Eligibility_Candidate::ORG": 9,
+    "Eligibility_Candidate::PERCENT": 9,
+    "Eligibility_Candidate::PERSON": 9,
+    "Eligibility_Candidate::PHONE": 1,
+    "Eligibility_Candidate::PRODUCT": 9,
+    "Eligibility_Candidate::SECTION_ID": 9
+  },
+  "sample_whitelist_hash": "cf3a3740f847d8aef876c16d4827e962a95ecae58eda19f2246e6e78755598aa",
+  "annotator_a_shuffle_seed": 1043,
+  "annotator_b_shuffle_seed": 2044,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\edgar\\edgar_selected_claims_rc2.jsonl",
+  "claims_hash": "5a6ead07500fb944dfe28cc7ed400edd9ed6302764959dcf45e759931c14c967",
+  "prior_audit_exclusions": [],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 0,
+    "excluded_source_count": 0,
+    "excluded_audit_id_count": 0,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 3750,
+    "candidate_rows_removed": 0
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\edgar_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\edgar_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "fe8135fbf877eee88660bd8cba20586217a992ecb8cfa9f89eb5d495b4a56317",
+  "annotator_b_hash": "c1b9144e3db6e02d7da9a225b8138e643e7b1d76610fce7a5b2815b0eb72b388"
+}

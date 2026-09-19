@@ -1,0 +1,160 @@
+{
+  "dataset": "enron",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\enron.jsonl",
+  "error_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\processed\\enron.errors.jsonl",
+  "membership_unit": "complete_email",
+  "cleaner_version": "enron_cleaner_v2_preserve_forwarded_body",
+  "chunk_limit": 30000,
+  "source_limit": null,
+  "raw_unique_source_count": 52082,
+  "unique_source_count": 14523,
+  "raw_sample_count": 52082,
+  "cleaned_sample_count": 30000,
+  "avg_length": 830.4448333333333,
+  "entity_density_distribution": {
+    "min": 0.003466,
+    "max": 1.6,
+    "avg": 0.1137434058
+  },
+  "examples": [
+    {
+      "doc_id": "enron_000000",
+      "source_id": "emails_00000009",
+      "text_preview": "> As discussed during our phone conversation, In a Parallon 75 microturbine\n> power generation deal for a national accounts customer, I am developing a\n> proposal to sell power to customer at fixed or collar/floor price. To do\n> so I need a corresponding term gas price for same. Microturbine is an\n>",
+      "metadata": {
+        "length": 1776,
+        "has_money": false,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": true,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 1,
+          "email": 0,
+          "medical_value": 1,
+          "contract_term": 0,
+          "numeric": 31
+        },
+        "entity_density": 0.006329
+      }
+    },
+    {
+      "doc_id": "enron_000001",
+      "source_id": "emails_00000012",
+      "text_preview": "Below is the issues & to do list as we go forward with documenting the\nrequirements for consolidated physical/financial positions and transport\ntrade capture. What we need to focus on is the first bullet in Allan's list;\nthe need for a single set of requirements. Although the meeting with Keith,\non ",
+      "metadata": {
+        "length": 1184,
+        "has_money": false,
+        "has_date": false,
+        "has_org": false,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 0,
+          "percent": 0,
+          "org": 0,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 2
+        },
+        "entity_density": 0.010256
+      }
+    },
+    {
+      "doc_id": "enron_000002",
+      "source_id": "emails_00000016",
+      "text_preview": "04:23 PM ---------------------------\n\nEnron North America Corp.\n\nFrom: Airam Arteaga 10/04/2000 12:23 PM\n\nNeal/HOU/ECT@ECT, John Arnold/HOU/ECT@ECT, Grant Masson/HOU/ECT@ECT, Ted\n\nMurphy/HOU/ECT@ECT, Vladimir Gorny/HOU/ECT@ECT, Frank Hayden/Corp/Enron@Enron\n\nHarder/Corp/Enron@Enron, Kimberly Brown/H",
+      "metadata": {
+        "length": 616,
+        "has_money": false,
+        "has_date": true,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 0,
+          "date": 1,
+          "percent": 0,
+          "org": 1,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 12
+        },
+        "entity_density": 0.029412
+      }
+    },
+    {
+      "doc_id": "enron_000003",
+      "source_id": "emails_00000018",
+      "text_preview": "04:30 PM ---------------------------\n\n\"George Richards\" on 10/03/2000 06:35:56 AM\n\nPlease respond to\n\nWestgate\n\nEnclosed are demographics on the Westgate site from Investor's Alliance.\n\nInvestor's Alliance says that these demographics are similar to the package\non San Marcos that you received earlie",
+      "metadata": {
+        "length": 738,
+        "has_money": true,
+        "has_date": true,
+        "has_org": false,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 2,
+        "entity_counts": {
+          "money": 1,
+          "date": 1,
+          "percent": 0,
+          "org": 0,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 10
+        },
+        "entity_density": 0.017094
+      }
+    },
+    {
+      "doc_id": "enron_000004",
+      "source_id": "emails_00000018",
+      "text_preview": "Several new studies we have looked at show that the rents for our duplexes\nand for these new units are going to be significantly higher, roughly $1.25\nper square foot if leased for the entire unit on a 12-month lease and\n$1.30-$1.40 psf if leased on a 12-month term, but by individual room. This\nprop",
+      "metadata": {
+        "length": 752,
+        "has_money": true,
+        "has_date": false,
+        "has_org": true,
+        "has_percent": false,
+        "has_medical_value": false,
+        "has_contract_term": false,
+        "entity_count": 5,
+        "entity_counts": {
+          "money": 4,
+          "date": 0,
+          "percent": 0,
+          "org": 1,
+          "email": 0,
+          "medical_value": 0,
+          "contract_term": 0,
+          "numeric": 6
+        },
+        "entity_density": 0.037313
+      }
+    }
+  ],
+  "raw_records": 52082,
+  "no_valid_chunk": 13770,
+  "fragments": 92613,
+  "no_entity": 12128,
+  "kept": 30000,
+  "too_few_entities": 20724,
+  "duplicate": 29761,
+  "template_like": 485,
+  "empty": 43
+}

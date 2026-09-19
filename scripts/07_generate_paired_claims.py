@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "pcv_attack_config.yaml"))
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--log-file", default=None)
     return parser.parse_args()
 
 
@@ -51,15 +52,24 @@ def main() -> int:
     args = parse_args()
     config = load_yaml(args.config)
     set_seed_from_config(config)
-    logger = setup_logging("pcv_mia", log_file=resolve_path(config["logging"]["file"]), level=config["logging"].get("level", "INFO"))
+    logger = setup_logging(
+        "pcv_mia",
+        log_file=resolve_path(args.log_file or config["logging"]["file"]),
+        level=config["logging"].get("level", "INFO"),
+    )
     claim_cfg = config.get("paired_claims", {})
     out_dir = ensure_dir(resolve_path(config["paths"]["paired_claims_dir"]))
     manifest = generate_paired_claims_file(
         facts_path=resolve_path(config["paths"]["facts_dir"]) / f"{args.dataset}_facts.jsonl",
         output_path=out_dir / f"{args.dataset}_paired_claims.jsonl",
+        benchmark_path=resolve_path(config["paths"]["benchmark_dir"]) / f"{args.dataset}_attack_benchmark.jsonl",
         # perturbation_levels 控制反事实断言的改写强度(如 light=轻度替换关键信息)。
         perturbation_levels=claim_cfg.get("perturbation_levels", ["light"]),
         max_pairs_per_fact=int(claim_cfg.get("max_pairs_per_fact", 1)),
+        semantic_resolver_config=dict(
+            config.get("fact_extraction", {}).get("semantic_resolver", {})
+        ),
+        dataset=args.dataset,
         resume=not args.no_resume,
         force=args.force,
     )

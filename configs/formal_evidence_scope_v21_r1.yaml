@@ -1,0 +1,18 @@
+formal_evidence_scope_version: pcv_formal_evidence_scope_v21_r1
+
+formal_semantic_entity_types:
+  - CONTRACT_TERM
+  - LOCATION
+  - ORG
+  - PERSON
+  - PRODUCT
+
+diagnostic_only_semantic_entity_types:
+  - PROJECT_NAME
+
+minimum_global_valid_pairs: 90
+
+audit:
+  accepted_per_type: 90
+  hard_negatives_per_type: 10
+  user_review_sample_size: 60

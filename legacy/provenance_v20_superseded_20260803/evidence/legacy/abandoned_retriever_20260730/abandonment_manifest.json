@@ -1,0 +1,28 @@
+{
+  "status": "superseded",
+  "canonical_release_eligible": false,
+  "abandonment_id": "abandoned_retriever_20260730",
+  "observed_stopped_at": "2026-07-30T15:51:24.8221772+08:00",
+  "stop_reason": "User-directed retirement of the MiniLM RAG protocol before the pcv-mia-v20 BGE migration.",
+  "process_state_when_archived": "No python or pythonw process was running; the response file was no longer changing.",
+  "dataset": "enron",
+  "generator_family": "gemini",
+  "concrete_model": "gemini-2.0-flash",
+  "retriever_backend": "dense",
+  "retriever_id": "sentence-transformers/all-MiniLM-L6-v2",
+  "response_rows": 3300,
+  "valid_response_rows": 0,
+  "api_key_error_rows": 3300,
+  "response_sha256": "0a6252cf55ed917e0f08381ca9e88ad242e250e2d293f2fcf4d78ac220a1ffd8",
+  "query_path_at_run_time": "artifacts/v6_3/stealth_filtered_queries/enron_paired_queries.jsonl",
+  "query_hash": "aba6937e4b3d5ea18b89210a63461b3840f231ab17acf6a7959c6830b1163342",
+  "benchmark_hash": "b65cbb6bed9651c821ab0a9b85b75d449ed4f3297a558041f23a481de5286b19",
+  "index_hash": "4d432eda0c83d48e3bcaf5da50ebcc1242f5291d2e759dcffadafde3d0ce6d44",
+  "index_manifest_sha256": "fc6704e9a733bd8526944e385c9d3218c82de3ead0d504ad99242e82dd2053ac",
+  "code_commit": "7b05257fe1b770491c12430e123cc9a1cd266689",
+  "archived_paths": {
+    "index": "legacy/abandoned_retriever_20260730/indexes/enron/dense",
+    "responses": "legacy/abandoned_retriever_20260730/rag_responses/enron/gemini-2.0-flash"
+  },
+  "mixing_policy": "Do not resume, merge, score, report, or release these artifacts as part of any pcv-mia-v20 suite."
+}

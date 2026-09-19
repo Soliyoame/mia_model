@@ -1,0 +1,211 @@
+protocol_version: pcv-mia-v24
+method_version: pcv-query-local-counterfactual-reconstruction
+specification_version: pcv-restoration-first-v24-pre-split-eligibility-r1
+status: frozen_nfcorpus_gemma_dense_ready
+selection_seed: 42
+
+# 03号入口复用这些参数，仅构建已导出的 KB_Member 全文索引。
+seed: 42
+logging:
+  level: INFO
+  file: artifacts/v24/logs/reconciled_20260919_index.log
+paths:
+  splits_dir: artifacts/v24/index_inputs/reconciled_20260919
+  indexes_dir: artifacts/v24/indexes/reconciled_20260919
+embedding:
+  model: BAAI/bge-base-en-v1.5
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  backend: sentence_transformers
+  local_files_only: true
+  dim: 768
+  query_instruction: "Represent this sentence for searching relevant passages: "
+chunking:
+  unit: tokens
+  tokenizer_model: BAAI/bge-base-en-v1.5
+  tokenizer_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  tokenizer_local_files_only: true
+  chunk_size: 128
+  chunk_overlap: 32
+retrieval:
+  backend: dense
+
+llm:
+  profile: luna_query_generator
+  timeout: 120
+  max_tokens: 2048
+  retry_until_success: true
+
+semantic_similarity:
+  kind: sentence_transformers_cosine
+  model: BAAI/bge-base-en-v1.5
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  backend: auto
+  local_files_only: true
+  query_instruction: ""
+
+scoring:
+  kind: stance_semantic_restoration
+  support_mapping: {supported: 1.0, contradicted: 0.0, insufficient: 0.0}
+  pair_formula: "S+ * R- - A-"
+  pairs_per_source: 3
+  source_aggregation: mean
+  diagnostic_aggregation: median
+  restoration:
+    kind: normalized_exact_then_bidirectional_nli_min
+    value_template: "The corrected value is {value}."
+    nli:
+      model_id: tasksource/deberta-base-long-nli
+      revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+      snapshot_dir: models/menta/deberta-base-long-nli
+      local_files_only: true
+      device: cuda
+      require_cuda: true
+      batch_size: 16
+      max_length: 1280
+
+development:
+  canary_input_path: null
+  canary_pair_count: 30
+  canary_zero_candidate_policy: skip_and_replace_in_frozen_order
+  allow_fallback: false
+  capacity_sample_sources: 30
+  luna_only_direct:
+    adapter: luna_direct_paired_candidates
+    max_candidates_per_source: 8
+    max_counters_per_slot: 3
+    pairs_per_source: 3
+    smoke_max_sources: 8
+  luna_only_ab:
+    stage_a_max_facts: 8
+    screening_sources_per_dataset: 10
+    repeatability_runs: 2
+    generalization_source_count: 90
+    promotion_thresholds: null
+
+datasets:
+  - nfcorpus
+  - scidocs
+  - trec-covid
+
+source_pool:
+  manifest_template: artifacts/v24/source_pools/{dataset}/source_pool_manifest.json
+  order_template: artifacts/v24/source_pools/{dataset}/source_order.json
+  database_template: artifacts/v24/source_pools/{dataset}/source_pool.sqlite3
+  minimum_source_count: 2250
+  membership_blind: true
+  require_manifest_and_order_hash: true
+
+candidate_fact_adapter:
+  kind: gliner2_entity_value_span
+  model: fastino/gliner2-base-v1
+  model_revision: f5b2ecedebe4381b088c1cf276f5bf72a52cac54
+  model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+  local_path: models/v6_3/gliner2-base-v1
+  backend: gliner2
+  require_gpu: true
+  device: cuda
+  use_fp16: true
+  seed: 42
+  concurrency: 1
+  include_legacy_type_or_counterfactual_fields: false
+  entity_span:
+    preferred_max_words: 6
+    hard_max_words: 12
+  entity_ranking:
+    enabled: true
+    policy: surface_tiers_claim_round_robin_unique_entity_v2
+  development_identity_patterns:
+    - artifacts/v24/development/**/luna_only_ab_inputs.json
+    - artifacts/v24/development/**/luna_only_ab_results.jsonl
+    - artifacts/v24/development/**/reference_facts.jsonl
+    - artifacts/v*/development/**/canary_inputs.jsonl
+    - artifacts/v*/development/**/canary_results.jsonl
+    - artifacts/v24/development/**/pool_manifest.json
+    - artifacts/v24/development/**/source_records.jsonl
+    - artifacts/v24/development/**/validation_manifest.json
+    - artifacts/v24/development/**/preflight_results.jsonl
+    - artifacts/v24/development/**/*.luna_sample.checkpoint.jsonl
+    - artifacts/v24/development/**/*.luna_sample.json
+    - artifacts/v24/development/**/*.offline_estimate.json
+    - artifacts/v24/source_pools/*/development_exclusions.json
+    - artifacts/v23/governance/revision_reservations/**/plans/development/*.json
+    - artifacts/v22/pilot/**/source_results.jsonl
+    - artifacts/v22/calibration*/private/calibration_key.jsonl
+  legacy_development_prefix_manifests:
+    - artifacts/v24/development/capacity_check_r1/{dataset}.json
+
+eligibility:
+  target_sources: 2250
+  minimum_pairs_per_source: 3
+  candidate_packages_per_fact: 3
+  true_grounding_threshold: 0.80
+  query_similarity_threshold: 0.80
+  semantic_correction_retries: 1
+  max_candidate_facts_per_source: 8
+  ranking_tie_tolerance: 0.01
+  correction_eligibility_required: true
+  nli_contradiction_required: false
+
+split:
+  counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+
+formal:
+  queries_per_source: 6
+  victim_queries_per_dataset: 12000
+  reserve_in_main_victim_budget: false
+  fallback_pair_rate_maximum: 0.01
+  # 本配置与main合并提交共同冻结；服务器沿用本地Gemma的user前缀格式。
+  runtime:
+    selected_pairs_path: artifacts/v24/eligibility/reconciled_20260919/nfcorpus/selected_pairs.jsonl
+    split_manifest_path: artifacts/v24/eligibility/reconciled_20260919/nfcorpus/split_manifest.json
+    output_dir: artifacts/v24/formal/reconciled_20260919/nfcorpus/gemma/dense
+    llm_profiles_path: configs/llm_profiles.yaml
+    victim_profile: gemma2_2b_server
+    generator_family: gemma
+    concrete_model: gemma-2-2b-it-bf16
+    generator_version: gemma-2-2b-it-bf16  # 用户确认的部署标识，非HF权重commit。
+    retrieval:
+      backend: dense
+      retriever_id: BAAI/bge-base-en-v1.5
+      index_dir: artifacts/v24/indexes/reconciled_20260919/nfcorpus/bge-base-en-v1.5
+      index_manifest_sha256: 3516bef6c60a27a4957d1569233799725678d13707fbbcbfa326534b3bc72258
+      top_k: 5
+    generation:
+      temperature: 0.0
+      max_tokens: 512
+      timeout: 60
+      retries: 2
+      retry_backoff_base: 30
+      retry_backoff_max: 300
+      retry_until_success: true
+      retry_cooldown_seconds: 300
+      request_interval_seconds: 20
+      max_workers: 1
+      requests_per_minute: 0
+      checkpoint_every: 200
+
+stealth_diagnostics:
+  hard_gate: false
+  query_source_5gram_containment_warning: 0.35
+  longest_literal_copy_length_warning: 8
+  duplicate_query_rate_warning: 0.01
+  dominant_opening_4gram_rate_warning: 0.15
+
+coverage:
+  report_rejection_reason_distribution: true
+  report_screened_and_eligible_sources: true
+
+fallback:
+  template: "Is it correct that {PROPOSITION}?"
+  allowed_stage: pre_formal_freeze_only
+
+governance:
+  external_calls_performed: 0
+  membership_visible_during_screening: false
+  retriever_visible_during_screening: false
+  victim_visible_during_screening: false
+  auc_visible_during_screening: false
+  authorization_artifact_required: false

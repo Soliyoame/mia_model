@@ -1,0 +1,178 @@
+{
+  "dataset": "enron",
+  "num_kb_member": 2611,
+  "num_true_non_member": 2539,
+  "num_spoofed_non_member": 0,
+  "num_reserve": 1284,
+  "source_counts": {
+    "KB_Member": 500,
+    "True_Non_Member": 500,
+    "Reserve": 250
+  },
+  "include_spoofed_nonmember": false,
+  "include_reserve": true,
+  "spoofed_non_member_switch": "PCV_ENABLE_SPOOFED_NONMEMBER",
+  "group_roles": {
+    "KB_Member": "positive member class",
+    "True_Non_Member": "primary negative class",
+    "Spoofed_Non_Member": "experimental control group only",
+    "Reserve": "calibration group only (excluded from evaluation metrics)"
+  },
+  "benchmark_hash": "a25e237f88d8e4098ea4d001894ac0f74dc40e2bbf492133d5836481315fe13b",
+  "output_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\benchmarks\\enron_attack_benchmark.jsonl",
+  "input_hashes": {
+    "KB_Member": "bab805ede2b11ea9140ab7c7a284d5cc74fdffd70970b03decf63f446c1f5e4f",
+    "True_Non_Member": "e63e056a831f7cd7bdf285c823b525d01c31b8aee87e5e00a93bce1ea7e634e4",
+    "Reserve": "d2c9b9429ceca6503b73c11ab37dafd7046095594b12b5f2b2ba75ef76a1b622"
+  },
+  "config_hash": "04fda5ea04d21c02ff6b5c1c8d0118f941e70fa88568416df9d3e6b63180da6b",
+  "config_snapshot": {
+    "logging": {
+      "level": "INFO",
+      "file": "artifacts/v6_3/logs/preprocess.log"
+    },
+    "paths": {
+      "processed_dir": "artifacts/v6_3/processed",
+      "splits_dir": "artifacts/v6_3/splits",
+      "benchmark_dir": "artifacts/v6_3/benchmarks"
+    },
+    "dataset_paths": {
+      "edgar": {
+        "splits_dir": "artifacts/v6_3/splits/edgar"
+      },
+      "enron": {
+        "splits_dir": "artifacts/v6_3/splits/enron"
+      },
+      "pubmed": {
+        "splits_dir": "artifacts/v6_3/splits/pubmed"
+      }
+    },
+    "preprocess": {
+      "min_chars": 300,
+      "max_chars": 2000,
+      "target_chars": 1000,
+      "require_entity": true,
+      "require_numeric": false,
+      "min_entities": 2
+    },
+    "split": {
+      "seed": 42,
+      "source_exclusive": true,
+      "scale": "formal",
+      "small": {
+        "target_unit": "records",
+        "KB_Member": 100,
+        "True_Non_Member": 100,
+        "Spoof_Seed": 100,
+        "Reserve": 100,
+        "per_source_cap": 3
+      },
+      "formal": {
+        "target_unit": "sources",
+        "KB_Member": 500,
+        "True_Non_Member": 500,
+        "Spoof_Seed": 0,
+        "Reserve": 250,
+        "per_source_cap": null
+      }
+    },
+    "eligibility_scan": {
+      "protocol": "v6_3_precision_cascade_fixed_double_pool_v3",
+      "release_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+      "selection_seed": 42,
+      "wave_size": 250,
+      "candidate_pool_multiplier": 2,
+      "candidate_pool_target_sources": 2500,
+      "candidate_pool_shortfall_policy": "use_complete_source_universe",
+      "scan_full_candidate_pool": true,
+      "target_query_eligible_sources": 1250,
+      "required_formal_sources": 1250,
+      "max_chunks_per_source": 5,
+      "fallback_chunk_caps": [
+        8,
+        12
+      ],
+      "minimum_valid_claims": 3,
+      "minimum_stealth_pairs": 3,
+      "deduplicate_complete_sources": true
+    },
+    "datasets": {
+      "edgar": {
+        "input_path": "datasets/raw/extracted/edgar/raw.jsonl",
+        "limit": null,
+        "source_limit": 1600,
+        "source_eligibility_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/edgar/edgar_query_eligible_sources.json",
+        "membership_unit": "filing"
+      },
+      "enron": {
+        "input_path": "datasets/raw/extracted/enron",
+        "limit": 30000,
+        "source_eligibility_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/enron/enron_query_eligible_sources.json",
+        "membership_unit": "complete_email"
+      },
+      "pubmed": {
+        "input_path": "datasets/raw/extracted/pmc/raw.jsonl",
+        "limit": 50000,
+        "source_eligibility_path": "artifacts/v6_3/budget6_release_inputs_attack_first_rc2/pubmed/pubmed_query_eligible_sources.json",
+        "membership_unit": "pmcid_article"
+      }
+    }
+  },
+  "split_manifest_hash": "4b62721b54274ac510667ef21f8780e34d2783b74c1d419a103ba3629af8fd22",
+  "split_protocol": {
+    "membership_unit": "complete_email",
+    "split_scale": "formal",
+    "target_unit": "sources",
+    "target_counts": {
+      "KB_Member": 500,
+      "True_Non_Member": 500,
+      "Spoof_Seed": 0,
+      "Reserve": 250
+    },
+    "source_counts": {
+      "KB_Member": 500,
+      "True_Non_Member": 500,
+      "Spoof_Seed": 0,
+      "Reserve": 250
+    },
+    "hash_summary": {
+      "KB_Member": "f8b84456428c6265bf837e2adc0b54044617890bc7a82075a1908d91ec4ea327",
+      "True_Non_Member": "33db5835f34b89a178cd474e9a2ea688283818ce2c2164cf21016d6b9e97765a",
+      "Spoof_Seed": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "Reserve": "0fb8b12a30265eac728855d621ff47be042fcfce0925cffdcaab44b5c764ae09"
+    },
+    "source_exclusive": true,
+    "min_entities_per_source": null,
+    "source_eligibility": {
+      "min_entities_per_source": null,
+      "sources_before": 14523,
+      "sources_eligible": 1250,
+      "sources_excluded": 13273,
+      "claim_whitelist_size": 1250,
+      "sources_after_claim_whitelist": 1250
+    },
+    "claim_eligibility": {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\enron\\enron_query_eligible_sources.json",
+      "manifest_hash": "1d25d00a858b633ad00992c46599ec5426e4fb73926054207dd1c8e7118e8f5c",
+      "protocol": "pre_split_local_query_eligibility_v6_3_attack_first_rc2_budget6_release_v1_unique_query_text",
+      "whitelist_hash": "7705cd27f16d33a33442c8bf82ee6db6fcc65b863ae8b380631ed214d69fa327",
+      "eligible_source_count": 1250,
+      "minimum_valid_claims": 3,
+      "minimum_stealth_pairs": 3,
+      "queries_per_source": 6,
+      "query_text_uniqueness_enforced": true,
+      "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+      "query_types": null,
+      "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+      "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+      "scan_plan_sha256": "27aee760f30395092fd8e864e8eb0db4580af3d12f0cd532c91da161f9af2bfe",
+      "scan_checkpoint_sha256": "b891654ada758fb4468f6d3e343212206620cecd13a992cf71a020cd695b8114",
+      "capacity_status": "passed"
+    },
+    "seed": 42
+  },
+  "created_at": "2026-07-28T04:58:43.599594+00:00",
+  "post_regroup_output_hash": "a25e237f88d8e4098ea4d001894ac0f74dc40e2bbf492133d5836481315fe13b",
+  "post_regroup_at": "2026-07-31T02:51:13.305176+00:00",
+  "near_duplicate_regrouping_hash": "e88690d1a285ec22fcbfac6e605652d2c3c769fd742dc3795c42bca3d7a88102"
+}

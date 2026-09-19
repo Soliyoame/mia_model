@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.llm.factory import build_sibling_client, load_llm_profiles, resolve_llm_profile_name
 from src.rag.embeddings import DEFAULT_EMBEDDING_MODEL
 from src.spoof.generator import generate_spoofed_nonmembers
+from src.utils.dataset_paths import resolve_dataset_dir
 from src.utils.env import env_bool
 from src.utils.io import ensure_dir, load_yaml, resolve_path
 from src.utils.logger import setup_logging
@@ -66,7 +67,7 @@ def main() -> int:
         config_profile=config["spoof"].get("sibling_profile"),
     )
     client, profile = build_sibling_client(profiles, profile_name=profile_name)
-    split_dir = resolve_path(config["paths"]["splits_dir"]) / args.dataset
+    split_dir = resolve_dataset_dir(config, "splits_dir", args.dataset)
     out_dir = ensure_dir(resolve_path(config["paths"]["spoofed_dir"]) / args.dataset)
     manifest = generate_spoofed_nonmembers(
         dataset=args.dataset,

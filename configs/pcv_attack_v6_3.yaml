@@ -1,0 +1,149 @@
+# Isolated precision-cascade configuration for v6.3. Do not promote to canonical until
+# model precision, capacity, RC, release, and integrity gates all pass.
+
+logging:
+  level: INFO
+  file: artifacts/v6_3/logs/pcv_attack.log
+
+llm_profiles_path: configs/llm_profiles.yaml
+
+paths:
+  benchmark_dir: artifacts/v6_3/benchmarks
+  facts_dir: artifacts/v6_3/facts
+  paired_claims_dir: artifacts/v6_3/paired_claims
+  paired_queries_dir: artifacts/v6_3/paired_queries
+  stealth_filtered_queries_dir: artifacts/v6_3/stealth_filtered_queries
+  parsed_stance_dir: artifacts/v6_3/parsed_stance
+  scores_dir: artifacts/v6_3/scores
+
+fact_extraction:
+  entity_type_policy:
+    protocol: pcv_entity_policy_v21_r1
+    config_path: configs/entity_type_policy_v21_r1.yaml
+    sha256: e867112519b5ee952b740ba58f3ffec046c5a0a710297dc06d8c677cc670b00e
+  max_facts_per_doc: 4
+  max_entities_per_doc: 8
+  max_samples: null
+  ner:
+    enabled: false
+    backend: spacy
+    model: null
+    local_files_only: true
+    confidence_threshold: 0.75
+    batch_size: 32
+  semantic_resolver:
+    enabled: true
+    protocol: local_claim_pair_v6_3_precision_cascade
+    execution_mode: precision_cascade
+    primary_model_role: gliner2_large
+    biomedical_candidate_only: true
+    biomedical_window_chars: 512
+    model_lock_path: configs/semantic_entity_models_v6_3.lock.yaml
+    local_files_only: true
+    device: cuda
+    spacy_device: cpu
+    biomedical_device: cuda
+    use_fp16: true
+    batch_size: 8
+    # Phase 7I 206-row per-entity-type calibration passed; keep the complete
+    # decision surface and summary hash-bound.
+    thresholds_frozen: true
+    thresholds_sha256: d180bdb02d5bcb5748cfac64b955ecc307b37022671c0200a35a50d0394edfa8
+    calibration_summary_path: artifacts/v6_3/semantic_calibration_precision_cascade_per_type/calibration_summary.json
+    # v21 清理后，旧 summary 正文已删除；只允许通过清单哈希 + 研究记录证据恢复身份。
+    calibration_identity_mode: v21_inventory_recovery
+    calibration_provenance_path: artifacts/v21/release_controls/semantic_calibration_provenance.json
+    calibration_provenance_sha256: 342bb8774df212ca41d406c18c160fa5b58fd130ceeccdda1b8e5a6f359d8dcb
+    min_target_confidence: 0.95
+    min_confidence_margin: 0.40
+    thresholds_by_entity_type:
+      CONTRACT_TERM:
+        min_target_confidence: 0.50
+        min_confidence_margin: 0.40
+      LOCATION:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.05
+      ORG:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PERSON:
+        min_target_confidence: 0.55
+        min_confidence_margin: 0.40
+      PRODUCT:
+        min_target_confidence: 0.60
+        min_confidence_margin: 0.40
+      PROJECT_NAME:
+        min_target_confidence: 0.95
+        min_confidence_margin: 0.40
+    min_consensus_votes: 1
+    min_boundary_votes: 1
+    biomedical_veto_threshold: 0.90
+    overlap_threshold: 0.80
+  min_importance: 0.6
+  min_replaceability: 0.6
+  min_privacy_specificity: 0.5
+  guarantee_min_facts: 1
+  dataset_overrides:
+    enron:
+      max_facts_per_doc: 8
+      max_entities_per_doc: 12
+      guarantee_min_facts: 8
+
+paired_claims:
+  perturbation_levels: [light]
+  max_pairs_per_fact: 1
+
+paired_queries:
+  query_types: [diverse_slotted_verification]
+  pairs_per_source: 3
+  sibling_profile: openai_api
+  naturalization:
+    candidates_per_pair: 3
+    correction_retries: 2
+    temperature: 0.2
+    max_tokens: 4096
+    timeout: 120
+    embedding_model: sentence-transformers/all-MiniLM-L6-v2
+    embedding_local_files_only: true
+    min_question_proposition_similarity: 0.80
+    max_five_gram_containment: 0.35
+    max_longest_common_token_run: 8
+    max_dataset_duplicate_template_rate: 0.01
+    max_dataset_opening_4gram_rate: 0.15
+  nli:
+    model_id: tasksource/deberta-base-long-nli
+    revision: 04dcf11f844b07bc57015169fca2b7d6df8299d5
+    snapshot_dir: models/menta/deberta-base-long-nli
+    local_files_only: true
+    device: cuda
+    require_cuda: true
+    batch_size: 16
+    max_length: 1280
+
+stealth_filter:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_local_files_only: true
+  embedding_batch_size: 64
+  pairs_per_source: 3
+  min_naturalness: 0.55
+  max_context_probe: 0.5
+  max_prompt_injection: 0.5
+  max_five_gram_containment: 0.35
+  max_longest_common_token_run: 8
+  max_dataset_duplicate_template_rate: 0.01
+  max_dataset_opening_4gram_rate: 0.15
+
+scoring:
+  unknown_lambda: 0.5
+  refusal_penalty: 0.5
+  false_acceptance_penalty: 0.0
+  thresholds: [0.3, 0.5, 0.7, 1.0]
+
+experiment_variants:
+  default: full_pvs
+  offline: [full_pvs, qplus_only, qminus_only, correction_only, quality_weighted, primary_only]
+  not_applicable:
+    unweighted: full_pvs already uses unweighted hierarchical means
+  query_controls: [random_same_type_counterfactual, independent_unpaired_query, no_stealth_filter]
+  shortcut_controls: [lexical_query_document_jaccard, embedding_query_document_cosine, retrieval_target_hit_rate, retrieval_max_score, query_token_count, query_char_count, query_digit_ratio, query_punctuation_ratio]
+  query_budgets: [2, 4, 6, 8]

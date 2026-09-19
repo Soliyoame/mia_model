@@ -1,0 +1,55 @@
+{
+  "dataset": "pubmed",
+  "scan_protocol": "v6_3_attack_first_rc2_budget6_release_v1",
+  "scan_plan_sha256": "486ab96ddf7c8eb7db168accc8812e7eb35df949386f69e66858f920f3e68044",
+  "scan_checkpoint_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\budget6_release_inputs_attack_first_rc2\\pubmed\\pubmed_budget6_release_checkpoint.json",
+  "scan_checkpoint_sha256": "ba05409813215f472db6277f690fbb2fcf68841b58ea7399ae9a9b1d12c7460d",
+  "claim_validator_version": "local_claim_pair_v6_3_attack_first_rc2",
+  "extractor_version": "attackability_v6_3_precision_cascade_rc1",
+  "semantic_resolver_protocol": "local_claim_pair_v6_3_precision_cascade",
+  "semantic_schema_sha256": "1e50ffc451e01f85d64e5013bf4e76de5e462c5ca6ed0e445fccdb8bd9e1ffeb",
+  "source_count": 1250,
+  "pairs_per_source": 3,
+  "queries_per_source": 6,
+  "gliner_inference_calls": 0,
+  "api_calls": 0,
+  "retriever_calls": 0,
+  "protocol": "v6_3_attack_first_rc2_budget6_release_input_v1",
+  "status": "complete",
+  "candidate_hashes": {
+    "facts": "4cdf5733cba5ab442e8694311910c945f21a588dc849c4fe5a8b2f7c78be32cb",
+    "claims": "88b2db7b6f507995387ef65452014393adfcbda3b5e386066fe8d492dca53a6c",
+    "queries": "1ebdec48dc389b89ecd8cac3525d047adc05e8fa9df6db3da092725fcdbc0634",
+    "stealth": "1ebdec48dc389b89ecd8cac3525d047adc05e8fa9df6db3da092725fcdbc0634"
+  },
+  "claim_eligibility_sha256": "c3247791765c59bd205aeae728575372be851dbddba8a6665ddabac39acaf1fa",
+  "query_eligibility_sha256": "3231e2786c912df99f0ce80704dda03fddcf8c0aa5e3a44066285649e66b92df",
+  "stealth_manifest_sha256": "01119b9297f7ad1b40efee17a2a8480f53b30e58f3652cd6532f6dcb9c7a5327",
+  "finalization_sha256": "20ee6f4eeac47fbf0f78ae242bca711c7854beb546f2bce1167636bd2dfd950e",
+  "whitelist_hash": "6a145697be6e50f68755cd38a5a25820b5dbf759a5fafce4fa1acd709de36968",
+  "fixed_budget_plan_hash": "942978e928b625d30bc771883dec9e3c3dfc2b89e2b09f2a6fc2101eb7c8ce52",
+  "upstream_provenance": [
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_selected_claims_rc2.jsonl",
+      "sha256": "9cf266569a195604af7b74db0d9bfae6528be35af566f58874df6052292acea5"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_selected_queries_rc2.jsonl",
+      "sha256": "ccab7e19198ea52d0550f48063315483f7730863d99d51ab6c6e4a5cb080b70a"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_eligible_source_keys_rc2.json",
+      "sha256": "6f5d0cc2ef3aae0473ccee212920418c0abe376672d35c4e983a8517fd3083a4"
+    },
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_attack_first_rc2_manifest.json",
+      "sha256": "eaee3264cb5e61af2d374a33c0d5aaa247ba7eace519cf35be42a3692c9bfad1"
+    }
+  ],
+  "fact_provenance": [
+    {
+      "path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_selected_facts_rc2.jsonl",
+      "sha256": "dc1b990e849193b95283953d4833fc0d9fbf1ebf5d4d4ae2f29acc594088f8e9"
+    }
+  ]
+}

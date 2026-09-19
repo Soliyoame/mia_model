@@ -1,0 +1,83 @@
+{
+  "dataset": "edgar",
+  "seed": 6402,
+  "sample_size": 200,
+  "source_count": 200,
+  "strata": {
+    "KB_Member::DATE": 9,
+    "KB_Member::LOCATION": 8,
+    "KB_Member::MEDICAL_VALUE": 9,
+    "KB_Member::MONEY": 9,
+    "KB_Member::NUMERIC_VALUE": 9,
+    "KB_Member::ORG": 9,
+    "KB_Member::PERCENT": 9,
+    "KB_Member::SECTION_ID": 9,
+    "Reserve::DATE": 9,
+    "Reserve::LOCATION": 1,
+    "Reserve::MEDICAL_VALUE": 9,
+    "Reserve::MONEY": 9,
+    "Reserve::NUMERIC_VALUE": 9,
+    "Reserve::ORG": 9,
+    "Reserve::PERCENT": 9,
+    "Reserve::SECTION_ID": 9,
+    "True_Non_Member::DATE": 9,
+    "True_Non_Member::LOCATION": 5,
+    "True_Non_Member::MEDICAL_VALUE": 9,
+    "True_Non_Member::MONEY": 9,
+    "True_Non_Member::NUMERIC_VALUE": 9,
+    "True_Non_Member::ORG": 8,
+    "True_Non_Member::PERCENT": 8,
+    "True_Non_Member::SECTION_ID": 8
+  },
+  "sample_whitelist_hash": "1da746e75a473293a755f7499bff8498a2a2488e8511902f17cd59400b62be2e",
+  "annotator_a_shuffle_seed": 7403,
+  "annotator_b_shuffle_seed": 8404,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\paired_claims\\edgar_paired_claims.jsonl",
+  "claims_hash": "fc97730e714fb9c3da2bb105bf2640747e315bdf8ff5db06266920e3d300ba31",
+  "prior_audit_exclusions": [
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100\\edgar_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "464ce40ee857e42fc0b1bfd97c54362577f9fe0510c06514ba0777df205b0d43",
+      "annotator_b_hash": "c63f2ab0a033987a1334da7b5c9f91b24947ce636c05ab51c1178da0923cab14",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    },
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200\\edgar_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "01e88d46d117c1ad79f83b89fcedc1bdc0b89005f79b178b09ed5853675ce79e",
+      "annotator_b_hash": "5d049b9d3f7cc7c9970f6ef9aea4f89623f0918a2caa1333d70e12739ffbdf89",
+      "excluded_source_count": 200,
+      "excluded_audit_id_count": 200
+    },
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\edgar_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_budget6_formal\\edgar_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "040cfddfaecc39ab4f3d9e8bf59f9756b4367dcc3b476557fe6eae47f70d5065",
+      "annotator_b_hash": "ed739becb079e00319d4df8d47b0df604866ba5ee906150d13c8354576f07e31",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    }
+  ],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 3,
+    "excluded_source_count": 400,
+    "excluded_audit_id_count": 400,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 2649,
+    "candidate_rows_removed": 1101
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_budget6_formal\\edgar_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_budget6_formal\\edgar_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "52e1c4c62580c7a18c8d0a572fd9105def52dccb93db2da8cec5088cf282082b",
+  "annotator_b_hash": "bedc94c7fd2dc788d6661003a2a8367e7cb444eba6ec6be0cbee5b0601fc2d21"
+}

@@ -21,13 +21,15 @@ HTML_TAG_RE = re.compile(r"<[^>]+>")                          # 形如 <p>、<di
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")  # 不可见控制字符
 SPACE_RE = re.compile(r"[ \t\r\f\v]+")                        # 连续的空格/制表符等(不含换行)
 NEWLINE_RE = re.compile(r"\n{3,}")                            # 3 个及以上连续换行
-EMAIL_HEADER_RE = re.compile(                                 # 邮件头行(From:/To:/Subject: 等)
-    r"^(?:from|to|cc|bcc|subject|date|sent|received|message-id|mime-version|content-type):\s.*$",
+EMAIL_HEADER_RE = re.compile(                                 # 邮件/MIME/X-* 技术头行
+    r"^(?:(?:from|to|cc|bcc|subject|date|sent|received|return-path|reply-to|sender|"
+    r"delivered-to|message-id|mime-version|content-type|content-transfer-encoding|"
+    r"content-disposition)|x-[a-z0-9-]+):[^\n]*$",
     re.IGNORECASE | re.MULTILINE,                             # 多行模式,逐行匹配行首
 )
-FORWARD_NOISE_RE = re.compile(                               # "---- Forwarded by ... ----" 之类转发噪声
-    r"[-_]{2,}\s*(?:forwarded by|original message|forwarded message)\s*[-_]{2,}.*",
-    re.IGNORECASE | re.DOTALL,                               # DOTALL 让 . 也能匹配换行,吃掉其后整段
+FORWARD_NOISE_RE = re.compile(                               # 只删转发分隔行，绝不能吞掉后续正文
+    r"^[ \t>]*[-_]{2,}[^\n]*(?:forwarded by|original message|forwarded message)[^\n]*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 SIGNATURE_RE = re.compile(r"\n--\s*\n.*$", re.DOTALL)        # 邮件签名分隔线 "\n-- \n" 及之后内容
 REFERENCES_RE = re.compile(r"\n\s*(?:references|bibliography)\s*\n.*$", re.IGNORECASE | re.DOTALL)  # 参考文献段及之后
@@ -36,6 +38,14 @@ PUBMED_TEMPLATE_RE = re.compile(                             # PubMed 论文里�
     r"more research is needed|this article is protected by copyright)\b",
     re.IGNORECASE,
 )
+
+ENRON_CLEANER_VERSION = "enron_cleaner_v2_preserve_forwarded_body"
+
+
+def cleaner_version_for_dataset(dataset: str) -> str | None:
+    """Return a version only for cleaners whose resume identity is frozen."""
+
+    return ENRON_CLEANER_VERSION if (dataset or "").casefold() == "enron" else None
 
 
 def clean_text(text: str) -> str:

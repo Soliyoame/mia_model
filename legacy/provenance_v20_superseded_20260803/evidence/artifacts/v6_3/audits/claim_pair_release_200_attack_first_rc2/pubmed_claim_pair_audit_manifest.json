@@ -1,0 +1,53 @@
+{
+  "dataset": "pubmed",
+  "seed": 314159,
+  "sample_size": 200,
+  "source_count": 200,
+  "strata": {
+    "Eligibility_Candidate::DATE": 16,
+    "Eligibility_Candidate::DURATION": 21,
+    "Eligibility_Candidate::IDENTIFIER": 10,
+    "Eligibility_Candidate::LOCATION": 21,
+    "Eligibility_Candidate::MEDICAL_VALUE": 21,
+    "Eligibility_Candidate::MONEY": 1,
+    "Eligibility_Candidate::NUMERIC_VALUE": 21,
+    "Eligibility_Candidate::ORG": 21,
+    "Eligibility_Candidate::PERCENT": 21,
+    "Eligibility_Candidate::PERSON": 19,
+    "Eligibility_Candidate::PRODUCT": 21,
+    "Eligibility_Candidate::SECTION_ID": 7
+  },
+  "sample_whitelist_hash": "ffbba4c45ac0966b04ea662125350a869546aa41da178034d278397802c6e0ed",
+  "annotator_a_shuffle_seed": 315160,
+  "annotator_b_shuffle_seed": 316161,
+  "claims_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\attack_first_rc2\\pubmed\\pubmed_selected_claims_rc2.jsonl",
+  "claims_hash": "9cf266569a195604af7b74db0d9bfae6528be35af566f58874df6052292acea5",
+  "prior_audit_exclusions": [
+    {
+      "audit_dir": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2",
+      "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\pubmed_claim_pair_audit_annotator_a.jsonl",
+      "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_rc_100_attack_first_rc2\\pubmed_claim_pair_audit_annotator_b.jsonl",
+      "annotator_a_hash": "b1fdc95dc05a0508f2f880ac4e4e5ae5bacb106e5515c6a9c89130de9d26d784",
+      "annotator_b_hash": "9d10706cb992a8bb6c06f50d3ceda6f1b9eb6055ed6b5d90454c3456f8c979f9",
+      "excluded_source_count": 100,
+      "excluded_audit_id_count": 100
+    }
+  ],
+  "prior_audit_exclusion_summary": {
+    "audit_directory_count": 1,
+    "excluded_source_count": 100,
+    "excluded_audit_id_count": 100,
+    "candidate_rows_before": 3750,
+    "candidate_rows_after": 3450,
+    "candidate_rows_removed": 300
+  },
+  "annotation_labels": [
+    "pass",
+    "fail"
+  ],
+  "instructions": "Annotate independently. Mark pass only if entity boundaries, one-slot substitution, type, counterfactual difference, and claim completeness are all correct. Do not consult the other annotator.",
+  "annotator_a_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2\\pubmed_claim_pair_audit_annotator_a.jsonl",
+  "annotator_b_path": "D:\\MIA\\mia_model\\artifacts\\v6_3\\audits\\claim_pair_release_200_attack_first_rc2\\pubmed_claim_pair_audit_annotator_b.jsonl",
+  "annotator_a_hash": "a3c32f4e025e968b6c7ad8e83933a481f05935373b5b3f67bb324902bf940a29",
+  "annotator_b_hash": "94f7e8b7a0b7bea48c05501c2f3e59795ed4a793f1ada55eed39e31d312243f6"
+}
