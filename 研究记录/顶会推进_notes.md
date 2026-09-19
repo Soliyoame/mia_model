@@ -4930,3 +4930,11 @@ source内共享Q+只在显式V24模式允许：三对仍有六个唯一query ID�
 response行保留`query`作为Luna构造的semantic core，并新增`attack_query`记录实际提交文本。query JSONL及Q+/Q-字节不改，三对/六问预算、top-k、context、Luna/selector/eligibility/split、parser、NLI、PVS `S+ * R- - A-`及baseline均不改；因此不需重生成构造、eligibility或split。未来正式victim response必须使用新runtime生成，旧`pcv-attacker-request-v1`响应不能续跑或混用。
 
 resume/formal binding同时记录wrapper hash和覆盖wrapper、RAG shell、LLM-only shell的完整`runtime_prompt_hash`；旧版本、旧wrapper hash、缺失或变化的runtime hash均fail closed。验证仅使用离线mock：runner 22项、PCV parser/scoring 47项、V24套件运行312项（302通过、10项既有skip），合计运行381项（371通过、10 skip）；包含完整12000-query mock恢复、Retriever/Generator同query、原始query文件不变、六问预算及identity drift。`git diff --check`通过。真实Luna/victim/OpenAI-compatible API、Retriever、embedding、NLI、GPU及formal调用均为0，未生成或改写实验artifact。
+
+### 2026-09-19：V24 主线合并交付范围
+
+用户授权提交冻结代码/config，并要求长任务由其运行，随后指定先将 V24 合并主线。目标为本地 main，合并前 main 是 V24 分支的祖先，没有独有提交；保留已有45个提交及历史依赖，不删除旧协议证据。新增提交仅纳入当前V24构造/补充入口及测试、Gemma服务器client/factory兼容、LLM及V24配置，以及本条交付说明。旧V23未提交代码/配置、论文及AGENTS改动保留在原工作区，不打包提交或回滚。研究总表中其他既有未提交段落同样保留，仅本条作为此次提交内容。
+
+固定输入采用reconciled_20260919：nfcorpus为2250 source，1000 Member/1000 Non-Member/250 Reserve；主计划2000 source/6000 pair/12000 query，主库1000 Member/3894 chunk，BGE revision与128/32切块、top-k5保持。生成模型为用户确认的完整BF16 Gemma2 2B服务器，别名gemma-2-2b-it-bf16；身份口径为用户确认部署，不伪称核验HF commit。system指令采用本地Gemma原有user前缀格式，PVS S+ * R- - A-、三对六问不变。
+
+主线工作树使用artifacts/v24/worktrees/main，保持原工作区用户资产。以实际Git提交固定代码/config，沿用已有split/index/hash，无新治理层；长运行命令交给用户，不代跑正式victim、Retriever或NLI推理，不推送远端。合并后的校验和提交身份以随后完成记录为准。

@@ -2293,3 +2293,9 @@ matched LLM-only 150 次，共 300 次潜在调用。价格在具体 endpoint/pr
 The v24 development path now includes an optional GPT-5.6 Luna-only Stage A. Luna returns only `evidence_text`, `true_claim`, `original_entity`, `canonical_fact`, and supporting context; it must not return offsets. Code recovers all offsets by unique exact matching in the frozen source, and rejects any model-supplied location field. `original_entity` must be an exact span inside `true_claim`; supporting evidence can provide canonical-fact context only and cannot define another attack slot. Stage B remains the existing independent replacement plus shared question skeleton path, with Q+/Q- instantiated by code.
 
 The historical 18-source comparison remains a fact-completeness diagnostic. The new development-only A/B starts from a fresh 30-source source-first manifest, uses identical source order for `GLiNER2+Luna` and `Luna-only`, and keeps zero-candidate sources. Candidate exact overlap is diagnostic only. Repeatability is summarized primarily by source-level `>=3 usable facts` and `>=3 eligible pairs` stability. No promotion thresholds are frozen, and no formal split, PVS, three-pairs/source, or six-queries/source contract changes.
+
+### 2026-09-19：V24 主线合并与 nfcorpus 首 cell
+
+本次合并纳入 V24 Luna-only 构造/补充入口、Gemma 服务器兼容和首 cell 配置。正式输入采用 `reconciled_20260919`；nfcorpus 主评估为 2000 source、6000 pair、12000 query，Reserve 不发主查询，BGE dense index 仅含 1000 Member。服务器 profile 为 `gemma2_2b_server`，使用 `PCV_VICTIM_*`，完整 BF16 部署由用户确认；版本别名不是独立核验的 HF commit。`system_prompt_as_user` 沿用本地 Gemma 的指令前缀格式，PVS 为 `S+ * R- - A-`。
+
+主线独立工作树位于 `artifacts/v24/worktrees/main`，用于保留原目录未提交的旧协议及论文工作。正式运行前须在该干净工作树完成只读 dry-run；原目录的脏工作树不能直接运行正式 cell。长任务由用户启动，默认恢复断点，每 200 条保存；当前配置串行、请求间隔 20 秒。数据/权重不纳入 Git，不能仅凭代码 checkout 推断这些本地产物已存在。

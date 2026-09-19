@@ -1,8 +1,33 @@
 protocol_version: pcv-mia-v24
 method_version: pcv-query-local-counterfactual-reconstruction
 specification_version: pcv-restoration-first-v24-pre-split-eligibility-r1
-status: candidate_ranking_v2_canary_zero_candidate_replacement_ready
+status: server_profile_and_inputs_ready_pre_freeze
 selection_seed: 42
+
+# 03号入口复用这些参数，仅构建已导出的 KB_Member 全文索引。
+seed: 42
+logging:
+  level: INFO
+  file: artifacts/v24/logs/reconciled_20260919_index.log
+paths:
+  splits_dir: artifacts/v24/index_inputs/reconciled_20260919
+  indexes_dir: artifacts/v24/indexes/reconciled_20260919
+embedding:
+  model: BAAI/bge-base-en-v1.5
+  revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  backend: sentence_transformers
+  local_files_only: true
+  dim: 768
+  query_instruction: "Represent this sentence for searching relevant passages: "
+chunking:
+  unit: tokens
+  tokenizer_model: BAAI/bge-base-en-v1.5
+  tokenizer_revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  tokenizer_local_files_only: true
+  chunk_size: 128
+  chunk_overlap: 32
+retrieval:
+  backend: dense
 
 llm:
   profile: luna_query_generator
@@ -132,8 +157,35 @@ formal:
   victim_queries_per_dataset: 12000
   reserve_in_main_victim_budget: false
   fallback_pair_rate_maximum: 0.01
-  # 正式入口读取同一配置中的单 cell 绑定；实际 split/index/victim 尚未冻结，禁止默认回落历史配置。
-  runtime: null
+  # 数据及索引已就绪；服务器沿用本地Gemma的user前缀格式，代码/config待冻结。
+  runtime:
+    selected_pairs_path: artifacts/v24/eligibility/reconciled_20260919/nfcorpus/selected_pairs.jsonl
+    split_manifest_path: artifacts/v24/eligibility/reconciled_20260919/nfcorpus/split_manifest.json
+    output_dir: artifacts/v24/formal/reconciled_20260919/nfcorpus/gemma/dense
+    llm_profiles_path: configs/llm_profiles.yaml
+    victim_profile: gemma2_2b_server
+    generator_family: gemma
+    concrete_model: gemma-2-2b-it-bf16
+    generator_version: gemma-2-2b-it-bf16  # 用户确认的部署标识，非HF权重commit。
+    retrieval:
+      backend: dense
+      retriever_id: BAAI/bge-base-en-v1.5
+      index_dir: artifacts/v24/indexes/reconciled_20260919/nfcorpus/bge-base-en-v1.5
+      index_manifest_sha256: 3516bef6c60a27a4957d1569233799725678d13707fbbcbfa326534b3bc72258
+      top_k: 5
+    generation:
+      temperature: 0.0
+      max_tokens: 512
+      timeout: 60
+      retries: 2
+      retry_backoff_base: 30
+      retry_backoff_max: 300
+      retry_until_success: true
+      retry_cooldown_seconds: 300
+      request_interval_seconds: 20
+      max_workers: 1
+      requests_per_minute: 0
+      checkpoint_every: 200
 
 stealth_diagnostics:
   hard_gate: false

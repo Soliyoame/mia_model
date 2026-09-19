@@ -6338,5 +6338,367 @@ class V24LunaDirectSmokeTests(unittest.TestCase):
         self.assertEqual(list(read_jsonl(self.output / "smoke_results.jsonl")), [])
 
 
+class V24LunaDirectEligibilityTests(unittest.TestCase):
+    """正式输入准备的本地测试；构造复用真实selector，外部请求全部mock。"""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.runner = _load_v24_capacity_runner()
+        self.config = load_v24_config(Path(__file__).resolve().parents[1])
+        self.output = self.root / "artifacts/v24/eligibility/nfcorpus"
+        self.sources = {}
+        self.metadata = {}
+        for index in range(2254):
+            key = f"nfcorpus::record-{index}"
+            text = f"Trial record {index} enrolled 43 RA patients."
+            self.metadata[key] = {"source_key": key, "source_order_rank": str(index),
+                                  "source_hash": sha256_text(text), "normalized_text_hash": sha256_text(text.casefold())}
+            self.sources[key] = {"dataset": "nfcorpus", **self.metadata[key], "full_text": text}
+        self.keys = list(self.sources)
+        self.pool = Mock(source_order=tuple(self.keys), source_count=len(self.keys))
+        self.pool._read_source.side_effect = self.sources.__getitem__
+        self.pool._connection.execute.return_value = sorted(self.metadata.values(), key=lambda row: row["source_order_rank"])
+        for name in ("manifest_path", "order_path", "database_path"):
+            path = self.root / name
+            path.write_text(name, encoding="utf-8")
+            setattr(self.pool, name, path)
+        self.manager = Mock()
+        self.manager.__enter__ = Mock(return_value=self.pool)
+        self.manager.__exit__ = Mock(return_value=False)
+        self.provider = V24LunaDirectTests.provider("")
+        self.payloads = {}
+        construct = self.provider.construct_paired_candidates
+
+        def prepare_response(source):
+            key = source["source_key"]
+            index = self.metadata[key]["source_order_rank"]
+            candidates = self.payloads.get(key, [{
+                "true_claim": source["chunk_text"], "original_entity": "43 RA patients",
+                "q_plus": f"Did trial record {index} enroll 43 RA patients?",
+                "counter_entities": ["44 RA patients", "45 RA patients", "46 RA patients"],
+            }])
+            self.provider.client.chat_with_metadata.return_value.content = json.dumps({"candidates": candidates})
+            return construct(source)
+
+        self.provider.construct_paired_candidates = Mock(side_effect=prepare_response)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(self.runner, "load_v24_config", return_value=self.config))
+        self.stack.enter_context(patch.object(self.runner, "_canary_llm_identity", return_value={"model": "gpt-5.6-luna", "profile_hash": "test"}))
+        self.exclusions = self.stack.enter_context(patch.object(self.runner, "collect_development_identities", return_value=[]))
+        self.stack.enter_context(patch.object(self.runner, "V24SourcePoolReader", return_value=self.manager))
+        self.builder = self.stack.enter_context(patch.object(self.runner, "build_luna_candidate_provider", return_value=self.provider))
+        self.stack.enter_context(patch.object(self.runner, "screen_source", side_effect=AssertionError("legacy_gate_not_allowed")))
+        self.stack.enter_context(patch.object(self.runner, "build_v24_semantic_similarity", side_effect=AssertionError("semantic_model_not_allowed")))
+
+    def run_scan(self, **kwargs):
+        args = {"dataset": "nfcorpus", "output_dir": self.output, "max_sources": 2, "show_progress": False}
+        return self.runner.run_luna_only_eligibility(self.root, **{**args, **kwargs})
+
+    def test_preview_does_not_write_or_construct_and_uses_frozen_order(self):
+        result = self.run_scan(preview_only=True, max_sources=12)
+        self.assertEqual(result["status"], "prepared_no_calls")
+        self.assertEqual(result["maximum_new_source_requests"], 12)
+        self.assertEqual(result["next_source_keys"], self.keys[:3])
+        self.assertEqual(result["target_eligible_sources"], 2250)
+        self.assertTrue(result["unseen_capacity_sufficient"])
+        self.assertFalse(self.output.exists())
+        self.builder.assert_not_called()
+        self.pool._read_source.assert_not_called()
+
+    def test_source_and_both_text_hash_exclusions_precede_same_slot_construction(self):
+        self.exclusions.return_value = [
+            {"dataset": "nfcorpus", "source_key": self.keys[0]},
+            {"dataset": "nfcorpus", "source_hash": self.metadata[self.keys[1]]["source_hash"]},
+            {"dataset": "nfcorpus", "normalized_text_hash": self.metadata[self.keys[2]]["normalized_text_hash"]},
+        ]
+        result = self.run_scan(max_sources=3)
+        self.assertEqual(result["excluded_source_count"], 3)
+        self.assertEqual(result["eligible_source_count"], 3)
+        self.assertEqual(result["selected_pair_count"], 9)
+        calls = self.provider.construct_paired_candidates.call_args_list
+        self.assertEqual([call.args[0]["source_key"] for call in calls], self.keys[3:6])
+        self.assertTrue(all(set(call.args[0]) == {"dataset", "source_key", "chunk_text", "chunk_sha256"} for call in calls))
+        rows = list(read_jsonl(self.output / "source_results.jsonl"))
+        self.assertTrue(all(len({p["q_plus_text"] for p in row["construction"]["selected_pairs"]}) == 1 for row in rows))
+        self.assertTrue(all(len({p["q_minus_text"] for p in row["construction"]["selected_pairs"]}) == 3 for row in rows))
+        self.assertFalse((self.output / "split_manifest.json").exists())
+
+    def test_automatic_transport_retry_reuses_request_and_counts_one_source(self):
+        from urllib.error import HTTPError
+        from src.llm.openai_compatible import OpenAICompatibleChatClient
+
+        client = OpenAICompatibleChatClient(
+            base_url="https://example.invalid/v1", model="gpt-5.6-luna",
+            max_retries=2, retry_until_success=True, request_rate_limiter=Mock(),
+        )
+        provider = v24.LunaDirectCandidateProvider(client=client, profile={"model": "gpt-5.6-luna"})
+        self.builder.return_value = provider
+        candidate = {
+            "true_claim": self.sources[self.keys[0]]["full_text"], "original_entity": "43 RA patients",
+            "q_plus": "Did trial record 0 enroll 43 RA patients?",
+            "counter_entities": ["44 RA patients", "45 RA patients", "46 RA patients"],
+        }
+        response = {
+            "model": "gpt-5.6-luna",
+            "choices": [{"message": {"content": json.dumps({"candidates": [candidate]})}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 23},
+        }
+        attempts = [
+            TimeoutError("simulated_timeout"),
+            HTTPError("https://example.invalid/v1/chat/completions", 429, "rate limited", None, io.BytesIO(b"rate limited")),
+            io.BytesIO(json.dumps(response).encode("utf-8")),
+        ]
+        with patch("src.llm.openai_compatible.urllib.request.urlopen", side_effect=attempts) as send, \
+             patch("src.llm.openai_compatible.load_dotenv"), patch.object(client, "_sleep_backoff") as backoff:
+            result = self.run_scan(max_sources=1)
+        self.assertIsNone(result["transport_override"])
+        self.assertEqual(client.max_retries, 2)
+        self.assertTrue(client.retry_until_success)
+        self.assertEqual(send.call_count, 3)
+        self.assertEqual(backoff.call_count, 2)
+        self.assertEqual(client.request_rate_limiter.acquire.call_count, 3)
+        self.assertTrue(all(call.args[0] is send.call_args_list[0].args[0] for call in send.call_args_list))
+        self.assertEqual(result["completed_sources"], 1)
+        self.assertEqual(result["eligible_source_count"], 1)
+        self.assertEqual(result["selected_pair_count"], 3)
+        self.assertEqual(result["provider"]["logical_api_calls"], 1)
+        self.assertEqual(result["provider"]["received_response_count"], 1)
+        self.assertEqual(result["provider"]["transport_retry_count"], 2)
+        row = list(read_jsonl(self.output / "source_results.jsonl"))[0]
+        self.assertEqual(row["response"]["transport_retry_count"], 2)
+        self.assertEqual(row["incomplete_attempts"], [])
+
+    def test_automatic_transport_retry_does_not_repeat_authentication_errors(self):
+        from urllib.error import HTTPError
+        from src.llm.openai_compatible import OpenAICompatibleChatClient
+
+        client = OpenAICompatibleChatClient(
+            base_url="https://example.invalid/v1", model="gpt-5.6-luna",
+            max_retries=2, retry_until_success=True,
+        )
+        self.builder.return_value = v24.LunaDirectCandidateProvider(client=client, profile={"model": "gpt-5.6-luna"})
+        error = HTTPError("https://example.invalid/v1/chat/completions", 401, "unauthorized", None, io.BytesIO(b"unauthorized"))
+        with patch("src.llm.openai_compatible.urllib.request.urlopen", side_effect=error) as send, \
+             patch("src.llm.openai_compatible.load_dotenv"), patch.object(client, "_sleep_backoff") as backoff:
+            result = self.run_scan(max_sources=1)
+        send.assert_called_once()
+        backoff.assert_not_called()
+        self.assertEqual(result["status"], "execution_incomplete")
+        self.assertEqual(result["completed_sources"], 0)
+        self.assertEqual(result["provider"]["logical_api_calls"], 1)
+        self.assertIsNone(result["active_request"]["response"])
+
+    def test_bounded_resume_only_requests_new_sources_without_early_split(self):
+        first = self.run_scan()
+        self.assertEqual(first["status"], "paused_source_limit")
+        second = self.run_scan(resume=True)
+        self.assertEqual(second["completed_sources"], 4)
+        self.assertEqual(second["eligible_source_count"], 4)
+        self.assertEqual(second["provider"]["logical_api_calls"], 4)
+        self.assertEqual([call.args[0]["source_key"] for call in self.provider.construct_paired_candidates.call_args_list], self.keys[:4])
+        self.assertFalse((self.output / "selected_pairs.jsonl").exists())
+        with self.assertRaisesRegex(ValueError, "output_exists"):
+            self.run_scan()
+
+    def test_empty_invalid_and_candidate_nine_outputs_do_not_trigger_topup(self):
+        self.payloads[self.keys[0]] = []
+        self.payloads[self.keys[1]] = [{"invalid": True}]
+        self.payloads[self.keys[2]] = [{}] * 9
+        result = self.run_scan(max_sources=4)
+        self.assertEqual(result["completed_sources"], 4)
+        self.assertEqual(result["eligible_source_count"], 1)
+        self.assertEqual(result["invalid_output_count"], 1)
+        self.assertEqual(self.provider.client.chat_with_metadata.call_count, 4)
+        self.assertEqual(result["rejection_reason_counts"], {"candidate_schema": 1})
+
+    def test_received_response_is_replayed_without_another_request(self):
+        parse = self.provider.parse_response
+        self.provider.parse_response = Mock(side_effect=KeyboardInterrupt)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_scan(max_sources=1)
+        self.provider.parse_response = parse
+        self.builder.reset_mock()
+        result = self.run_scan(max_sources=1, resume=True)
+        self.assertEqual(result["eligible_source_count"], 1)
+        self.builder.assert_not_called()
+        self.provider.client.chat_with_metadata.assert_called_once()
+
+    def test_initialization_failure_does_not_mark_a_source_request_as_started(self):
+        self.builder.side_effect = ValueError("invalid_client_configuration")
+        result = self.run_scan()
+        self.assertEqual(result["status"], "initialization_error")
+        self.assertEqual(result["provider"]["logical_api_calls"], 0)
+        self.assertIsNone(result["active_request"])
+        self.provider.client.chat_with_metadata.assert_not_called()
+
+    def test_unknown_request_pauses_without_skipping_or_automatic_retry(self):
+        self.provider.client.chat_with_metadata.side_effect = RuntimeError("simulated_transport_error")
+        result = self.run_scan()
+        self.assertEqual(result["status"], "execution_incomplete")
+        self.assertEqual(result["completed_sources"], 0)
+        self.assertEqual(result["provider"]["logical_api_calls"], 1)
+        self.assertFalse(result["provider"]["external_call_counts_complete"])
+        self.builder.reset_mock()
+        resumed = self.run_scan(resume=True)
+        self.assertEqual(resumed["status"], "execution_incomplete")
+        self.builder.assert_not_called()
+        self.provider.client.chat_with_metadata.assert_called_once()
+
+    def test_wrong_provider_model_stops_before_selecting_or_requesting_next_source(self):
+        self.provider.client.chat_with_metadata.return_value.provider_model_id = "different-model"
+        result = self.run_scan()
+        self.assertEqual(result["status"], "provider_model_mismatch")
+        self.assertEqual(result["completed_sources"], 0)
+        self.assertIsNotNone(result["active_request"]["response"])
+        self.provider.client.chat_with_metadata.assert_called_once()
+
+    def test_explicit_unanswered_retry_preserves_failure_and_cannot_topup_answered_sources(self):
+        self.provider.client.chat_with_metadata.side_effect = RuntimeError("simulated_transport_error")
+        self.run_scan(max_sources=1)
+        self.provider.client.chat_with_metadata.side_effect = None
+        result = self.run_scan(max_sources=1, resume=True, retry_incomplete=True)
+        self.assertEqual(result["completed_sources"], 1)
+        self.assertEqual(result["eligible_source_count"], 1)
+        self.assertEqual(result["provider"]["logical_api_calls"], 2)
+        self.assertEqual(result["provider"]["incomplete_attempt_count"], 1)
+        self.assertFalse(result["provider"]["external_call_counts_complete"])
+        self.assertEqual([call.args[0]["source_key"] for call in self.provider.construct_paired_candidates.call_args_list], self.keys[:1] * 2)
+        row = list(read_jsonl(self.output / "source_results.jsonl"))[0]
+        self.assertEqual(row["incomplete_attempts"][0]["error_type"], "RuntimeError")
+        with self.assertRaisesRegex(ValueError, "retry_requires_unanswered"):
+            self.run_scan(resume=True, retry_incomplete=True)
+        self.assertEqual(self.provider.client.chat_with_metadata.call_count, 2)
+
+    def test_config_and_source_result_drift_fail_before_new_requests(self):
+        self.run_scan()
+        self.builder.reset_mock()
+        self.config["llm"]["max_tokens"] += 1
+        with self.assertRaisesRegex(ValueError, "checkpoint_drift"):
+            self.run_scan(resume=True)
+        self.config["llm"]["max_tokens"] -= 1
+        rows = list(read_jsonl(self.output / "source_results.jsonl"))
+        rows[0]["construction"]["selected_pairs"][0]["q_minus_text"] = "changed"
+        write_jsonl(rows, self.output / "source_results.jsonl")
+        with self.assertRaisesRegex(ValueError, "result_drift"):
+            self.run_scan(resume=True)
+        self.builder.assert_not_called()
+
+    def test_output_path_source_budget_and_fixed_target_are_checked_before_client(self):
+        for changes in ({"max_sources": 0}, {"max_sources": True}, {"dataset": "edgar"},
+                        {"output_dir": self.root / "artifacts/v24/development/not_formal"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.run_scan(**changes)
+        self.config["eligibility"]["target_sources"] = 2
+        with self.assertRaisesRegex(ValueError, "must_be_2250"):
+            self.run_scan()
+        self.builder.assert_not_called()
+
+    def test_full_2250_export_reaches_formal_query_adapter_and_completed_resume_is_offline(self):
+        result = self.run_scan(max_sources=len(self.keys))
+        self.assertEqual(result["status"], "eligibility_ready")
+        self.assertEqual(result["completed_sources"], 2250)
+        self.assertEqual(result["eligible_source_count"], 2250)
+        self.assertEqual(result["selected_pair_count"], 6750)
+        self.assertEqual(self.provider.client.chat_with_metadata.call_count, 2250)
+        selected = list(read_jsonl(self.output / "selected_pairs.jsonl"))
+        split = read_json(self.output / "split_manifest.json")
+        report = v24.validate_split_manifest(split)
+        self.assertEqual(report["group_counts"], {"KB_Member": 1000, "True_Non_Member": 1000, "Reserve": 250})
+        plan = v24.build_luna_direct_run_plan(selected, split, dataset="nfcorpus")
+        self.assertEqual((len(plan["pairs"]), len(plan["queries"]), len(plan["benchmark"])), (6000, 12000, 2000))
+        self.assertEqual(len({row["query_id"] for row in plan["queries"]}), 12000)
+        self.assertFalse(any(row["group"] == "Reserve" for row in plan["queries"]))
+        self.builder.side_effect = AssertionError("completed_resume_must_be_offline")
+        self.assertEqual(self.run_scan(resume=True), result)
+        (self.output / "split_manifest.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "export_drift"):
+            self.run_scan(resume=True)
+
+    def test_cli_requires_explicit_budget_and_rejects_development_inputs(self):
+        cases = [
+            ["preview-luna-only-eligibility", "--dataset", "nfcorpus"],
+            ["preview-luna-only-eligibility", "--dataset", "nfcorpus", "--max-sources", "1", "--input", "dev.jsonl"],
+        ]
+        for args in cases:
+            with self.subTest(args=args), patch("sys.argv", ["v24", *args]), patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+                self.runner.main()
+        with patch.object(self.runner, "run_luna_only_eligibility", return_value={"status": "prepared_no_calls"}) as run, \
+                patch("sys.argv", ["v24", "preview-luna-only-eligibility", "--dataset", "nfcorpus", "--max-sources", "50"]), \
+                patch("sys.stdout", new=io.StringIO()):
+            self.assertEqual(self.runner.main(), 0)
+        self.assertTrue(run.call_args.kwargs["preview_only"])
+        self.assertEqual(run.call_args.kwargs["max_sources"], 50)
+
+    def test_supplement_uses_unseen_suffix_preserves_parent_and_resumes_without_split(self):
+        self.run_scan(max_sources=2250)
+        original = {path.name: path.read_bytes() for path in self.output.iterdir()}
+        extra = self.root / "artifacts/v24/eligibility/supplement/nfcorpus"
+        options = {"supplement_from": self.output, "supplement_eligible": 2, "output_dir": extra}
+        self.builder.reset_mock()
+        self.provider.construct_paired_candidates.reset_mock()
+        preview = self.run_scan(**options, preview_only=True)
+        self.assertEqual(preview["next_source_keys"], self.keys[2250:2252])
+        self.assertEqual(preview["target_eligible_sources"], 2)
+        self.assertFalse(extra.exists())
+        self.builder.assert_not_called()
+        first = self.run_scan(**options, max_sources=1)
+        self.assertEqual(first["status"], "paused_source_limit")
+        self.assertEqual(first["eligible_source_count"], 1)
+        with self.assertRaisesRegex(ValueError, "checkpoint_drift"):
+            self.run_scan(**{**options, "supplement_eligible": 3}, resume=True)
+        second = self.run_scan(**options, max_sources=4, resume=True)
+        self.assertEqual(second["status"], "supplement_ready")
+        self.assertEqual(second["eligible_source_count"], 2)
+        self.assertEqual(set(second["exports"]), {"selected_pairs.jsonl"})
+        self.assertFalse((extra / "split_manifest.json").exists())
+        self.assertEqual([call.args[0]["source_key"] for call in self.provider.construct_paired_candidates.call_args_list], self.keys[2250:2252])
+        self.builder.side_effect = AssertionError("completed_supplement_must_not_call_client")
+        self.assertEqual(self.run_scan(**options, resume=True), second)
+        self.assertEqual({path.name: path.read_bytes() for path in self.output.iterdir()}, original)
+        (self.output / "selected_pairs.jsonl").write_text("{}\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "parent_export_drift"):
+            self.run_scan(**options, resume=True)
+
+    def test_supplement_skips_query_collisions_without_repair_or_reissuing_source(self):
+        self.run_scan(max_sources=2250)
+        key = self.keys[2250]
+        text = "Trial record 2250 enrolled 43 RA patients and 44 RA patients and 45 RA patients."
+        self.metadata[key].update(source_hash=sha256_text(text), normalized_text_hash=sha256_text(text.casefold()))
+        self.sources[key].update(self.metadata[key], full_text=text)
+        self.payloads[key] = [{"true_claim": text, "original_entity": f"{n} RA patients",
+                              "q_plus": f"Did trial record 2250 enroll {n} RA patients?",
+                              "counter_entities": ["46 RA patients"]} for n in (43, 44, 45)]
+        extra = self.root / "artifacts/v24/eligibility/supplement/nfcorpus"
+        options = {"supplement_from": self.output, "supplement_eligible": 2, "output_dir": extra}
+        self.provider.construct_paired_candidates.reset_mock()
+        first = self.run_scan(**options, max_sources=1)
+        self.assertEqual(first["construction_eligible_source_count"], 1)
+        self.assertEqual(first["query_text_collision_source_count"], 1)
+        self.assertEqual(first["eligible_source_count"], 0)
+        result = self.run_scan(**options, resume=True, max_sources=3)
+        self.assertEqual(result["status"], "supplement_ready")
+        self.assertEqual(result["completed_sources"], 3)
+        self.assertEqual(result["eligible_source_count"], 2)
+        self.assertEqual(self.provider.construct_paired_candidates.call_count, 3)
+        self.assertEqual([row["source_key"] for row in read_jsonl(extra / "selected_pairs.jsonl")], self.keys[2251:2253])
+        self.assertTrue(next(read_jsonl(extra / "source_results.jsonl"))["construction"]["eligible"])
+
+    def test_supplement_options_require_separate_output_and_explicit_target(self):
+        for options in ({"supplement_from": self.output}, {"supplement_eligible": 2},
+                        {"supplement_from": self.output, "supplement_eligible": True},
+                        {"supplement_from": self.output, "supplement_eligible": 0},
+                        {"supplement_from": self.output, "supplement_eligible": 2}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.run_scan(**options, preview_only=True)
+        self.builder.assert_not_called()
+        with patch("sys.argv", ["v24", "preview-luna-only-eligibility", "--dataset", "nfcorpus",
+                                "--max-sources", "100", "--supplement-from", "parent", "--supplement-eligible", "2"]), \
+                patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+            self.runner.main()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,44 @@ def temporary_env(values: dict[str, str], clear: bool = False) -> Iterator[None]
 
 
 class PcvMiaTests(unittest.TestCase):
+    def test_gemma_user_prefix_preserves_local_format_and_profile_identity(self) -> None:
+        profiles = load_yaml("configs/llm_profiles.yaml")
+        with patch("src.llm.factory.env_str", return_value=None):
+            client, profile = build_victim_client(profiles, profile_name="gemma2_2b_server")
+        client.api_key_env = ""
+        client.base_url = "http://invalid.local/v1"
+        captured = []
+
+        def fake_request(request, _timeout):
+            captured.append(json.loads(request.data.decode("utf-8")))
+            return json.dumps({"model": profile["model"], "choices": [
+                {"message": {"content": "OK"}, "finish_reason": "stop"}
+            ]})
+
+        prompt = 'Context: example\nUser request: Is A correct?'
+        with patch.object(client._client, "_urlopen_with_retries", side_effect=fake_request):
+            self.assertEqual(client.generate(prompt, max_tokens=16), "OK")
+            result = client.generate_with_metadata(prompt, max_tokens=16)
+        self.assertEqual(result.provider_model_id, profile["model"])
+        expected = [{"role": "user", "content": f"{profile['system_prompt']}\n\n{prompt}"}]
+        self.assertEqual([row["messages"] for row in captured], [expected, expected])
+        identity = llm_profile_identity(profile)
+        self.assertNotEqual(identity["profile_hash"], llm_profile_identity(
+            {**profile, "system_prompt_as_user": False})["profile_hash"])
+
+    def test_default_victim_keeps_system_role_and_legacy_identity(self) -> None:
+        from src.llm.factory import PROFILE_IDENTITY_FIELDS
+        profiles = {"victim": {"profiles": {"test": {
+            "provider": "openai_compatible", "base_url": "http://invalid.local/v1",
+            "model": "test", "system_prompt": "instruction",
+        }}}}
+        with patch("src.llm.factory.env_str", return_value=None):
+            client, profile = build_victim_client(profiles, profile_name="test")
+        self.assertEqual(client._client.system_prompt, "instruction")
+        self.assertEqual(client._format_prompt("query"), "query")
+        legacy = {key: profile.get(key) for key in PROFILE_IDENTITY_FIELDS}
+        self.assertEqual(llm_profile_identity(profile)["profile_hash"], sha256_obj(legacy))
+
     def test_effective_profile_resolves_model_without_constructing_api_client(self) -> None:
         profiles = {
             "active": {"victim": "one"},

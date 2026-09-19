@@ -308,6 +308,9 @@ def llm_profile_identity(profile: dict[str, Any]) -> dict[str, Any]:
         key: profile.get(key)
         for key in PROFILE_IDENTITY_FIELDS
     }
+    # 仅显式使用新选项时绑定，保持历史profile的hash不变。
+    if "system_prompt_as_user" in profile:
+        identity["system_prompt_as_user"] = bool(profile["system_prompt_as_user"])
     identity["profile_hash"] = sha256_obj(identity)
     return identity
 
@@ -408,6 +411,7 @@ def build_victim_client(
             timeout=float(profile.get("timeout", 60.0)),
             stream=bool(profile.get("stream", False)),
             extra_body=_profile_extra_body(profile),
+            system_prompt_as_user=bool(profile.get("system_prompt_as_user", False)),
         ), profile
     if provider == "huggingface_local":
         from .huggingface_local import HuggingFaceLocalVictimClient

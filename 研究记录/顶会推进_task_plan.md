@@ -3930,3 +3930,12 @@ PubMed resume 修复（2026-08-05）：
 - [x] runner 22项、PCV parser/scoring 47项、V24套件运行312项（302通过、10项既有skip），合计运行381项（371通过、10 skip）；完整12000-query mock通过，`git diff --check`通过。
 - [x] parser、NLI、PVS `S+ * R- - A-`、Luna、selector、eligibility、split与baseline零修改；真实API/Retriever/GPU/formal调用为0，无artifact生成。
 - [ ] 下一步：正式victim运行前冻结包含新runtime identity的config+代码；不得复用`pcv-attacker-request-v1`响应。已有构造、Q+/Q-、eligibility与split无需重跑。
+
+### 2026-09-19：V24 主线合并交付
+
+- [x] 用户授权本地提交并将V24合并main；正式长任务由用户启动。
+- [x] 确认main是V24祖先，当前原目录有旧V23/论文未提交资产，采用独立主线工作树保留。
+- [x] 交付范围为V24构造/补充入口、Gemma服务器兼容、首cell配置及测试；数据/索引及历史失败证据不改。
+- [ ] 完成本地合并后在主线验证干净状态、正式输入绑定与可用运行命令；正式cell尚未启动，不推送远端。
+
+冻结参数仍为nfcorpus × Gemma完整BF16 × dense BGE，2000主source、12000问，Reserve=0，top-k5、三对六问、PVS独立负惩罚；服务器版本按用户确认的部署别名记录。唯一下一步为完成主线合并验证并交付用户执行命令。

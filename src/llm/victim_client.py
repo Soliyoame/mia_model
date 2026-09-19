@@ -53,6 +53,7 @@ class OpenAICompatibleVictimClient:
     timeout: float = 60.0         # 超时秒数
     stream: bool = False          # 是否走流式(SSE)请求,透传给底层 client
     extra_body: dict[str, Any] = field(default_factory=dict)  # 额外请求参数
+    system_prompt_as_user: bool = False  # Gemma兼容：沿用本地客户端的user前缀格式。
 
     @cached_property
     def _client(self) -> OpenAICompatibleChatClient:
@@ -66,7 +67,7 @@ class OpenAICompatibleVictimClient:
             base_url=self.base_url,
             model=self.model,
             api_key_env=self.api_key_env,
-            system_prompt=self.system_prompt,
+            system_prompt="" if self.system_prompt_as_user else self.system_prompt,
             timeout=self.timeout,
             extra_body=self.extra_body,
             stream=self.stream,
@@ -83,7 +84,13 @@ class OpenAICompatibleVictimClient:
         返回:
             模型回答文本。
         """
-        return self._client.chat(prompt, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+        return self._client.chat(self._format_prompt(prompt), temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+
+    def _format_prompt(self, prompt: str) -> str:
+        """保持与本地Gemma一致的指令文本及两个换行符。"""
+        if self.system_prompt_as_user and self.system_prompt:
+            return f"{self.system_prompt}\n\n{prompt}"
+        return prompt
 
     def generate_with_metadata(
         self,
@@ -95,7 +102,7 @@ class OpenAICompatibleVictimClient:
         """返回文本以及 provider 实际模型、请求 ID、指纹和调用时间。"""
 
         return self._client.chat_with_metadata(
-            prompt,
+            self._format_prompt(prompt),
             temperature=temperature,
             timeout=timeout,
             max_tokens=max_tokens,

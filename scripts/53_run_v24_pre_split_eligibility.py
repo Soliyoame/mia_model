@@ -23,15 +23,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.prepare.restoration_first_v24 import (  # noqa: E402
     DATASET_ORDER,
     _query_input_quality_reasons,
+    _query_manifest_hash,
     _reject_forbidden,
     _source_identity,
     CandidateFactPoolReader,
     LunaCandidateProvider,
     LunaDirectCandidateProvider,
+    V24SourcePoolReader,
     build_candidate_fact_pool,
     build_luna_candidate_provider,
+    build_luna_direct_run_plan,
     build_v24_semantic_similarity,
     collect_development_identities,
+    deterministic_split,
     enumerate_candidate_facts,
     get_max_candidate_facts_per_source,
     iter_frozen_source_pool,
@@ -46,6 +50,7 @@ from src.prepare.restoration_first_v24 import (  # noqa: E402
     validate_eligibility_manifest,
     validate_split_manifest,
     validate_luna_direct_source,
+    write_split_manifest,
 )
 from src.utils.hash import sha256_file, sha256_obj  # noqa: E402
 from src.utils.io import (  # noqa: E402
@@ -751,6 +756,318 @@ def run_luna_only_smoke(
         if show_progress:
             print(f"Luna direct smoke: {index + 1}/{len(sources)} {row['status']} pairs={(row.get('construction') or {}).get('selected_pair_count', 0)}", flush=True)
     return save("completed_diagnostic")
+
+
+def run_luna_only_eligibility(
+    root: Path, *, dataset: str, output_dir: str | Path, max_sources: int,
+    preview_only: bool = False, resume: bool = False, retry_incomplete: bool = False,
+    show_progress: bool = True,
+    supplement_from: str | Path | None = None, supplement_eligible: int | None = None,
+) -> dict[str, object]:
+    """扫描未见 source；普通模式导出2250 split，补充模式只导出独立候选。"""
+    root = root.resolve()
+    if dataset not in DATASET_ORDER or type(max_sources) is not int or max_sources < 1:
+        raise ValueError("luna_direct_scan_dataset_or_budget_invalid")
+    supplemental = supplement_from is not None
+    if (supplemental != (supplement_eligible is not None)
+            or (supplemental and (type(supplement_eligible) is not int or not 1 <= supplement_eligible <= 2250))):
+        raise ValueError("luna_direct_supplement_requires_parent_and_positive_target")
+    target = supplement_eligible if supplemental else 2250
+    ready_status = "supplement_ready" if supplemental else "eligibility_ready"
+
+    def query_collision(construction: Mapping[str, object]) -> bool:
+        pairs = construction.get("selected_pairs") or []
+        plus = {pair["q_plus_text"] for pair in pairs}
+        minus = [pair["q_minus_text"] for pair in pairs]
+        return len(set(minus)) != len(minus) or bool(plus.intersection(minus))
+
+    def accepted(row: Mapping[str, object]) -> bool:
+        construction = row.get("construction") or {}
+        return bool(construction.get("eligible")) and (not supplemental or not query_collision(construction))
+
+    config = load_v24_config(root)
+    settings = config.get("development", {}).get("luna_only_direct", {})
+    if settings != {"adapter": "luna_direct_paired_candidates", "max_candidates_per_source": 8,
+                    "max_counters_per_slot": 3, "pairs_per_source": 3, "smoke_max_sources": 8}:
+        raise ValueError("luna_direct_settings_invalid")
+    if config.get("eligibility", {}).get("target_sources") != 2250:
+        raise ValueError("luna_direct_scan_target_must_be_2250")
+    output = (root / output_dir).resolve()
+    if not output.is_relative_to(root / "artifacts/v24/eligibility"):
+        raise ValueError("luna_direct_scan_output_path_invalid")
+    profile = _canary_llm_identity(config)
+    if profile.get("model") != "gpt-5.6-luna":
+        raise ValueError("luna_direct_model_must_be_luna")
+    exclusions = collect_development_identities(root, config, dataset)
+    excluded = {key: {row[key] for row in exclusions if row.get(key)}
+                for key in ("source_key", "source_hash", "normalized_text_hash")}
+    result_path, summary_path = output / "source_results.jsonl", output / "scan_summary.json"
+    with V24SourcePoolReader(root, dataset) as pool:
+        metadata = {row["source_key"]: dict(row) for row in pool._connection.execute(
+            "SELECT source_key, source_order_rank, source_hash, normalized_text_hash FROM sources"
+        )}
+        # rank 在旧数据库中是 TEXT；必须使用 frozen source_order，不能按字符串排序。
+        keys = [key for key in pool.source_order
+                if not any(metadata[key][field] in values for field, values in excluded.items())]
+        parent_binding = None
+        if supplemental:
+            parent = (root / supplement_from).resolve()
+            if (not parent.is_relative_to(root / "artifacts/v24/eligibility")
+                    or output.is_relative_to(parent) or parent.is_relative_to(output)):
+                raise ValueError("luna_direct_supplement_parent_output_overlap")
+            parent_path = parent / "scan_summary.json"
+            previous = read_json(parent_path)
+            if (previous.get("status") != "eligibility_ready" or previous.get("dataset") != dataset
+                    or previous.get("active_request") is not None or previous.get("eligible_source_count") != 2250
+                    or previous.get("settings") != settings or previous.get("llm_profile") != profile
+                    or previous.get("content_sha256") != sha256_obj({k: v for k, v in previous.items() if k != "content_sha256"})):
+                raise ValueError("luna_direct_supplement_parent_invalid")
+            for name, path in (("manifest_sha256", pool.manifest_path), ("source_order_sha256", pool.order_path),
+                               ("database_sha256", pool.database_path)):
+                if previous.get("source_pool", {}).get(name) != sha256_file(path):
+                    raise ValueError("luna_direct_supplement_parent_pool_drift")
+            if (set(previous.get("exports", {})) != {"selected_pairs.jsonl", "split_manifest.json"}
+                    or any(sha256_file(parent / name) != digest for name, digest in previous["exports"].items())):
+                raise ValueError("luna_direct_supplement_parent_export_drift")
+            old_excluded = {field: {row[field] for row in previous["development_exclusions"] if row.get(field)}
+                            for field in excluded}
+            parent_keys = [key for key in pool.source_order
+                           if not any(metadata[key][field] in values for field, values in old_excluded.items())]
+            if sha256_obj(parent_keys) != previous.get("scan_source_order_sha256"):
+                raise ValueError("luna_direct_supplement_parent_order_drift")
+            hashes, consumed = [], {field: set() for field in excluded}
+            parent_eligible = 0
+            parent_results = parent / "source_results.jsonl"
+            for index, row in enumerate(read_jsonl(parent_results)):
+                if (index >= len(parent_keys) or row.get("source_index") != index
+                        or row.get("source_metadata") != metadata[parent_keys[index]]
+                        or row.get("result_sha256") != sha256_obj({k: v for k, v in row.items() if k != "result_sha256"})):
+                    raise ValueError("luna_direct_supplement_parent_result_drift")
+                hashes.append(row["result_sha256"])
+                parent_eligible += bool((row.get("construction") or {}).get("eligible"))
+                for field in consumed:
+                    consumed[field].add(row["source_metadata"][field])
+            if (parent_eligible != 2250 or len(hashes) != previous.get("completed_sources")
+                    or sha256_obj(hashes) != previous.get("results_sha256")):
+                raise ValueError("luna_direct_supplement_parent_result_drift")
+            # 从原扫描最后一篇之后继续；不读取原split的membership，也不重发已扫描source。
+            last_rank = pool.source_order.index(parent_keys[len(hashes) - 1])
+            suffix = set(pool.source_order[last_rank + 1:])
+            keys = [key for key in keys if key in suffix
+                    and not any(metadata[key][field] in values for field, values in consumed.items())]
+            parent_binding = {"path": str(parent.relative_to(root)).replace("\\", "/"),
+                              "summary_sha256": sha256_file(parent_path),
+                              "results_sha256": sha256_file(parent_results),
+                              "previous_screened_sources": len(hashes),
+                              "query_text_gate": "distinct_q_minus_and_no_cross_polarity_overlap"}
+        context = {
+            "run_kind": "luna_only_pre_split_eligibility", "protocol_version": config["protocol_version"],
+            "dataset": dataset, "settings": settings, "target_eligible_sources": target,
+            "frozen_source_count": pool.source_count, "unseen_source_count": len(keys),
+            "excluded_source_count": pool.source_count - len(keys), "development_exclusions": exclusions,
+            "source_pool": {"manifest_sha256": sha256_file(pool.manifest_path),
+                            "source_order_sha256": sha256_file(pool.order_path),
+                            "database_sha256": sha256_file(pool.database_path)},
+            "scan_source_order_sha256": sha256_obj(keys),
+            "config_sha256": sha256_obj(config), "llm_profile": profile,
+            "code_sha256": sha256_obj({"runner": sha256_file(__file__),
+                                       "screening": sha256_file(PROJECT_ROOT / "src/prepare/restoration_first_v24.py")}),
+            "transport_override": None,
+            "membership_read_during_construction": False, "retriever_calls_performed": 0,
+            "victim_calls_performed": 0, "pvs_used_for_selection": False,
+        }
+        if supplemental:
+            context.update(run_kind="luna_only_eligibility_supplement", supplement=parent_binding)
+        fingerprint = sha256_obj(context)
+        rows: list[dict[str, object]] = []
+        active: dict[str, object] | None = None
+        exports: dict[str, str] = {}
+        if resume:
+            saved = read_json(summary_path)
+            rows = list(read_jsonl(result_path))
+            completed = saved.get("completed_sources")
+            if (saved.get("run_fingerprint") != fingerprint
+                    or saved.get("content_sha256") != sha256_obj({k: v for k, v in saved.items() if k != "content_sha256"})
+                    or type(completed) is not int or not completed <= len(rows) <= completed + 1
+                    or saved.get("results_sha256") != sha256_obj([row.get("result_sha256") for row in rows[:completed]])):
+                raise ValueError("luna_direct_scan_checkpoint_drift")
+            for index, row in enumerate(rows):
+                if (index >= len(keys) or row.get("source_index") != index
+                        or row.get("source_metadata") != metadata[keys[index]]
+                        or row.get("result_sha256") != sha256_obj({k: v for k, v in row.items() if k != "result_sha256"})):
+                    raise ValueError("luna_direct_scan_result_drift")
+            active = saved.get("active_request") if len(rows) == completed else None
+            if active is not None and active.get("source_index") != len(rows):
+                raise ValueError("luna_direct_scan_active_request_drift")
+            exports = dict(saved.get("exports") or {})
+            if saved.get("status") == ready_status:
+                expected_exports = {"selected_pairs.jsonl"} if supplemental else {"selected_pairs.jsonl", "split_manifest.json"}
+                if (sum(accepted(row) for row in rows) != target
+                        or set(exports) != expected_exports
+                        or any(not (output / name).is_file() or sha256_file(output / name) != digest
+                               for name, digest in exports.items())):
+                    raise ValueError("luna_direct_scan_export_drift")
+                return saved
+        elif output.exists() and any(output.iterdir()):
+            raise ValueError("luna_direct_scan_output_exists_use_resume")
+        if retry_incomplete and (not resume or active is None or active.get("response") is not None):
+            raise ValueError("luna_direct_scan_retry_requires_unanswered_request")
+        if preview_only:
+            return {**context, "run_fingerprint": fingerprint, "status": "prepared_no_calls",
+                    "completed_sources": len(rows), "maximum_new_source_requests": min(max_sources, len(keys) - len(rows)),
+                    "next_source_keys": keys[len(rows):len(rows) + min(max_sources, 3)],
+                    "unseen_capacity_sufficient": len(keys) >= target}
+        if len(keys) < target:
+            raise ValueError("luna_direct_scan_insufficient_unseen_sources")
+        if not resume:
+            write_jsonl_atomic([], result_path)
+
+        def save(status: str) -> dict[str, object]:
+            constructions = [row.get("construction") or {} for row in rows]
+            responses = [row["response"] for row in rows if row.get("response") is not None]
+            rejections: Counter[str] = Counter()
+            for construction in constructions:
+                rejections.update(construction.get("rejection_reason_counts", {}))
+            incomplete_attempts = sum(len(row.get("incomplete_attempts", [])) for row in rows)
+            if active is not None:
+                incomplete_attempts += len(active.get("incomplete_attempts", []))
+            payload = {
+                **context, "run_fingerprint": fingerprint, "status": status,
+                "completed_sources": len(rows), "active_request": active, "exports": exports,
+                "results_sha256": sha256_obj([row["result_sha256"] for row in rows]),
+                "eligible_source_count": sum(accepted(row) for row in rows),
+                "invalid_output_count": sum(row.get("status") == "invalid_output" for row in rows),
+                **{field: sum(row.get(field, 0) for row in constructions)
+                   for field in ("candidate_count", "counter_candidate_count", "valid_slot_count", "valid_pair_count", "selected_pair_count")},
+                "rejection_reason_counts": dict(rejections),
+                "provider": {
+                    "logical_api_calls": len(rows) + int(active is not None) + incomplete_attempts,
+                    "incomplete_attempt_count": incomplete_attempts + int(active is not None and active.get("response") is None),
+                    "received_response_count": len(responses) + int(active is not None and active.get("response") is not None),
+                    "external_call_counts_complete": active is None and incomplete_attempts == 0,
+                    "transport_retry_count": sum(int(r.get("transport_retry_count") or 0) for r in responses),
+                    **{field: sum(r[field] for r in responses) if all(type(r.get(field)) in (int, float) for r in responses) else None
+                       for field in ("input_tokens", "output_tokens", "latency_seconds")},
+                },
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if supplemental:
+                payload["construction_eligible_source_count"] = sum(bool(row.get("eligible")) for row in constructions)
+                payload["query_text_collision_source_count"] = sum(
+                    bool(row.get("eligible")) and query_collision(row) for row in constructions)
+            payload["content_sha256"] = sha256_obj(payload)
+            write_json(payload, summary_path)
+            return payload
+
+        # 未知状态的请求不能自动重发，也不能被当成不合格 source 跳过。
+        if active is not None and active.get("response") is None and not retry_incomplete:
+            return save("execution_incomplete")
+        provider: LunaDirectCandidateProvider | None = None
+        eligible_count = sum(accepted(row) for row in rows)
+        save("running")
+        for index in range(len(rows), min(len(keys), len(rows) + max_sources)):
+            if eligible_count == target:
+                break
+            source = pool._read_source(keys[index])
+            chunk = {"dataset": dataset, "source_key": source["source_key"],
+                     "chunk_text": source["full_text"], "chunk_sha256": source["source_hash"]}
+            validate_luna_direct_source(chunk)
+            if active is None or active.get("response") is None:
+                if provider is None:
+                    try:
+                        provider = build_luna_candidate_provider(root, direct_pairs=True)
+                    except Exception:
+                        return save("initialization_error")
+                incomplete_attempts = [] if active is None else [
+                    *active.get("incomplete_attempts", []),
+                    {key: value for key, value in active.items() if key != "incomplete_attempts"},
+                ]
+                active = {"source_index": index, "response": None, "status": "started",
+                          "incomplete_attempts": incomplete_attempts}
+                save("running")
+
+            def observe(response: Mapping[str, object]) -> None:
+                active.update(status="response_received", response=dict(response))
+                try:
+                    save("running")
+                except Exception as exc:
+                    raise LunaABPersistenceError("luna_direct_response_save_failed") from exc
+
+            row = {"source_index": index, "source_metadata": metadata[keys[index]],
+                   "status": "completed", "response": None, "candidates": None, "construction": None}
+            try:
+                if active.get("response") is not None:
+                    candidates = LunaDirectCandidateProvider(client=None, profile={}).parse_response(active["response"])
+                else:
+                    assert provider is not None
+                    provider.response_observer = observe
+                    candidates = provider.construct_paired_candidates(chunk)
+                if active["response"].get("provider_model_id") != "gpt-5.6-luna":
+                    return save("provider_model_mismatch")
+                row["candidates"] = candidates
+                row["construction"] = select_luna_direct_pairs(chunk, candidates)
+            except LunaABPersistenceError:
+                raise
+            except Exception as exc:
+                if active.get("response") is None:
+                    active.update(status="execution_incomplete", error_type=type(exc).__name__)
+                    return save("execution_incomplete")
+                if active["response"].get("provider_model_id") != "gpt-5.6-luna":
+                    return save("provider_model_mismatch")
+                if not isinstance(exc, ValueError):
+                    active.update(status="execution_error", error_type=type(exc).__name__)
+                    return save("execution_error")
+                row.update(status="invalid_output", error_type=type(exc).__name__)
+            row["response"] = active["response"]
+            row["incomplete_attempts"] = active.get("incomplete_attempts", [])
+            row["result_sha256"] = sha256_obj(row)
+            append_jsonl_record(row, result_path)
+            rows.append(row)
+            active = None
+            eligible_count += int(accepted(row))
+            save("running")
+            if show_progress:
+                print(f"Luna eligibility {dataset}: screened={len(rows)} eligible={eligible_count}/{target}", flush=True)
+
+        if eligible_count != target:
+            return save("insufficient_eligible_capacity" if len(rows) == len(keys) else "paused_source_limit")
+        selected = []
+        for row in rows:
+            construction = row.get("construction") or {}
+            if accepted(row):
+                pairs = [{**pair, "query_manifest_hash": _query_manifest_hash(pair)}
+                         for pair in construction["selected_pairs"]]
+                selected.append({"dataset": dataset, **row["source_metadata"],
+                                 "chunk_sha256": row["source_metadata"]["source_hash"],
+                                 "eligible": True, "selected_pairs": pairs})
+        if supplemental:
+            selected_path = output / "selected_pairs.jsonl"
+            if selected_path.exists():
+                if list(read_jsonl(selected_path)) != selected:
+                    raise ValueError("luna_direct_scan_export_drift")
+            else:
+                write_jsonl_atomic(selected, selected_path)
+            exports[selected_path.name] = sha256_file(selected_path)
+            return save(ready_status)
+        split = {"kind": "pcv_v24_split_manifest", "protocol_version": "pcv-mia-v24", "dataset": dataset,
+                 "selection_seed": config["selection_seed"],
+                 "rows": deterministic_split(selected, dataset=dataset, selection_seed=config["selection_seed"])}
+        split["manifest_sha256"] = sha256_obj(split)
+        # 实际调用既有正式导出器，验证三对/六问和Reserve排除后再保存。
+        build_luna_direct_run_plan(selected, split, dataset=dataset)
+        selected_path, split_path = output / "selected_pairs.jsonl", output / "split_manifest.json"
+        if selected_path.exists():
+            if list(read_jsonl(selected_path)) != selected:
+                raise ValueError("luna_direct_scan_export_drift")
+        else:
+            write_jsonl_atomic(selected, selected_path)
+        if split_path.exists():
+            if read_json(split_path) != split:
+                raise ValueError("luna_direct_scan_export_drift")
+        else:
+            write_split_manifest(split, split_path)
+        exports.update({path.name: sha256_file(path) for path in (selected_path, split_path)})
+        return save("eligibility_ready")
 
 
 def prepare_luna_only_ab(
@@ -2177,6 +2494,8 @@ def main() -> int:
             "preview-luna-only-ab",
             "preview-luna-only-smoke",
             "run-luna-only-smoke",
+            "preview-luna-only-eligibility",
+            "run-luna-only-eligibility",
             "preview-fact-ablation",
             "run-fact-ablation",
             "preview-two-stage-canary",
@@ -2194,11 +2513,22 @@ def main() -> int:
     parser.add_argument("--review", help="Assistant-only 候选级复核 JSONL（summarize-fact-ablation 使用）")
     parser.add_argument("--output-dir")
     parser.add_argument("--sample-sources", type=int)
+    parser.add_argument("--max-sources", type=int, help="Luna-only正式构造本批最多处理多少个新source；不改变2250目标")
+    parser.add_argument("--supplement-from", help="已完成eligibility目录；从其扫描末尾之后生成独立补充样本")
+    parser.add_argument("--supplement-eligible", type=int, help="补充模式目标合格数；同时要求Q-互异且无Q+/Q-文本重合，不改原split")
+    parser.add_argument("--retry-incomplete", action="store_true", help="仅配合Luna-only eligibility --resume，明确重试没有已保存响应的请求")
     parser.add_argument("--per-dataset", type=int, default=10)
     parser.add_argument("--use-luna", action="store_true")
-    parser.add_argument("--resume", action="store_true", help="恢复 canary、capacity 或 candidate pool 的已有结果")
+    parser.add_argument("--resume", action="store_true", help="恢复 canary、capacity、candidate pool 或 Luna-only eligibility 的已有结果")
     parser.add_argument("--candidate-pool", action="append", default=[], help="v24 pool_manifest.json；可重复提供，canary 还允许同数据集的互不重叠开发补充池")
     args = parser.parse_args()
+    if args.supplement_from is not None or args.supplement_eligible is not None:
+        if (args.command not in {"run-luna-only-eligibility", "preview-luna-only-eligibility"}
+                or not args.supplement_from or args.supplement_eligible is None
+                or args.supplement_eligible < 1 or not args.output_dir):
+            parser.error("supplement requires Luna-only eligibility, --supplement-from, positive --supplement-eligible and a separate --output-dir")
+    if args.retry_incomplete and args.command not in {"run-luna-only-eligibility", "preview-luna-only-eligibility"}:
+        parser.error("--retry-incomplete is only for Luna-only eligibility")
     if args.command == "validate-config":
         config = load_v24_config(PROJECT_ROOT)
         adapter = config["candidate_fact_adapter"]
@@ -2291,6 +2621,19 @@ def main() -> int:
         output_dir = args.output_dir or str(CANARY_OUTPUT_DIR)
         print(json.dumps(run_canary(PROJECT_ROOT, input_path=input_path, output_dir=output_dir,
                                    candidate_pools=args.candidate_pool, resume=args.resume), ensure_ascii=False))
+    elif args.command in {"run-luna-only-eligibility", "preview-luna-only-eligibility"}:
+        if not args.dataset or args.max_sources is None or args.max_sources < 1:
+            parser.error("luna-only-eligibility requires --dataset and positive --max-sources")
+        if args.input_path or args.candidate_pool or args.sample_sources is not None:
+            parser.error("luna-only-eligibility reads only the frozen source pool; no development input or candidate pool")
+        print(json.dumps(run_luna_only_eligibility(
+            PROJECT_ROOT, dataset=args.dataset,
+            output_dir=args.output_dir or f"artifacts/v24/eligibility/{args.dataset}",
+            max_sources=args.max_sources,
+            preview_only=args.command == "preview-luna-only-eligibility", resume=args.resume,
+            retry_incomplete=args.retry_incomplete,
+            supplement_from=args.supplement_from, supplement_eligible=args.supplement_eligible,
+        ), ensure_ascii=False))
     elif args.command in {"run-luna-only-smoke", "preview-luna-only-smoke"}:
         if not args.input_path:
             parser.error("luna-only-smoke requires --input frozen chunk JSONL")

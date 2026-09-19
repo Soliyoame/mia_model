@@ -101,6 +101,21 @@ ia_shadow:
 
 victim:
   profiles:
+    gemma2_2b_server:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      model_version_env: PCV_VICTIM_MODEL_VERSION
+      base_url: ""
+      model: gemma-2-2b-it-bf16
+      # 用户确认的完整BF16部署标识，非独立核验的HF权重commit。
+      model_version: gemma-2-2b-it-bf16
+      system_prompt_as_user: true
+      temperature: 0
+      timeout: 60
+      stream: false
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
     gemma2_2b_primary:
       provider: huggingface_local
       allow_role_env_overrides: false
