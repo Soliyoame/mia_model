@@ -1,0 +1,103 @@
+protocol_version: pcv-mia-v25
+method_version: correctness-gated-source-consistent-followup
+specification_version: pcv-restoration-first-v25-successor-r1
+status: development_only_pre_formal
+seed: 42
+
+datasets:
+  - nfcorpus
+  - scidocs
+  - trec-covid
+
+# These runtime fields deliberately match the current V24 nfcorpus MEntA cell.
+runtime:
+  llm_profiles_path: configs/llm_profiles.yaml
+  victim_profile: gemma2_2b_server
+  concrete_model: gemma-2-2b-it-bf16
+  generator_version: gemma-2-2b-it-bf16
+  rag_prompt_version: v24-rag-answer
+  retrieval:
+    backend: dense
+    retriever_id: BAAI/bge-base-en-v1.5
+    revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+    chunk_size: 128
+    chunk_overlap: 32
+    top_k: 5
+  generation:
+    temperature: 0.0
+    max_tokens: 512
+    timeout: 60
+    retries: 0
+    request_interval_seconds: 5
+
+query_generator:
+  profile: luna_query_generator
+  configured_model: gpt-5.6-luna
+  temperature: 0.0
+  max_tokens: 4096
+  retries: 0
+
+query_protocol:
+  initial_queries: 3
+  followup_max: 3
+  total_max: 6
+  trigger: initial_response_is_correct
+  untriggered_label: NA_not_triggered
+  independent_requests: true
+
+source_pool:
+  membership_blind: true
+  paths:
+    database: artifacts/v24/source_pools/{dataset}/source_pool.sqlite3
+    source_order: artifacts/v24/source_pools/{dataset}/source_order.json
+    development_exclusions: artifacts/v24/source_pools/{dataset}/development_exclusions.json
+    source_pool_manifest: artifacts/v24/source_pools/{dataset}/source_pool_manifest.json
+
+split:
+  source_unit: source_document
+  counts:
+    KB_Member: 1000
+    True_Non_Member: 1000
+    Reserve: 250
+  role_assignment: deterministic_source_order_without_prior_membership_labels
+  source_exclusive: true
+
+development:
+  pair_quotas:
+    nfcorpus: 2
+    scidocs: 1
+    trec-covid: 1
+  accepted_source_requires_answer_derivability_review: true
+  controls:
+    clean_3: 3
+    unconditional_6: 6
+    followup_only_3: 3
+    source_matching: independent_source_matched_cells
+    query_plan_arms:
+      clean_3: initial_only
+      unconditional_6: initial_plus_followup_unconditional
+      followup_only_3: followup_only
+
+scoring:
+  primary: S_chain
+  statistical_unit: source_document
+  formulas:
+    S_initial: sum(I_i)/3
+    S_followup: sum(I_i*F_i)/sum(I_i)
+    S_chain: sum(I_i*F_i)/3
+    S_depth: (sum(I_i)+sum(I_i*F_i))/6
+  zero_followup_denominator: undefined
+  report_metrics:
+    - source_level_auc
+    - bootstrap_auc_ci95
+    - macro_dataset_auc
+    - macro_dataset_bootstrap_ci95
+    - tpr_at_1pct_fpr
+    - tpr_at_5pct_fpr
+
+governance:
+  external_calls_performed: 0
+  membership_labels_read_during_selection: false
+  victim_visible_during_selection: false
+  auc_visible_during_selection: false
+  formal_release_allowed: false

@@ -3939,3 +3939,10 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 完成本地合并后在主线验证干净状态、正式输入绑定与可用运行命令；正式cell尚未启动，不推送远端。
 
 冻结参数仍为nfcorpus × Gemma完整BF16 × dense BGE，2000主source、12000问，Reserve=0，top-k5、三对六问、PVS独立负惩罚；服务器版本按用户确认的部署别名记录。唯一下一步为完成主线合并验证并交付用户执行命令。
+### 2026-09-29：V25 successor 主线代码交付（未启动实验）
+
+- [x] 从当前 V24 工作分支建立 `codex/v25-successor-mainline`；新增配置驱动的 V25 source split/helper、主 runner 绑定和 source-level `S_chain`/AUC/CI 报告路径。
+- [x] V25 仅对齐 MEntA 共享运行条件：Gemma 2 2B BF16、BGE dense、128/32、top-k=5、temperature=0、512 token；不复用 MEntA/V24 labels、split、query、response、score 或五问/NLI arm。
+- [x] 固定 Clean-3、unconditional-6、follow-up-only-3 source-matched query controls；主流程仍是三初问后逐槽触发追问，预算 3--6 次，主统计单位为 source document。
+- [x] 新增配置/source/hash 隔离、Member-only index、六槽/预算、零 follow-up 分母、source-level dataset/macro 指标测试；定向 V25 测试 32/32 通过。
+- [ ] 仍须先通过 development 容量门槛后才能进入 formal；本次未运行 Luna、victim、Retriever、GPU 或 API，不产生正式结果。

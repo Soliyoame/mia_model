@@ -4938,3 +4938,21 @@ resume/formal binding同时记录wrapper hash和覆盖wrapper、RAG shell、LLM-
 固定输入采用reconciled_20260919：nfcorpus为2250 source，1000 Member/1000 Non-Member/250 Reserve；主计划2000 source/6000 pair/12000 query，主库1000 Member/3894 chunk，BGE revision与128/32切块、top-k5保持。生成模型为用户确认的完整BF16 Gemma2 2B服务器，别名gemma-2-2b-it-bf16；身份口径为用户确认部署，不伪称核验HF commit。system指令采用本地Gemma原有user前缀格式，PVS S+ * R- - A-、三对六问不变。
 
 主线工作树使用artifacts/v24/worktrees/main，保持原工作区用户资产。以实际Git提交固定代码/config，沿用已有split/index/hash，无新治理层；长运行命令交给用户，不代跑正式victim、Retriever或NLI推理，不推送远端。合并后的校验和提交身份以随后完成记录为准。
+### 2026-09-29：V25 successor 主线代码交付（未启动实验）
+
+本轮从当前 V24 工作分支建立 `codex/v25-successor-mainline`，实现配置驱动的 V25 主线入口。新增
+`configs/restoration_first_v25.yaml` 与 `src/prepare/restoration_first_v25.py`：三数据集独立读取 source pool/order，
+按 source 构造 development split 和 manifest，选择阶段不读取旧 membership labels、eligibility、responses 或 scores，
+并保留 source/text hash 身份。主 runner `scripts/92_run_v25_gated_followup_pilot.py` 不再导入 V24 runner，主 index
+只由当前 plan 的 `KB_Member` source 构成。
+
+V25 运行参数仅与 MEntA 当前 nfcorpus cell 共享 Gemma 2 2B BF16、BGE dense、128/32 切块、top-k=5、temperature=0、
+512 输出 token；query、3 初问 + 逐槽追问预算（3--6）、`S_chain=sum(I_i*F_i)/3` 和 source-level 统计保持 V25 自身定义。
+冻结 query 时另外物化 Clean-3、unconditional-6、follow-up-only-3 的 source-matched control query counts，不增加五问/NLI arm。
+报告路径补充 `S_initial`、有明确分母的 `S_followup`、`S_depth`、逐数据集/macro AUC、bootstrap CI 与低 FPR 字段，
+零条件分母写为 `null`。
+
+新增配置对齐、六槽/预算、source/hash 隔离、Member-only index、control query 数、`S_chain`/零分母/source-level macro
+指标测试，V25 定向测试 32/32 通过。SQLite source 读取显式关闭连接，避免 Windows 临时 fixture 锁文件。README 与任务总表
+已同步。该交付仍是 `development_only_pre_formal`，必须先通过容量门槛；本轮 Luna、victim、Retriever、GPU、模型下载和
+真实 API 调用均为 0，V24 冻结配置及历史 artifact 未改。

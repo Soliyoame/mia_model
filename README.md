@@ -2,6 +2,22 @@
 
 PCV-MIA（Paired Counterfactual Verification Membership Inference Attack）研究如何通过成对事实验证问题，判断一篇 source document 是否属于 RAG 知识库。主攻击分数是 source-level、RAG-only Paired Verification Score（PVS）；LLM-only 用于归因对照。
 
+## 当前入口：v25 正确性门控源一致性递进攻击
+
+V25 是 V24 之后的 successor 主线实现，代码入口为
+[`scripts/92_run_v25_gated_followup_pilot.py`](scripts/92_run_v25_gated_followup_pilot.py)，配置为
+[`configs/restoration_first_v25.yaml`](configs/restoration_first_v25.yaml)。它在 `nfcorpus`、`scidocs`、
+`trec-covid` 上使用独立 source pool/order 构造 source-exclusive development split，主索引只允许
+`KB_Member`。每个 source 固定 3 个初问，只有对应初问正确时才发送同槽追问，最多 6 次；唯一主分数是
+source-level `S_chain = sum(I_i * F_i) / 3`，并报告 `S_initial`、有明确分母的 `S_followup`、`S_depth`、
+逐数据集/macro AUC 及 CI。Clean-3、unconditional-6、follow-up-only-3 作为 source-matched controls，
+不改变 V25 主预算或评分。
+
+V25 仅共享 MEntA 当前 nfcorpus cell 的运行条件：Gemma 2 2B BF16、BGE dense、128/32 切块、top-k=5、
+temperature=0、512 输出 token；不复用 MEntA 的五问/NLI scoring arm、split、query、response、label 或 score。
+当前配置为 `development_only_pre_formal`，必须先通过 development 容量门槛；本次实现未启动真实 API、GPU、
+Retriever 或 victim 实验。V24 冻结配置与历史 artifact 保持不变。
+
 ## 当前入口：v24 Pre-Split Eligibility
 
 当前主线为 `pcv-mia-v24 / pcv-query-local-counterfactual-reconstruction`，仍处于开发验证阶段。详细实验过程、结果和下一步统一维护在[研究总表](研究记录/顶会推进_notes.md)与[任务总表](研究记录/顶会推进_task_plan.md)，本页只提供入口和简要状态。
