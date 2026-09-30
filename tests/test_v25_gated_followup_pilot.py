@@ -49,7 +49,7 @@ class GatedFollowupPilotTests(unittest.TestCase):
         self.assertEqual(runtime["generation"]["temperature"], 0.0)
         self.assertEqual(runtime["generation"]["max_tokens"], 512)
         self.assertEqual(MODULE.V25_CONFIG["scoring"]["primary"], "S_chain")
-        self.assertEqual(MODULE.V25_CONFIG["query_generator"]["configured_model"], "gpt-5.6-luna")
+        self.assertEqual(MODULE.V25_CONFIG["query_generator"]["configured_model"], "gpt-6-luna")
 
     def test_prepare_completion_uses_v25_plan_pair_count(self):
         source = {"source_key": "x", "source_hash": "h", "normalized_text_hash": "nh",

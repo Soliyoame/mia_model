@@ -89,7 +89,8 @@ INITIAL_RESPONSES = OUT / "initial_responses.jsonl"
 FOLLOWUP_RESPONSES = OUT / "followup_responses.jsonl"
 REPORT = OUT / "report.json"
 CONTROL_QUERY_PLAN = OUT / "control_query_plan.jsonl"
-MAX_LUNA = 8
+# Development regeneration may cover a five-pair / ten-source cohort.
+MAX_LUNA = 10
 MAX_VICTIM = 48
 CONTEXT_REFERENCE = re.compile(
     r"\b(?:the above|above[- ]mentioned|"
