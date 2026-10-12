@@ -14,7 +14,7 @@
 
 ## Research Goal & Scientific Standard
 
-项目目标是把 PCV-MIA 做到可投稿安全、隐私或机器学习顶会的研究质量。工程决策优先保证：威胁模型清晰、数据无泄漏、对照公平、统计单位正确、协议可复现、失败证据可审计，而不是只追求跑通或提高单次 AUC。
+项目目标会议为 USENIX Security 2027，目标是把 PCV-MIA 做到可投稿安全、隐私或机器学习顶会的研究质量。工程决策优先保证：威胁模型清晰、数据无泄漏、对照公平、统计单位正确、协议可复现、失败证据可审计，而不是只追求跑通或提高单次 AUC。
 
 - 论文主评估单位是 source document；chunk 只用于切分、检索和构造查询，不能把 chunk 当独立样本夸大样本量。
 - 模型、Retriever、切块、实体策略、阈值、查询预算和审计规则必须在正式 test/victim 结果前冻结。禁止根据正式攻击 AUC、victim response 或 membership label 调参。
@@ -323,17 +323,16 @@ Git 本身就是版本控制系统，不需要在文件系统里重新实现一�
 
 ## Repository Map
 
-- `src/data/`：数据读取、清洗、切块和 Enron sampling。
-- `src/prepare/`：source/candidate pool、eligibility、split、benchmark、版本化 release controls、capacity 与 entity-policy 工作流。
-- `src/attack/`：attackability selector、实体抽取/路由、扰动和语义解析。
-- `src/fact_extraction/`、`src/paired_claims/`、`src/query_generation/`：事实、最小反事实 claim 和成对 query 构造。
-- `src/rag/`、`src/llm/`：索引、Retriever、RAG/LLM-only runner 与 OpenAI-compatible 客户端。
-- `src/parsing/`、`src/scoring/`、`src/evaluation/`：stance parsing、PCV/calibration、统计与论文报告。
-- `src/baselines/`、`src/defenses/`、`src/spoof/`：对照方法、防御和可选 hard negative。
-- `src/utils/`：I/O、hash、seed、日志和 run identity；这些通常处于实验完整性边界内。
-- `scripts/01_*.py` 到 `15_*.py` 是经典主流水线；`scripts/run_pipeline.py` 只编排 01-15。后续编号与未编号脚本包含独立协议、源池构建、门禁和审计入口，不能因为不在 01-15 中就视为辅助废弃代码，也不能假定经典 runner 已支持当前协议。
-- `configs/` 按协议世代并存；运行时必须显式选择正确配置，不能用无版本默认配置替换目标协议的冻结配置。
-- `artifacts/`、`indexes/` 和 `legacy/` 保存带身份的生成物；`datasets/` 保存原始/处理数据。不要手工修改大型 artifact 来“修结果”。
+- `src/shared_g/`：ReCheck shared-G 的来源准备、事实/query 构造、Member-only 检索、逐槽门控与断点恢复。
+- `src/evaluation/answer_judgment.py`：逐回答规则/NLI 判分；`src/evaluation/source_scoring.py`：当前三值来源评分；`metrics.py` 提供来源级统计。
+- `scripts/104_run_v25_shared_g_formal.py` 是 shared-G 构造及冻结版本入口；`scripts/105_run_v25_shared_g_nli.py` 是全库 NLI v3 问答入口，使用显式 `--config` 选择 Generator。
+- `configs/v25_shared_g_formal*.yaml` 绑定问答及判分版本；`configs/v25_signed_scoring*.yaml` 绑定当前来源评分；`configs/llm_profiles.yaml` 是共享模型 profile 配置。
+- `src/prepare/restoration_first_v25.py`、`src/rag/`、`src/llm/`、`src/utils/` 提供 source pool、切块/嵌入、客户端和 I/O/hash 等共享能力。
+- `scripts/92_*.py` 至 `103_*.py` 及 `configs/restoration_first_v25.yaml` 等是 V25 开发、历史复现或诊断入口；被现有测试和分析引用的实现继续保留，不将其旧评分视为当前主分。
+- `artifacts/v25/` 保存开发、冻结问答及来源评分产物；V24 历史输入以目标配置的显式路径绑定为准。
+- `artifacts/v24/worktrees/main/` 是独立 Git 工作树，不按普通实验产物清理；`legacy/` 保存历史审计归档。
+- `datasets/` 保存原始数据与 BEIR corpus；`models/` 保存本地模型。不要手工修改带身份的产物来“修结果”。
+- `paper/`：论文稿件及配套材料的统一目录；涉及论文写作、修改或审阅时，优先读取该目录的 `README.md`、稿件及[写作记录](paper/写作记录.md)，并将撰写、修订、编译与交付进展记录到该文件。
 - `tests/` 使用 `unittest`；`研究记录/` 保存研究依据、协议历史和接管摘要。
 
 ## Architecture & Leakage Invariants
@@ -390,7 +389,9 @@ git diff --check
 
 ## Research Progress Records
 
-`研究记录/顶会推进_notes.md` 与 `研究记录/顶会推进_task_plan.md` 是项目级权威总表。任何重要协议、模型、Retriever、环境、实验身份、门禁、artifact 状态、错误处理、论文口径或下一步发生变化时，必须同步更新两者：notes 记录高层决策、依据和结果，task plan 记录阶段勾选、当前状态和唯一下一步。
+`研究记录/顶会推进_notes.md` 与 `研究记录/顶会推进_task_plan.md` 是实验过程的项目级权威总表。任何重要实验协议、模型、Retriever、环境、实验身份、门禁、artifact 状态、错误处理、实验结论解释或实验下一步发生变化时，必须同步更新两者：notes 记录高层决策、依据和结果，task plan 记录阶段勾选、当前状态和唯一下一步。
+
+论文撰写、修订、文献整理、图表排版、编译、稿件版本与交付记录统一维护在 [paper/写作记录.md](paper/写作记录.md)，不要写入上述两份实验总表。论文工作若实际改变实验设计或执行状态，仅将相应实验变化同步到实验总表；纯写作更新无需同步。
 
 详细指标、逐次日志和完整证据写入对应 `研究记录/思路v*.txt`、专项实施记录或机器可读 artifact。根目录 `notes.md`/`task_plan.md` 可作任务级工作日志，但不能替代上述两份项目总表。更新历史结论时追加带日期的 superseding 条目，不回写旧事实。
 

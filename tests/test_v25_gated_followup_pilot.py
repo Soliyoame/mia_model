@@ -1,9 +1,11 @@
 import importlib.util
 import copy
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -50,6 +52,10 @@ class GatedFollowupPilotTests(unittest.TestCase):
         self.assertEqual(runtime["generation"]["max_tokens"], 512)
         self.assertEqual(MODULE.V25_CONFIG["scoring"]["primary"], "S_chain")
         self.assertEqual(MODULE.V25_CONFIG["query_generator"]["configured_model"], "gpt-6-luna")
+        self.assertEqual(MODULE.V25_CONFIG["generation_repair"], {
+            "max_repairs_per_phase": 1,
+            "scope": "full_phase",
+        })
 
     def test_prepare_completion_uses_v25_plan_pair_count(self):
         source = {"source_key": "x", "source_hash": "h", "normalized_text_hash": "nh",
@@ -215,6 +221,568 @@ class GatedFollowupPilotTests(unittest.TestCase):
         reasons = MODULE._validate_question("Which site was identified as North Ridge?", ["North Ridge"])
         self.assertIn("question_answer_leak", reasons)
 
+    def test_question_gate_rejects_unresolved_mask_placeholder(self):
+        reasons = MODULE._validate_question(
+            "What can be reconstructed from its [MASK] on the sampling set?",
+            [],
+        )
+        self.assertIn("question_placeholder", reasons)
+
+    def test_question_gate_does_not_apply_grammar_and_answer_shape_heuristics(self):
+        self.assertEqual(
+            MODULE._validate_question("What does it do and where is it used?", []), []
+        )
+        self.assertEqual(MODULE._validate_question("Which tasks?", []), [])
+        self.assertEqual(MODULE._validate_question("What frame rate?", []), [])
+
+    def test_retrieval_diagnostics_report_short_or_unanchored_questions(self):
+        self.assertIn(
+            "question_too_short_for_retrieval",
+            MODULE._query_retrieval_reasons("What is it?", "Alpha uses twelve units."),
+        )
+        self.assertIn(
+            "question_claim_overlap_too_small",
+            MODULE._query_retrieval_reasons(
+                "Which distant phenomenon causes substantial improvement?",
+                "Alpha uses twelve units.",
+            ),
+        )
+        self.assertEqual(
+            MODULE._query_retrieval_reasons(
+                "What units does Alpha use and when?", "Alpha uses twelve units."
+            ),
+            [],
+        )
+
+    def test_retrieval_diagnostics_do_not_fail_phase(self):
+        payload = self._payload()
+        payload["initial_facts"][0]["question"] = "What is it?"
+        records, reasons = MODULE._validate_phase_payload(
+            {"facts": payload["initial_facts"]},
+            self._source(payload),
+            "initial",
+        )
+        self.assertEqual(reasons, [])
+        self.assertEqual(len(records), 3)
+
+    def test_phase_retrieval_diagnostics_are_recorded_separately(self):
+        diagnostics = MODULE._phase_retrieval_diagnostics([{
+            "slot": "e1",
+            "question": "What is it?",
+            "claim": "Alpha uses twelve units.",
+        }])
+        self.assertEqual(diagnostics, {
+            "e1": ["question_too_short_for_retrieval", "question_claim_overlap_too_small"]
+        })
+
+    def test_complete_enumeration_answer_remains_valid_when_source_bound(self):
+        payload = self._payload()
+        payload["initial_facts"][0].update(
+            claim="Alpha uses 12 units and 4 units.",
+            answer="12 units and 4 units",
+            question="Which units does Alpha use?",
+        )
+        records, reasons = MODULE._validate_phase_payload(
+            {"facts": payload["initial_facts"]},
+            self._source(payload),
+            "initial",
+        )
+        self.assertEqual(reasons, [])
+        self.assertEqual(records[0]["answer"], "12 units and 4 units")
+
+    def _fact_pool(self, count: int = 12) -> tuple[dict[str, Any], str]:
+        facts = []
+        for index in range(count):
+            claim = f"Entity {index} has value {index + 10} units."
+            facts.append({
+                "candidate_id": f"f{index:02d}",
+                "entity": f"{index + 10} units",
+                "claim": claim,
+            })
+        return {"facts": facts}, " ".join(row["claim"] for row in facts)
+
+    def test_fact_pool_keeps_source_supported_multi_value_candidates(self):
+        payload, source = self._fact_pool()
+        payload["facts"][0]["entity"] = "10 and 11 units"
+        payload["facts"][0]["claim"] = "Entity 0 has values 10 and 11 units, respectively."
+        source += " " + payload["facts"][0]["claim"]
+        facts, reasons = MODULE._validate_fact_candidates(payload, source)
+        self.assertEqual(reasons, [])
+        self.assertEqual(len(facts), 12)
+        self.assertIn("10 and 11 units", [row["answer"] for row in facts])
+
+    def test_fact_pool_does_not_apply_multi_value_or_deictic_heuristics(self):
+        payload, source = self._fact_pool()
+        payload["facts"][0]["claim"] = (
+            "Treatments included alpha, beta, gamma, and delta."
+        )
+        payload["facts"][0]["answer"] = "alpha"
+        payload["facts"][0]["entity"] = "alpha"
+        source += " " + payload["facts"][0]["claim"]
+        facts, reasons = MODULE._validate_fact_candidates(payload, source)
+        self.assertEqual(reasons, [])
+        self.assertIn("alpha", [row["answer"] for row in facts])
+
+    def test_fact_pool_requires_only_source_supported_answers(self):
+        payload, source = self._fact_pool()
+        payload["facts"][0]["claim"] = "Entity 0 has value 30% frameshecond."
+        payload["facts"][0]["entity"] = "30% frameshecond"
+        source += " " + payload["facts"][0]["claim"]
+        facts, reasons = MODULE._validate_fact_candidates(payload, source)
+        self.assertEqual(reasons, [])
+        self.assertEqual(len(facts), 12)
+        self.assertIn("30% frameshecond", [row["answer"] for row in facts])
+
+    def test_fact_pool_does_not_guess_answer_syntax(self):
+        payload, source = self._fact_pool()
+        sentence = (
+            "Spurious but systematic correlations in functional connectivity "
+            "networks arise from subject motion"
+        )
+        payload["facts"][0]["entity"] = sentence
+        payload["facts"][0]["claim"] = sentence + "."
+        source += " " + payload["facts"][0]["claim"]
+        facts, reasons = MODULE._validate_fact_candidates(payload, source)
+        self.assertEqual(reasons, [])
+        self.assertEqual(len(facts), 12)
+        self.assertIn(sentence, [row["answer"] for row in facts])
+
+    def test_selector_is_deterministic_and_assigns_six_paired_slots(self):
+        payload, _source = self._fact_pool()
+        selected, reasons = MODULE._select_six_facts(payload["facts"])
+        self.assertEqual(reasons, [])
+        self.assertEqual([row["slot"] for row in selected], list(MODULE.FACT_SLOTS))
+        self.assertEqual(
+            [row["paired_initial_slot"] for row in selected[3:]], ["e1", "e2", "e3"]
+        )
+        again, _ = MODULE._select_six_facts(payload["facts"])
+        self.assertEqual(selected, again)
+
+    def test_selector_allows_repeated_subject_when_answers_and_claims_differ(self):
+        facts = []
+        for index in range(12):
+            facts.append({
+                "candidate_id": f"f{index:02d}",
+                "claim": f"The same subject has property {index}.",
+                "entity": str(index),
+            })
+        selected, reasons = MODULE._select_six_facts(facts)
+        self.assertEqual(len(selected), 6)
+        self.assertEqual(reasons, [])
+
+    def test_fact_candidate_gate_checks_source_support_not_relation_heuristics(self):
+        payload, source = self._fact_pool()
+        payload["facts"][0].update(
+            entity="This paper",
+            claim="This paper presents the approach.",
+        )
+        payload["facts"][1].update(
+            entity="optimal feature subset selection",
+            claim="We explore the relation between optimal feature subset selection and relevance.",
+        )
+        source += " " + payload["facts"][0]["claim"] + " " + payload["facts"][1]["claim"]
+        facts, reasons = MODULE._validate_fact_candidates(payload, source)
+        self.assertEqual(reasons, [])
+        self.assertIn("This paper", [row["answer"] for row in facts])
+        self.assertIn("optimal feature subset selection", [row["answer"] for row in facts])
+
+    def test_independent_question_gate_rejects_cross_slot_answer_but_not_other_source_answer(self):
+        fact = {"answer": "Alpha"}
+        self.assertIn(
+            "question_cross_slot_answer_leak",
+            MODULE._validate_independent_question(
+                "Which facility reported Beta units?", fact, ["Alpha", "Beta"]
+            ),
+        )
+        self.assertEqual(
+            MODULE._validate_independent_question(
+                "Which facility reported Beta units?", fact, ["Alpha"]
+            ),
+            [],
+        )
+
+    def test_independent_question_gate_does_not_guess_polarity(self):
+        reasons = MODULE._validate_independent_question(
+            "What percentage of participants were male?",
+            {"answer": "75% females", "claim": "75% females were enrolled."},
+            ["75% females"],
+        )
+        self.assertNotIn("question_polarity_mismatch", reasons)
+
+    def test_question_prompt_masks_all_selected_answers(self):
+        masked = MODULE._masked_claim("Alpha uses 12 units and Beta uses 4 units.", ["12 units", "4 units"])
+        self.assertEqual(masked, "Alpha uses [MASK] and Beta uses [MASK].")
+        prompt = MODULE.QUESTION_PROMPT.format(
+            phase="initial",
+            facts=json.dumps([
+                {"slot": "e1", "masked_claim": masked},
+            ])
+        )
+        self.assertIn("masked_claim", prompt)
+        self.assertNotIn("target_answer", prompt)
+        self.assertIn("contains no answer values", prompt)
+        self.assertIn("do not use pronouns or demonstratives", prompt)
+        self.assertIn("Never mention a slot, claim, mask, answer", prompt)
+        self.assertIn("[MASK]", prompt)
+        self.assertNotIn("target=", prompt)
+
+    def test_question_evidence_masks_other_selected_answers_too(self):
+        self.assertEqual(
+            MODULE._masked_claim(
+                "Alpha uses 12 units and Beta uses 4 units.",
+                ["12 units", "4 units"],
+            ),
+            "Alpha uses [MASK] and Beta uses [MASK].",
+        )
+
+    def test_question_phase_summary_requires_each_slot(self):
+        facts = [{"slot": slot} for slot in ("e1", "e2", "e3")]
+        phase = {"slot_attempts": {
+            "e1": {"status": "passed", "questions": [{"slot": "e1", "question": "Q1?"}]},
+            "e2": {"status": "failed_quality_gate", "quality_reasons": ["question_unresolved_pronoun"]},
+        }}
+        MODULE._summarize_question_phase(phase, facts)
+        self.assertEqual(phase["status"], "incomplete")
+        self.assertIn("e2_question_unresolved_pronoun", phase["quality_reasons"])
+        self.assertEqual(phase["questions"], [{"slot": "e1", "question": "Q1?"}])
+
+    def test_question_generation_sends_one_slot_per_request(self):
+        payload = self._payload()
+        facts = []
+        for slot, row in zip(MODULE.FACT_SLOTS, [*payload["initial_facts"], *payload["followup_facts"]]):
+            fact = dict(row)
+            fact["slot"] = slot
+            if slot.endswith("_prime"):
+                fact["paired_initial_slot"] = slot[:2]
+            facts.append(fact)
+        source_text = self._source(payload)
+        source = {"source_key": "sample::one", "source_hash": MODULE.sha256_text(source_text),
+                  "normalized_text_hash": "normalized", "dataset": "nfcorpus", "group": "KB_Member"}
+        prompts: list[str] = []
+
+        class FakeClient:
+            def chat_with_metadata(self, prompt: str, **_kwargs: Any) -> Any:
+                prompts.append(prompt)
+                body = prompt.split("Masked claims:\n", 1)[1]
+                masked = json.loads(body)
+                self_outer.assertEqual(len(masked), 1)
+                slot = masked[0]["slot"]
+                claim = next(fact["claim"] for fact in facts if fact["slot"] == slot)
+                anchor = MODULE._content_tokens(claim)
+                anchor_text = " ".join(sorted(anchor)[:3])
+                content = json.dumps({"questions": [{"slot": slot, "question": f"Which source details concern {anchor_text}?"}]})
+                return SimpleNamespace(content=content, provider_model_id="gpt-6-luna",
+                                       provider_request_id=f"request-{len(prompts)}", called_at="now")
+
+        self_outer = self
+        with tempfile.TemporaryDirectory() as temporary:
+            question_path = Path(temporary) / "question_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "_selected_map", return_value={source["source_key"]: {"status": "passed", "facts": facts}}), \
+                 patch.object(MODULE, "QUESTION_GENERATION", question_path), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate_questions(6)
+            self.assertEqual(len(prompts), 6)
+            attempt = list(MODULE.read_jsonl(question_path))[0]
+            self.assertEqual(attempt["status"], "passed")
+            self.assertEqual(attempt["phases"]["initial"]["status"], "passed")
+            self.assertEqual(attempt["phases"]["followup"]["status"], "passed")
+            for prompt in prompts:
+                self.assertNotIn('"target_answer"', prompt)
+                self.assertNotIn('"answer"', prompt)
+
+    def test_generate_makes_two_source_level_phase_requests(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        source = {
+            "source_key": "sample::two-phase",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "normalized",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+        responses = [
+            {"facts": payload["initial_facts"]},
+            {"facts": payload["followup_facts"]},
+        ]
+        calls: list[str] = []
+
+        class FakeClient:
+            def chat_with_metadata(self, prompt: str, **_kwargs: Any) -> Any:
+                calls.append(prompt)
+                return SimpleNamespace(
+                    content=json.dumps(responses[len(calls) - 1]),
+                    provider_model_id="gpt-6-luna",
+                    provider_request_id=f"phase-{len(calls)}",
+                    called_at="now",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate(2)
+            row = list(MODULE.read_jsonl(generation_path))[0]
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(row["status"], "passed")
+            self.assertEqual(set(row["phases"]), {"initial", "followup"})
+            self.assertEqual(len(row["records"]["initial_facts"]), 3)
+            self.assertEqual(len(row["records"]["followup_facts"]), 3)
+
+    def test_generate_does_not_pass_followup_when_initial_phase_failed(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        source = {
+            "source_key": "sample::initial-failure",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "normalized",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_with_metadata(self, _prompt: str, **_kwargs: Any) -> Any:
+                self.calls += 1
+                content = {"facts": []} if self.calls == 1 else {"facts": payload["followup_facts"]}
+                return SimpleNamespace(
+                    content=json.dumps(content), provider_model_id="gpt-6-luna",
+                    provider_request_id=f"phase-{self.calls}", called_at="now",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate(2)
+            row = list(MODULE.read_jsonl(generation_path))[0]
+            self.assertEqual(row["status"], "incomplete")
+
+    def test_generate_repairs_full_phase_and_preserves_original_response(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        payload["initial_facts"][0]["question"] = "What is it?"
+        source = {
+            "source_key": "sample::repair-one-slot",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "normalized",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+        initial_bad = copy.deepcopy(payload["initial_facts"])
+        initial_bad[1]["question"] = "Which value is 4?"
+        initial_repair = {"facts": copy.deepcopy(payload["initial_facts"])}
+        responses = [
+            {"facts": initial_bad},
+            initial_repair,
+            {"facts": payload["followup_facts"]},
+        ]
+        prompts: list[str] = []
+
+        class FakeClient:
+            def chat_with_metadata(self, prompt: str, **_kwargs: Any) -> Any:
+                prompts.append(prompt)
+                return SimpleNamespace(
+                    content=json.dumps(responses[len(prompts) - 1]),
+                    provider_model_id="gpt-6-luna",
+                    provider_request_id=f"repair-{len(prompts)}",
+                    called_at="now",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate(2)
+            row = list(MODULE.read_jsonl(generation_path))[0]
+            initial = row["phases"]["initial"]
+            self.assertEqual(initial["status"], "passed")
+            self.assertEqual(initial["repair"]["status"], "passed")
+            self.assertEqual(initial["repair"]["scope"], "full_phase")
+            self.assertEqual(initial["repair"]["records"], payload["initial_facts"])
+            self.assertEqual(initial["retrieval_diagnostics"], {
+                "e1": ["question_too_short_for_retrieval", "question_claim_overlap_too_small"]
+            })
+            self.assertEqual(initial["raw_response"], json.dumps({"facts": initial_bad}))
+            self.assertEqual(initial["repair"]["raw_response"], json.dumps(initial_repair))
+            self.assertEqual(initial["records"], payload["initial_facts"])
+            self.assertEqual(len(prompts), 3)
+
+    def test_generate_repair_failure_keeps_phase_failed(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        source = {
+            "source_key": "sample::repair-leak",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "normalized",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+        bad = copy.deepcopy(payload["initial_facts"])
+        bad[1]["question"] = "Which value is 4?"
+        repair = copy.deepcopy(payload["initial_facts"])
+        repair[1]["question"] = "Which value is 8?"
+        responses = [{"facts": bad}, {"facts": repair}]
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat_with_metadata(self, _prompt: str, **_kwargs: Any) -> Any:
+                self.calls += 1
+                return SimpleNamespace(
+                    content=json.dumps(responses[self.calls - 1]),
+                    provider_model_id="gpt-6-luna",
+                    provider_request_id=f"repair-{self.calls}",
+                    called_at="now",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate(1)
+            row = list(MODULE.read_jsonl(generation_path))[0]
+            self.assertEqual(row["phases"]["initial"]["status"], "failed_quality_gate")
+            self.assertEqual(row["phases"]["initial"]["repair"]["status"], "failed_quality_gate")
+            self.assertIn("e2_question_cross_slot_answer_leak", row["phases"]["initial"]["repair"]["quality_reasons"])
+            self.assertEqual(row["status"], "incomplete")
+
+    def test_generate_repairs_all_slots_for_global_phase_error_once(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        source = {
+            "source_key": "sample::repair-global",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "normalized",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+        prompts: list[str] = []
+
+        class FakeClient:
+            def chat_with_metadata(self, prompt: str, **_kwargs: Any) -> Any:
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    return SimpleNamespace(
+                        content=json.dumps({"facts": []}), provider_model_id="gpt-6-luna",
+                        provider_request_id="original", called_at="now",
+                    )
+                if len(prompts) == 2:
+                    return SimpleNamespace(
+                        content=json.dumps({"facts": payload["initial_facts"]}), provider_model_id="gpt-6-luna",
+                        provider_request_id="repair", called_at="now",
+                    )
+                return SimpleNamespace(
+                    content=json.dumps({"facts": payload["followup_facts"]}), provider_model_id="gpt-6-luna",
+                    provider_request_id="followup", called_at="now",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            with patch.object(MODULE, "_fixed_inputs", return_value=([source], {})), \
+                 patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text), \
+                 patch.object(MODULE, "_luna_client", return_value=(FakeClient(), {"timeout": 1}, "profile")), \
+                 patch.object(MODULE.time, "sleep"):
+                MODULE.generate(2)
+            row = list(MODULE.read_jsonl(generation_path))[0]
+            repair = row["phases"]["initial"]["repair"]
+            self.assertEqual(repair["scope"], "full_phase")
+            self.assertEqual(repair["status"], "passed")
+            self.assertEqual(len(prompts), 3)
+
+    def test_followup_full_phase_repair_preserves_pairing(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        records, reasons = MODULE._validate_phase_payload(
+            {"facts": payload["followup_facts"]},
+            source_text,
+            "followup",
+            [row["answer"] for row in payload["initial_facts"]],
+        )
+        self.assertEqual(reasons, [])
+        self.assertEqual(
+            [(row["slot"], row["paired_initial_slot"]) for row in records],
+            [("e1_prime", "e1"), ("e2_prime", "e2"), ("e3_prime", "e3")],
+        )
+
+    def test_followup_prompt_uses_only_paired_claim_fields(self):
+        prompt = MODULE.QUESTION_PROMPT.format(
+            phase="followup",
+            facts=json.dumps([{
+                "slot": "e1_prime",
+                "paired_initial_slot": "e1",
+                "paired_initial_masked_claim": "Alpha uses [MASK] units.",
+                "masked_claim": "Alpha began in [MASK].",
+            }]),
+        )
+        self.assertIn("paired_initial_masked_claim", prompt)
+        self.assertIn("Alpha began in [MASK]", prompt)
+        self.assertIn("follow-up phase", prompt)
+
+    def test_followup_hints_include_initial_answer_blacklist(self):
+        hints = MODULE._phase_initial_hints([{
+            "slot": "e1",
+            "claim": "Alpha uses 12 units.",
+            "answer": "12",
+        }])
+        self.assertEqual(hints, [{
+            "slot": "e1",
+            "masked_claim": "Alpha uses [MASK] units.",
+            "forbidden_initial_answer": "12",
+        }])
+
+    def test_question_batch_requires_all_slots_and_rejects_leak(self):
+        facts = [
+            {"slot": "e1", "answer": "12", "claim": "Alpha uses 12 units."},
+            {"slot": "e2", "answer": "4", "claim": "Beta uses 4 units."},
+            {"slot": "e3", "answer": "8", "claim": "Gamma uses 8 units."},
+            {"slot": "e1_prime", "answer": "1991", "claim": "Alpha began in 1991."},
+            {"slot": "e2_prime", "answer": "1993", "claim": "Beta began in 1993."},
+            {"slot": "e3_prime", "answer": "1995", "claim": "Gamma began in 1995."},
+        ]
+        payload = {"questions": [{"slot": fact["slot"], "question": f"Which details concern {fact['claim'].split()[0]} {fact['claim'].split()[1]}?"} for fact in facts]}
+        records, reasons = MODULE._validate_question_batch(payload, facts)
+        self.assertEqual(len(records), 6)
+        self.assertEqual(reasons, [])
+        payload["questions"][1]["question"] = "Which value is 4?"
+        _records, reasons = MODULE._validate_question_batch(payload, facts)
+        self.assertTrue(any("question_answer_leak" in reason for reason in reasons))
+
+    def test_stage_artifacts_bind_source_hashes(self):
+        source = {"source_key": "s1", "source_hash": "hash-1"}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fact_path = root / "facts.jsonl"
+            selected_path = root / "selected.jsonl"
+            question_path = root / "questions.jsonl"
+            MODULE._write_rows(fact_path, [{**source, "status": "passed"}])
+            MODULE._write_rows(selected_path, [{**source, "status": "passed"}])
+            MODULE._write_rows(question_path, [{**source, "slot": "e1", "status": "passed"}])
+            with patch.object(MODULE, "FACT_CANDIDATES", fact_path):
+                self.assertEqual(MODULE._fact_attempts([source])["s1"]["source_hash"], "hash-1")
+                rows = list(MODULE.read_jsonl(fact_path))
+                rows[0]["source_hash"] = "other"
+                MODULE._write_rows(fact_path, rows)
+                with self.assertRaisesRegex(RuntimeError, "fact_source_identity_drift"):
+                    MODULE._fact_attempts([source])
+
     def test_prompt_contains_complete_renderable_schema(self):
         source = "The literal {source} is not a format placeholder in this input."
         prompt = MODULE.GENERATION_PROMPT.format(source=source)
@@ -373,6 +941,36 @@ class GatedFollowupPilotTests(unittest.TestCase):
             self.assertEqual(result["new_calls"], {"luna": 0, "victim": 0, "retriever": 0})
             self.assertTrue(all(row["semantic_review_required"] for row in result["source_rows"]))
 
+    def test_replay_supports_two_phase_generation_records(self):
+        with self._replay_fixture() as paths:
+            rows = []
+            for source in json.loads(paths["PLAN"].read_text(encoding="utf-8"))["pairs"]:
+                for item in source["sources"]:
+                    payload = self._payload()
+                    phase_payloads = {
+                        "initial": {"facts": payload["initial_facts"]},
+                        "followup": {"facts": payload["followup_facts"]},
+                    }
+                    phases = {}
+                    for phase, phase_payload in phase_payloads.items():
+                        raw = json.dumps(phase_payload)
+                        phases[phase] = {
+                            "status": "passed",
+                            "raw_response": raw,
+                            "response_sha256": MODULE.sha256_text(raw),
+                            "provider_model_id": "gpt-6-luna",
+                        }
+                    rows.append({**item, "status": "passed", "phases": phases})
+            MODULE._write_rows(paths["GENERATION"], rows)
+            MODULE.replay_generation()
+            result = json.loads(paths["GENERATION_REPLAY"].read_text(encoding="utf-8"))
+            self.assertEqual(result["original_passed_sources"], 8)
+            self.assertEqual(result["structural_passed_sources"], 8)
+            self.assertEqual(
+                set(result["source_rows"][0]["records"]),
+                {"initial_facts", "followup_facts"},
+            )
+
     def test_replay_rejects_response_and_source_identity_drift(self):
         for field in ("raw_response", "source_hash"):
             with self.subTest(field=field), self._replay_fixture() as paths:
@@ -399,9 +997,66 @@ class GatedFollowupPilotTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "runner_drift"):
                 MODULE._fixed_inputs()
 
+    def test_runtime_drift_accepts_recorded_runner_digest_snapshot(self):
+        with self._replay_fixture() as paths:
+            snapshot = paths["CONFIG"].with_name("runner_at_generation.txt")
+            snapshot.write_text("original_runner_hash\n", encoding="utf-8")
+            config_payload = json.loads(paths["CONFIG"].read_text(encoding="utf-8"))
+            config_payload["input_sha256"] = {}
+            config_payload["protocol_config_sha256"] = MODULE.sha256_file(MODULE.V25_CONFIG["_config_path"])
+            MODULE.write_json(config_payload, paths["CONFIG"])
+            real_sha256_file = MODULE.sha256_file
+
+            def fake_sha256_file(path: Path) -> str:
+                resolved = Path(path).resolve()
+                if resolved == Path(MODULE.__file__).resolve():
+                    return "current_runner_hash"
+                if resolved == snapshot.resolve():
+                    return "snapshot_binary_hash"
+                return real_sha256_file(path)
+
+            with patch.object(MODULE, "OUT", paths["CONFIG"].parent), \
+                    patch.object(MODULE, "_input_hashes", return_value={}), \
+                    patch.object(MODULE, "sha256_file", side_effect=fake_sha256_file):
+                _sources, config = MODULE._fixed_inputs(allow_report_runtime_drift=True)
+            self.assertEqual(config["runner_sha256"], "original_runner_hash")
+
+    def test_victim_entrypoints_use_audited_runtime_drift_path(self):
+        queries = [{"arm": "initial", "query_id": "q1"}]
+        retrieval = {"q1": {}}
+        with patch.object(MODULE, "_fixed_queries", return_value=queries) as fixed_queries, \
+                patch.object(MODULE, "_fixed_retrieval", return_value=retrieval), \
+                patch.object(MODULE, "_run_victim") as run_victim:
+            MODULE.run_initial(24)
+        fixed_queries.assert_called_once_with(allow_report_runtime_drift=True)
+        run_victim.assert_called_once_with(queries, MODULE.INITIAL_RESPONSES, retrieval, 24)
+
+    def test_followup_budget_uses_current_query_plan_capacity(self):
+        queries = [
+            {"arm": arm, "query_id": f"{arm}-{index}", "source_key": "source", "slot_index": index,
+             "answer": f"answer-{arm}-{index}"}
+            for arm in ("initial", "followup")
+            for index in range(42)
+        ]
+        retrieval = {row["query_id"]: {} for row in queries}
+        positives = {("source", index): True for index in range(42)}
+        with patch.object(MODULE, "_fixed_queries", return_value=queries), \
+                patch.object(MODULE, "_fixed_retrieval", return_value=retrieval), \
+                patch.object(MODULE, "_initial_results", return_value=positives), \
+                patch.object(MODULE, "_run_victim") as run_victim:
+            MODULE.run_followup(42)
+        run_victim.assert_called_once_with(
+            [row for row in queries if row["arm"] == "followup"],
+            MODULE.FOLLOWUP_RESPONSES,
+            retrieval,
+            42,
+        )
+
     def test_frozen_aliases_and_numeric_boundaries(self):
         self.assertTrue(MODULE._answer_correct("**40** studies", "Forty", ["40"]))
         self.assertTrue(MODULE._answer_correct("52.7%-78.7%", "52.7%–78.7%"))
+        self.assertTrue(MODULE._answer_correct("precision was 98. 4 %", "98.4%"))
+        self.assertTrue(MODULE._answer_correct("a dioxin - like ( DL ) mixture", "dioxin-like (DL)"))
         self.assertFalse(MODULE._answer_correct("0.6", "6"))
         self.assertFalse(MODULE._answer_correct("65.6", "65"))
         self.assertFalse(MODULE._answer_correct("40", "Forty"))
@@ -474,6 +1129,236 @@ class GatedFollowupPilotTests(unittest.TestCase):
                 self.assertEqual(len(plan), 6)
                 self.assertEqual(sum(q["arm"] == "initial" for q in plan), 3)
                 self.assertEqual(plan[0]["aliases"], ["twelve"])
+
+    def test_review_accepts_two_phase_generation_records(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        sources = [
+            {"source_key": "phase::member", "source_hash": MODULE.sha256_text(source_text),
+             "normalized_text_hash": "member-text", "dataset": "scidocs", "group": "KB_Member"},
+            {"source_key": "phase::nonmember", "source_hash": MODULE.sha256_text(source_text + " second"),
+             "normalized_text_hash": "nonmember-text", "dataset": "scidocs", "group": "True_Non_Member"},
+        ]
+        attempts = []
+        for source in sources:
+            phase_rows = {}
+            for phase, phase_payload in (("initial", {"facts": payload["initial_facts"]}),
+                                         ("followup", {"facts": payload["followup_facts"]})):
+                raw = json.dumps(phase_payload)
+                records, reasons = MODULE._validate_phase_payload(
+                    phase_payload, source_text, phase,
+                    [row["answer"] for row in payload["initial_facts"]] if phase == "followup" else None,
+                )
+                self.assertEqual(reasons, [])
+                phase_rows[phase] = {
+                    "status": "passed", "raw_response": raw,
+                    "response_sha256": MODULE.sha256_text(raw), "records": records,
+                    "provider_model_id": "gpt-6-luna",
+                }
+            records, reasons = MODULE._merge_phase_records(
+                phase_rows["initial"]["records"], phase_rows["followup"]["records"], source_text
+            )
+            self.assertEqual(reasons, [])
+            attempts.append({**source, "status": "passed", "phases": phase_rows,
+                             "records": records})
+        plan = {"pairs": [{"dataset": "scidocs", "sources": sources}]}
+        review = {
+            "generation_sha256": "pending",
+            "sources": {
+                sources[0]["source_key"]: {
+                    "accepted": True,
+                    "answer_not_derivable_from_other_query_answer_pairs": {
+                        slot: True for slot in MODULE.FACT_SLOTS
+                    },
+                    "aliases": {},
+                },
+                sources[1]["source_key"]: {"accepted": False},
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "query_generation.jsonl"
+            review_path = Path(temporary) / "query_review.json"
+            MODULE._write_rows(generation_path, attempts)
+            review["generation_sha256"] = MODULE.sha256_file(generation_path)
+            MODULE.write_json(review, review_path)
+            with patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "QUERY_REVIEW", review_path), \
+                 patch.object(MODULE, "_source_text", side_effect=lambda row: source_text if row["source_key"] == "phase::member" else source_text + " second"):
+                accepted = MODULE._reviewed_generation(MODULE._sources(plan))
+            self.assertEqual(set(accepted), {"phase::member"})
+
+    def test_review_rejects_repair_provider_model_drift(self):
+        payload = self._payload()
+        source_text = self._source(payload)
+        source = {
+            "source_key": "phase::repair-drift",
+            "source_hash": MODULE.sha256_text(source_text),
+            "normalized_text_hash": "text",
+            "dataset": "nfcorpus",
+            "group": "KB_Member",
+        }
+        initial = copy.deepcopy(payload["initial_facts"])
+        initial[1]["question"] = "Which value is 4?"
+        original_raw = json.dumps({"facts": initial})
+        repair_raw = json.dumps({"facts": payload["initial_facts"]})
+        original_records, original_reasons = MODULE._validate_phase_payload(
+            {"facts": initial}, source_text, "initial"
+        )
+        self.assertIn("e2_question_answer_leak", original_reasons)
+        followup_raw = json.dumps({"facts": payload["followup_facts"]})
+        followup_records, _ = MODULE._validate_phase_payload(
+            {"facts": payload["followup_facts"]}, source_text, "followup",
+            [row["answer"] for row in payload["initial_facts"]],
+        )
+        attempts = [{
+            **source,
+            "status": "passed",
+            "phases": {
+                "initial": {
+                    "status": "passed", "records": payload["initial_facts"],
+                    "raw_response": original_raw, "response_sha256": MODULE.sha256_text(original_raw),
+                    "provider_model_id": "gpt-6-luna", "repair": {
+                    "status": "passed", "scope": "full_phase",
+                        "original_quality_reasons": sorted(set(original_reasons)),
+                        "raw_response": repair_raw, "response_sha256": MODULE.sha256_text(repair_raw),
+                        "provider_model_id": "other-model",
+                    },
+                },
+                "followup": {
+                    "status": "passed", "records": followup_records,
+                    "raw_response": followup_raw, "response_sha256": MODULE.sha256_text(followup_raw),
+                    "provider_model_id": "gpt-6-luna",
+                },
+            },
+        }]
+        merged, merge_reasons = MODULE._merge_phase_records(
+            payload["initial_facts"], followup_records, source_text
+        )
+        self.assertEqual(merge_reasons, [])
+        attempts[0]["records"] = merged
+        with tempfile.TemporaryDirectory() as temporary:
+            generation_path = Path(temporary) / "generation.jsonl"
+            review_path = Path(temporary) / "review.json"
+            MODULE._write_rows(generation_path, attempts)
+            review = {
+                "generation_sha256": MODULE.sha256_file(generation_path),
+                "sources": {source["source_key"]: {
+                    "accepted": True,
+                    "answer_not_derivable_from_other_query_answer_pairs": {
+                        slot: True for slot in MODULE.FACT_SLOTS
+                    },
+                    "aliases": {},
+                }},
+            }
+            MODULE.write_json(review, review_path)
+            with patch.object(MODULE, "GENERATION", generation_path), \
+                 patch.object(MODULE, "QUERY_REVIEW", review_path), \
+                 patch.object(MODULE, "_source_text", return_value=source_text):
+                with self.assertRaisesRegex(RuntimeError, "generation_repair_drift"):
+                    MODULE._reviewed_generation([source])
+
+
+class SharedGSuccessorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "v25_shared_g_successor_tests", ROOT / "scripts/103_run_v25_shared_g_successor.py"
+        )
+        cls.successor = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(cls.successor)
+
+    def _queries(self):
+        return [{"query_id": f"{arm}{i}", "source_key": "s", "arm": arm,
+                 "slot_index": i, "answer": "Alpha" if arm == "initial" else "Gamma"}
+                for arm in ("initial",) + self.successor.ARMS for i in range(3)]
+
+    def _initial(self):
+        return [{"query_id": f"initial{i}", "status": "completed",
+                 "response": "Alpha" if i == 0 else "unknown"} for i in range(3)]
+
+    def test_successor_blind_selection_ignores_input_membership(self):
+        pool = [{"source_key": str(i), "source_hash": f"h{i}", "normalized_text_hash": f"n{i}",
+                 "full_text": "a b c d", "group": "KB_Member", "membership": 1} for i in range(12)]
+        selected = self.successor.select_blind_sources(pool, 6, 42, 3, {"0"}, {"h1"})
+        changed = [{**row, "group": "True_Non_Member", "membership": 0} for row in pool]
+        self.assertEqual(selected, self.successor.select_blind_sources(changed, 6, 42, 3, {"0"}, {"h1"}))
+        self.assertNotIn("0", {row["source_key"] for row in selected})
+        self.assertNotIn("1", {row["source_key"] for row in selected})
+        self.assertEqual(sum(row["group"] == "KB_Member" for row in selected), 3)
+
+    def test_successor_nonmember_text_hash_overlap_rejected(self):
+        sources = [{"source_key": "m", "source_hash": "hm", "normalized_text_hash": "nm", "group": "KB_Member"},
+                   {"source_key": "n", "source_hash": "hn", "normalized_text_hash": "nn", "group": "True_Non_Member"}]
+        index = [sources[0], {"source_key": "fill", "source_hash": "hf", "normalized_text_hash": "nn", "group": "KB_Member"}]
+        with self.assertRaisesRegex(RuntimeError, "nonmember_index_overlap:normalized_text_hash"):
+            self.successor.validate_isolation(sources, index)
+        with self.assertRaisesRegex(RuntimeError, "designated_member_omitted"):
+            self.successor.validate_isolation(sources, [index[1]])
+
+    def test_successor_sends_each_arm_only_for_correct_local_slot(self):
+        planned = self.successor.gated_queries(self._queries(), self._initial())
+        self.assertEqual({q["query_id"] for q in planned}, {"correct_anchor0", "remote_only0"})
+        invalid = self._initial()
+        invalid[0]["status"] = "uncertain_transport"
+        with self.assertRaisesRegex(RuntimeError, "invalid_run_incomplete"):
+            self.successor.gated_queries(self._queries(), invalid)
+
+    def test_successor_missing_extra_followup_cannot_be_scored(self):
+        follow = [{"query_id": "correct_anchor0", "status": "completed", "response": "Gamma"}]
+        sources = [{"source_key": "s", "group": "KB_Member", "dataset": "nfcorpus"}]
+        with self.assertRaisesRegex(RuntimeError, "followup_gate_missing_or_extra"):
+            self.successor.source_scores(sources, self._queries(), self._initial(), follow, 1)
+
+    def test_successor_point_score_has_same_cutoff_local_baseline(self):
+        follow = [{"query_id": "correct_anchor0", "status": "completed", "response": "Gamma"},
+                  {"query_id": "remote_only0", "status": "completed", "response": "unknown"}]
+        sources = [{"source_key": "s", "group": "KB_Member", "dataset": "nfcorpus"}]
+        row = self.successor.source_scores(sources, self._queries(), self._initial(), follow, 1)[0]
+        self.assertEqual((row["local_only"], row["correct_anchor"], row["remote_only"]), (1, 2, 1))
+        initial = [{**r, "response": "Alpha"} for r in self._initial()]
+        follow = [{"query_id": q["query_id"], "status": "completed", "response": "unknown"}
+                  for q in self._queries() if q["arm"] != "initial"]
+        row = self.successor.source_scores(sources, self._queries(), initial, follow, 1)[0]
+        self.assertEqual(row["local_only"], 3)
+        self.assertEqual(row["correct_anchor"], 3)
+
+    def test_successor_freeze_validation_rejects_config_drift(self):
+        runner = self.successor.Successor()
+        with tempfile.TemporaryDirectory() as temporary:
+            runner.out = Path(temporary)
+            self.successor.write_json({"input_hashes": {"config": "old"}}, runner.path("run_config.json"))
+            with patch.object(runner, "input_hashes", return_value={"config": "new"}):
+                with self.assertRaisesRegex(RuntimeError, "frozen_code_config_or_source_pool_drift"):
+                    runner.validate()
+
+    def test_successor_provider_model_drift_stops_after_first_call(self):
+        runner = self.successor.Successor()
+        queries = [{"query_id": f"i{i}", "source_key": "s", "arm": "initial", "slot_index": i,
+                    "question": "Which value?", "answer": "Gamma"} for i in range(3)]
+        context = "Gamma is a value."
+        prompt = self.successor.PILOT.RAG_PROMPT.format(contexts=context, query=queries[0]["question"])
+        found = {q["query_id"]: {"retrieved_chunks": [{"text": context}],
+                                "context_sha256": self.successor.sha256_text(context),
+                                "prompt_sha256": self.successor.sha256_text(prompt)} for q in queries}
+        from unittest.mock import Mock
+        client = Mock()
+        client.generate_with_metadata.return_value = SimpleNamespace(
+            content="Gamma", provider_model_id="wrong-model", provider_request_id="r", called_at="now",
+            system_fingerprint=None,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            runner.out = Path(temporary)
+            self.successor.write_jsonl_atomic(queries, runner.path("query_plan.jsonl"))
+            self.successor.write_jsonl_atomic(list(found.values()), runner.path("retrieval.jsonl"))
+            profile = {"model": "gemma-2-2b-it-bf16", "timeout": 60}
+            with patch.object(runner, "retrieval_map", return_value=found), \
+                 patch.object(self.successor.PILOT, "load_llm_profiles", return_value={}), \
+                 patch.object(self.successor.PILOT, "build_victim_client", return_value=(client, profile)):
+                with self.assertRaisesRegex(RuntimeError, "victim_invalid_response_stop"):
+                    runner.run_victim(False, 3)
+            self.assertEqual(client.generate_with_metadata.call_count, 1)
+            self.assertEqual(self.successor.read_rows(runner.path("initial_responses.jsonl"))[0]["status"], "provider_model_drift")
 
 
 if __name__ == "__main__":

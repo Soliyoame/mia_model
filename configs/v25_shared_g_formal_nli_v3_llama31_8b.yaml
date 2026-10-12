@@ -1,0 +1,12 @@
+# 沿用已有NLI v3配置与阈值；在Llama实验响应前固定。
+version: binary_target_rules_nli_v3
+scoring_datasets:
+- nfcorpus
+- scidocs
+- trec-covid
+base_config: configs/v25_shared_g_formal_llama31_8b.yaml
+primary_scoring_config: configs/v25_signed_scoring_llama31_8b.yaml
+output_dir: artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012_nli_v3
+calibration: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/calibration.json
+development_report: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/report.json
+adoption_reason: fixed_existing_cohort_new_generator_judgment_selected_before_responses

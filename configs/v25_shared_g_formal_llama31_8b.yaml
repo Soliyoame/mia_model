@@ -1,0 +1,160 @@
+# 2026-10-12：复用Gemma固定文档、问题与检索；Llama重新产生回答。
+# 版本为已连通的部署别名，不宣称核验过HF权重commit。
+protocol_version: pcv-mia-v25
+method_version: shared-g-claim-anchor-point-score
+experiment_id: v25_fixed6000_llama31_8b_bge_seed45_20261012
+run_role: formal
+status: fixed_input_reuse_before_victim
+output_dir: artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012
+seed: 45
+datasets:
+- nfcorpus
+- scidocs
+- trec-covid
+runtime:
+  llm_profiles_path: configs/llm_profiles.yaml
+  victim_profile: llama31_8b_server
+  concrete_model: llama-3.1-8b-instruct
+  generator_version: llama-3.1-8b-instruct
+  rag_prompt_version: v24-rag-answer
+  retrieval:
+    backend: dense
+    retriever_id: BAAI/bge-base-en-v1.5
+    revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+    chunk_size: 128
+    chunk_overlap: 32
+    top_k: 5
+    query_instruction: 'Represent this sentence for searching relevant passages: '
+  generation:
+    temperature: 0.0
+    max_tokens: 512
+    timeout: 60
+    retries: 0
+    request_interval_seconds: 2
+  rag_prompt: 'Use the reference information to answer the user''s request naturally.
+    Use only the reference information. If it does not determine the answer, say that
+    it is unknown. Do not mention retrieval or search clues.
+
+
+    Reference information:
+
+    {contexts}
+
+
+    User request:
+
+    {query}'
+query_generator:
+  profile: luna_query_generator
+  configured_model: gpt-6-luna
+  temperature: 0.0
+  max_tokens: 4096
+source_pool:
+  membership_blind: true
+  paths:
+    database: artifacts/v24/source_pools/{dataset}/source_pool.sqlite3
+    source_order: artifacts/v24/source_pools/{dataset}/source_order.json
+    development_exclusions: artifacts/v24/source_pools/{dataset}/development_exclusions.json
+    source_pool_manifest: artifacts/v24/source_pools/{dataset}/source_pool_manifest.json
+source_selection:
+  counts:
+    nfcorpus:
+      KB_Member: 1000
+      True_Non_Member: 1000
+    scidocs:
+      KB_Member: 1000
+      True_Non_Member: 1000
+    trec-covid:
+      KB_Member: 1000
+      True_Non_Member: 1000
+  minimum_words: 80
+  order: seeded_shuffle_of_unused_source_pool
+  selection_mode: qualified_before_membership
+  membership_assignment: alternating_after_qualified_shuffle
+  replacement_after_freeze: false
+  unused_preparations: []
+  allow_v24_raw_document_reuse: true
+  allow_history_raw_document_reuse: true
+  history_roots:
+  - artifacts/v25
+  identity_filenames:
+  - source_manifest.jsonl
+  - index_manifest.jsonl
+  - index_manifest.json
+  - source_plan.json
+  - source_split.json
+  explicit_development_inputs:
+  - artifacts/v24/development/near_clean_far_expansion_20260927/plan.json
+  - artifacts/v24/development/near_clean_far_expansion_20260927/victim_query_plan.json
+  prior_v24_identity_inputs:
+  - artifacts/v24/worktrees/main/artifacts/v24/formal/reconciled_20260919/nfcorpus/gemma/dense/query_plan.jsonl
+index:
+  member_sources_per_dataset:
+    nfcorpus: 1000
+    scidocs: 1000
+    trec-covid: 1000
+  selection: designated_members_only
+query_protocol:
+  arms:
+  - correct_anchor
+  - remote_only
+  local_slots: 3
+  followup_gate: initial_response_correct_per_slot
+  query_budget: 3 + 2 * sum(I_i)
+  remote_region: preferred_not_required
+  anchor_context: exact_paired_local_claim
+construction:
+  maximum_attempts_per_source: 2
+  maximum_total_calls: 12000
+  maximum_answer_words: 12
+  temperature: 0.0
+  max_tokens: 4096
+  transport_retry_until_success: true
+  prompt_appendix: Return only three local facts and one shared G; do not generate
+    six follow-up questions. Questions must be self-contained and answer exactly their
+    canonical answer span, with no answer qualifiers already disclosed in the question.
+    Bind all four facts to the same focal study/cohort. G may include source-supported
+    population or intervention conditions needed to identify its answer, including
+    a condition that overlaps a local answer. The runner constructs all three remote-only
+    questions by exact reuse of the canonical G question. Each anchored question quotes
+    the exact paired local claim as source context, then reuses that same G question
+    verbatim. Do not use unresolved demonstratives or pronouns, generic conclusions,
+    incomplete lists, or G's answer in the target question or local claims. Formatting-only
+    answer variants are frozen before any victim response; no semantic synonyms or
+    response-dependent aliases are added.
+answer_policy:
+  matcher: canonical_surface_v3_token_boundaries_scoped_abstention
+  aliases: deterministic_format_only_before_freeze
+  ambiguous: zero_points_no_trigger
+  invalid: incomplete_run_no_final_metrics
+  post_response_alias_edits: false
+semantic_review:
+  reviewer_type: ai_membership_blind
+  acceptance_policy: usable_without_obvious_errors
+  profile: luna_query_generator
+  configured_model: gpt-6-luna
+  batch_size: 10
+  temperature: 0.0
+  max_tokens: 4096
+  transport_retry_until_success: true
+scoring:
+  primary: S_lambda
+  formula: sum(I_i) + lambda * sum(I_i * F_i)
+  lambda: 1.0
+  initial_gate_points: 1
+  operational_cutoff: 2.0
+  same_cutoff_baseline: local_only
+  statistical_unit: source_document
+evaluation:
+  primary: macro_source_auc
+  bootstrap_samples: 2000
+  confidence: 0.95
+  low_fpr_targets:
+  - 0.01
+  - 0.05
+reused_inputs:
+  source_dir: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_semantic_review_followup_review
+  retrieval_dirs:
+    nfcorpus: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_semantic_review_followup_review
+    scidocs: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_semantic_review_followup_review
+    trec-covid: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3_all

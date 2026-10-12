@@ -19,7 +19,7 @@ sibling:
       model_env: PCV_SIBLING_MODEL
       model_version_env: PCV_SIBLING_MODEL_VERSION
       base_url: ""
-      model: gpt-5.6-luna
+      model: gpt-6-luna
       model_version: ""
       timeout: 120
       temperature: 0
@@ -27,7 +27,7 @@ sibling:
       max_retries: 2
       retry_until_success: true
       request_interval_seconds: 0
-      requests_per_minute: 4
+      requests_per_minute: 8
       stream: false
       extra_body: {seed: 42}
       system_prompt: "Follow the requested schema exactly; do not add prose."
@@ -101,6 +101,21 @@ ia_shadow:
 
 victim:
   profiles:
+    llama31_8b_server:
+      provider: openai_compatible
+      api_key_env: PCV_VICTIM_API_KEY
+      base_url_env: PCV_VICTIM_BASE_URL
+      model_env: PCV_VICTIM_MODEL
+      model_version_env: PCV_VICTIM_MODEL_VERSION
+      base_url: ""
+      model: llama-3.1-8b-instruct
+      # 已连通的部署别名；不宣称独立核验过HF权重commit。
+      model_version: llama-3.1-8b-instruct
+      system_prompt_as_user: true
+      temperature: 0
+      timeout: 60
+      stream: false
+      system_prompt: "Follow the user instruction exactly. Return only the requested answer."
     gemma2_2b_server:
       provider: openai_compatible
       api_key_env: PCV_VICTIM_API_KEY

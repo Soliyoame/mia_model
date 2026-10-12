@@ -1,0 +1,60 @@
+experiment_id: v25_shared_g_query_stability_claim_anchor_fresh_100source_r2_20261003
+status: fresh_development_query_construction
+base_config: configs/restoration_first_v25.yaml
+output_dir: artifacts/v25/development/shared_g_query_stability_claim_anchor_fresh_100source_r2_20261003
+seed: 44
+source_selection:
+  dataset_counts: {nfcorpus: 34, scidocs: 34, trec-covid: 32}
+  minimum_words: 80
+  order: seeded_shuffle_of_unused_source_pool
+  membership_assignment: alternating_after_blind_source_selection
+  replacement_after_construction: false
+index:
+  member_sources_per_dataset: 50
+  selection: designated_members_plus_unused_blind_fill
+query_protocol:
+  arms: [correct_anchor, remote_only]
+  local_slots: 3
+  followup_gate: initial_response_correct_per_slot
+  query_budget: 3 + 2 * sum(I_i)
+  remote_region: preferred_not_required
+  anchor_context: exact_paired_local_claim
+construction:
+  maximum_attempts_per_source: 2
+  maximum_answer_words: 12
+  temperature: 0.0
+  max_tokens: 4096
+  retries: 0
+  prompt_appendix: >-
+    Return only three local facts and one shared G; do not generate six
+    follow-up questions. Questions must be self-contained and answer exactly
+    their canonical answer span, with no answer qualifiers already disclosed in
+    the question. Bind all four facts to the same focal study/cohort. G may
+    include source-supported population or intervention conditions needed to
+    identify its answer, including a condition that overlaps a local answer.
+    The runner constructs all three remote-only questions by exact reuse of the
+    canonical G question. Each anchored question quotes the exact paired local
+    claim as source context, then reuses that same G question verbatim. Do not
+    use unresolved demonstratives or pronouns, generic conclusions, incomplete
+    lists, or G's answer in the target question or local claims. Formatting-only
+    answer variants are frozen before any victim response; no semantic synonyms
+    or response-dependent aliases are added.
+answer_policy:
+  matcher: canonical_surface_v2_frozen_format_aliases
+  aliases: deterministic_format_only_before_freeze
+  ambiguous: zero_points_no_trigger
+  invalid: incomplete_run_no_final_metrics
+  post_response_alias_edits: false
+scoring:
+  primary: S_lambda
+  formula: sum(I_i) + lambda * sum(I_i * F_i)
+  lambda: 1.0
+  initial_gate_points: 1
+  operational_cutoff: 2.0
+  same_cutoff_baseline: local_only
+  statistical_unit: source_document
+evaluation:
+  bootstrap_samples: 2000
+  confidence: 0.95
+  low_fpr_targets: [0.01, 0.05]
+  formal_release_allowed: false

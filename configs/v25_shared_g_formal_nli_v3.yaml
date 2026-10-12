@@ -1,0 +1,10 @@
+# 用户决定直接正式接入；保留未通过 1% 目标、未进行独立验证的事实。
+# 继承冻结查询和已有响应；新判分、新追问和新指标使用独立目录。
+version: binary_target_rules_nli_v3
+scoring_datasets:
+  - scidocs
+base_config: configs/v25_shared_g_formal_followup_review.yaml
+output_dir: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3
+calibration: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/calibration.json
+development_report: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/report.json
+adoption_reason: user_requested_adoption_without_additional_validation

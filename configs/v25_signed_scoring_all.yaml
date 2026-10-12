@@ -1,0 +1,22 @@
+# 主线采用三值评分；1 和 2 沿用旧设置，尚未经过新公式的消融选择。
+# 这里只替换来源赋分，保留各批已固定的判分版本、查询和正确性门控。
+version: signed_correct_refused_v1
+output_dir: artifacts/v25/scoring/shared_g_signed_v1_20261009_all
+seed: 45
+inputs:
+  nfcorpus: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_semantic_review_followup_review
+  scidocs: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3
+  trec-covid: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3_all
+scoring:
+  primary: S_lambda
+  formula: (C - U) + lambda * (R - V)
+  normalized: false
+  lambda: 1.0
+  operational_cutoff: 2.0
+  parameter_source: inherited_previous_mainline_defaults
+  parameter_validation: pending_ablation
+  statistical_unit: source_document
+evaluation:
+  bootstrap_samples: 2000
+  confidence: 0.95
+  low_fpr_targets: [0.001, 0.01, 0.05]

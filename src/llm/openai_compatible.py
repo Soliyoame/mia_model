@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import http.client
+import logging
 import os
 import random
 import re
@@ -335,6 +336,7 @@ class OpenAICompatibleChatClient:
                 if exc.code in self._RETRYABLE_STATUS and (
                     self.retry_until_success or attempt < attempts
                 ):
+                    logging.getLogger(__name__).warning("OpenAI-compatible reconnect http_status=%d retry=%d", exc.code, attempt + 1)
                     self._sleep_backoff(attempt)
                     attempt += 1
                     continue
@@ -349,6 +351,7 @@ class OpenAICompatibleChatClient:
             ) as exc:
                 # 网络层错误(连不上/超时等)，按配置重试；Luna query 可持续重试。
                 if self.retry_until_success or attempt < attempts:
+                    logging.getLogger(__name__).warning("OpenAI-compatible reconnect cause=%s retry=%d", type(exc).__name__, attempt + 1)
                     self._sleep_backoff(attempt)
                     attempt += 1
                     continue

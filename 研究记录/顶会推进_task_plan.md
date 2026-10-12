@@ -3921,6 +3921,76 @@ PubMed resume 修复（2026-08-05）：
 
 唯一下一步保持：准备固定revision本地NLI权重，完成五个RA case真实离线验证。随后补真实formal输入和cell绑定，再做正式冻结；当前`formal.runtime`仍为空，此次代码交付不代表formal已冻结或已运行。
 
+### 2026-09-13：固定 NLI 五例真实离线验证完成（superseding）
+
+- [x] 确认Conda mia_model与CUDA；获得下载授权后复用既有脚本，取得固定DeBERTa revision并通过快照文件/hash校验，不改模型或配置。
+- [x] 真实CUDA离线评分五例：exact=1且0调用；正确改写R−=0.933994，缺RA=0.002333，数字错误=0.000459，疾病冲突=0.000848；保留双向entailment与全部原始概率。
+- [x] exact及非exact路由符合定义，错数/冲突分数远低于正确改写，本组未见明显异常；未引入新阈值、alias或verifier，不将五例解释为整体准确率。
+- [x] 模型加载1次，真实NLI调用4次/8个方向；推理1.974秒，加载加评分14.122秒。复跑已有20项PVS测试全部通过，未新增重复测试。
+- [x] 保存[真实五例JSON](../artifacts/v24/development/pvs_hybrid_20260913/real_nli_five_cases.json)，同步README与[研究记录](顶会推进_notes.md#v24-real-nli-five-cases-20260913)。九个受保护源码/测试/config及三份旧PVS artifact保持，独立V23资产保留。
+- [ ] 唯一下一步：准备正式selected pairs/split、Retriever index及单cell运行配置，完成冻结前预检，再确定正式config+代码commit；本轮不自动执行下游。
+
+当前状态：真实五例验证已完成并停止。Query Construction与PVS保持，`formal.runtime`仍为null，真实formal输入/绑定及正式冻结待完成；无victim、Retriever、LLM API、fresh30/formal、v25、提交或推送。
+
+### 2026-09-13：Luna-only 正式输入入口及冻结前本地准备完成（superseding）
+
+- [x] 在现有53号脚本接入冻结source pool的Luna-only分批eligibility，复用当前provider/selector和固定split；不再让新路径依赖历史GLiNER/canonical构造。
+- [x] 保持冻结source顺序及开发source/双hash排除，一次chunk响应、不足三对不补生成；2250 eligible后才导出1000/1000/250 split。
+- [x] 普通checkpoint/resume、已收响应离线恢复、无响应明确重试、模型/config/结果漂移拒绝及完成态零调用均已验证，不新增治理层。
+- [x] 新增13项定向测试，相关76项全部通过，零skip/failure/error；完整mock导出2250 source/6750 pair，主计划2000 source/6000 pair/12000 query，Reserve零query。
+- [x] 三份真实源池只读预检完成：nfcorpus 3593−102=3491，scidocs 25656−92=25564，trec-covid 170367−103=170264；这些是待筛选数量，不是eligible数量。
+- [x] 固定NLI已就绪；本地BGE/reranker全部快照hash校验通过。保存nfcorpus × Gemma × dense BGE单cell草案，未应用或冻结。
+- [x] 保存[本地准备证据](../artifacts/v24/development/pvs_hybrid_20260913/formal_preparation.json)，同步README及[研究记录](顶会推进_notes.md#v24-luna-formal-input-preparation-20260913)；保护源码/config及独立V23资产不变，diff检查通过。
+- [ ] 唯一下一步：获明确授权后执行nfcorpus首批最多50次Luna请求，使用`run-luna-only-eligibility --dataset nfcorpus --max-sources 50`；尚未开始。
+- [ ] 后续正式冻结待办：取得真实2250 eligible输入和split、构建仅含KB_Member的index、准备缺失的固定Gemma权重、填入已有formal.runtime并提交config+代码；本轮未执行。
+
+当前状态：本地入口与预检完成，正式输入/索引未生成、Gemma缺失、`formal.runtime`仍为null；正式dry-run按预期拒绝缺少绑定，不是formal通过。Query Construction、Prompt、selector、PVS、BEIR、2250目标、三对/六问及评估定义保持，无真实API/victim/Retriever/GPU/下载、formal/fresh30、v25、提交或推送。
+
+### 2026-09-13：nfcorpus 首段真实构造暂停，断点可恢复（superseding）
+
+- [x] 用户以3491篇候选上限启动，前10篇均通过当前检查并选满三对；10份响应、30对和原始构造结果已保存。
+- [x] 定位第11篇`MED-1151`在保存响应前出现RuntimeError；入口自动重试为0，因此进入`execution_incomplete`，并非到达2250或触发10篇批次上限。
+- [x] 只读`preview-luna-only-eligibility --dataset nfcorpus --max-sources 3491 --resume`通过，已完成10篇的身份/hash/顺序保持；未实际重发请求。
+- [x] 记录异常日志只含类型、无法确定底层网络/HTTP原因的限制；同步README与[诊断记录](顶会推进_notes.md#v24-nfcorpus-first-interruption-20260913)，源码/配置/断点不改。
+- [ ] 唯一下一步：原运行命令追加`--resume --retry-incomplete`，从第11篇重试并继续，累计2250 eligible或源池耗尽时停止；仅`--resume`不会重发无响应pending请求。
+
+当前状态：10/2250 eligible，30个selected pair，11次逻辑调用中1次无已保存响应、用量未知；没有正式split、victim或PVS运行。本轮诊断新增API调用为0，原始中断记录保留，不按本段结果调Prompt或构造规则。
+
+### 2026-09-13：自动传输重试启用，原断点兼容完成（superseding）
+
+- [x] 按用户要求移除53号入口关闭自动重试的覆盖，沿用既有Luna profile的持续暂态重试、退避和4 RPM限流；永久错误停止，坏候选不补生成。
+- [x] 新增2项真实客户端逻辑/mock网络测试，验证Timeout→429→成功、同请求重发与计数以及401停止；相关78项LunaDirect和10项客户端测试全部通过，共88项。
+- [x] 核验runner仅三处重试相关文本变化，11个保护文件不变；原始断点逐字备份后，仅更新运行代码与重试绑定及派生hash/更新时间，保留10篇/30对和失败证据。
+- [x] 写入前后preview/resume校验通过，下一篇仍为MED-1151；旧response/query字节不变，无新增API调用。同步README和[修复记录](顶会推进_notes.md#v24-luna-automatic-transport-retry-20260913)。
+- [ ] 唯一下一步：运行原nfcorpus命令并加`--resume --retry-incomplete`恢复既有pending请求；后续暂态错误自动重试，累计2250 eligible或源池耗尽时停止。
+
+当前状态：修复和本地验证完成，真实扫描仍停在10/2250；Query Construction、Prompt、selector、PVS、split和预算均保持。本轮未真实续跑、未提交或推送，不启动下游formal victim。
+
+### 2026-09-15：nfcorpus 构造完成，剩余数据集入口核对（superseding）
+
+- [x] 核对 nfcorpus 当前断点为 `eligibility_ready`，处理2395篇后累计2250篇 eligible，selected pairs与split文件均已导出；历史暂停记录保留。
+- [x] scidocs、trec-covid 只读预检通过，可扫描上限分别为25564、170264，均尚无运行断点；首次命令不加 `--resume`，沿用现有自动传输重试。
+- [x] 向用户提供两个数据集的现有运行命令，同步[完成记录](顶会推进_notes.md#v24-nfcorpus-eligibility-ready-20260915)；本轮实际API、victim、Retriever与GPU调用均为0。
+- [ ] 实验主线唯一下一步：用户先运行 scidocs，结束后再运行 trec-covid；每个数据集累计2250 eligible或源池耗尽时停止。尚未代用户启动任一批次。
+
+当前确认的是 nfcorpus 构造/eligibility 完成；其余两个数据集待运行，正式 victim/PVS 实验尚未由本轮执行。代码、Prompt、selector、PVS、三对/六问及正式协议保持原样，论文编译任务独立推进。
+
+### 2026-09-17：PCV attacker request runtime 修改完成
+
+- [x] 共用确定性 wrapper；原始 Q+/Q- 仅追加回答格式，检索输入原样，RAG/LLM-only shell 不再内置三类回答契约。
+- [x] 保持 context/top-k、selected pairs、构造/eligibility/split、三对六问、parser、NLI 配置及 PVS；已有构造身份和 nfcorpus 导出 hash 校验通过。
+- [x] 在已有运行身份增加 prompt version/wrapper hash，拒绝新旧响应混续；不升级协议或 construction、不改写旧 artifact。
+- [x] runner 22项、parser/PVS 46项、V24 312项回归结束：370通过、10既有skip；包含完整12000-query mock和完成态/断点漂移检查。
+- [x] 439个保护文件逐字节保持；scidocs 两份构造记录在检查期间并发变化，本次未写入；API/victim/embedding/Retriever/NLI/GPU真实调用均0。
+- [ ] 本项下一步：未来正式运行前冻结包含新 prompt 身份的代码/config；本次停止于本地实现与验证，formal.runtime仍为空，不自动启动下游，不重生成已有query或split。
+
+### 2026-09-17：v24 PVS 独立负惩罚完成
+
+- [x] 公式改为 `S+ * R- - A-`，A-=1独立给出-1；pair/source支持[-1,1]，三对mean/median与restoration/parser保持。
+- [x] 评分/parser 47项、V24 runner mock 11项全部通过，共58项；覆盖六种信号组合、[1,0.5,-1]→1/6、正负边界与完整12000-query恢复。diff检查通过。
+- [x] 旧开发评分证据按旧公式保留；无真实模型/API/Retriever调用，无实验产物重生成、提交或推送。
+- [ ] 本项下一步：正式运行前冻结新scoring config+代码。配置整体hash变化会阻断旧eligibility断点未来的resume，需先核查；本次不改变eligibility代码或断点，已有Luna构造、Q+/Q-、selected pairs和split无需重生成。
+
 ### 2026-09-17：v24 single-query black-box runtime 完成（superseding）
 
 - [x] 将固定短wrapper生成的同一个`attack_query`同时送入Retriever和RAG Generator；matched LLM-only的`User request`逐字节相同。
@@ -3931,6 +4001,66 @@ PubMed resume 修复（2026-08-05）：
 - [x] parser、NLI、PVS `S+ * R- - A-`、Luna、selector、eligibility、split与baseline零修改；真实API/Retriever/GPU/formal调用为0，无artifact生成。
 - [ ] 下一步：正式victim运行前冻结包含新runtime identity的config+代码；不得复用`pcv-attacker-request-v1`响应。已有构造、Q+/Q-、eligibility与split无需重跑。
 
+### 2026-09-19：离线验收、nfcorpus索引与独立补充准备（superseding）
+
+- [x] 三套各2250 eligible的机器状态核对；8991份响应重解析/选择回放、源池/Prompt/文件hash、开发身份排除、source/text隔离、确定性split与单槽身份通过，原12份构造文件保持。
+- [x] 记录正式查询文本门禁阻断：主组56/38/32篇；含Reserve的全2250为69/44/34篇，坏输出和旧统计原样保留。[验收JSON](../artifacts/v24/acceptance/offline_acceptance_20260919.json)不宣称语义盲审或正式运行通过。
+- [x] 导出nfcorpus原split的1000篇Member全文，建立3897×768 BGE/FAISS索引；128/32 token、主库排他、切块重放、向量/文件hash与resume均通过。现有配置已绑定实际索引，详见[首cell准备](../artifacts/v24/acceptance/nfcorpus_cell_preparation_20260919.json)。
+- [x] 确认BGE/NLI固定本地权重hash；Gemma固定revision缺失；正式CLI dry-run被查询冲突拒绝，未加载victim或运行正式实验。
+- [x] 53号入口支持独立补充目标、父结果校验、未见suffix、查询文本冲突不计入目标、完成态resume；只导出补充pairs，不改旧split。三套目标69/44/34零调用预检通过，可用source=1096/22362/166870。
+- [x] 新增3项测试及相关回归合计18项通过，包含两次完整2250篇mock父构造；AST/diff、真实预检code/config hash、原12文件保护核验通过。
+- [ ] 用户依次运行补充命令；每套最多扫描1000篇、达到新增合格目标即停。补充产物统一验收后，再决定按所有候选一致的规则生成后续split及其索引，禁止仅按旧membership定向换样。
+
+当前唯一下一步：用户运行独立补充生成。已有nfcorpus索引对应旧split，不能当作未来新split的索引；补充本身不解除formal门禁。本轮Luna/victim/NLI/检索query/模型下载0，真实建库编码3897 chunks；未自动运行补充、未提交或推送。原构造/Prompt/selector/PVS/split不改，新补充计数条件显式单独记录；后续原主流程resume会因已说明的config/code变化拒绝漂移，不迁移旧断点。
+
+### 2026-09-19：补充替换与三套新索引全部完成（superseding）
+
+- [x] 补充真实状态均`supplement_ready`：扫描73/58/49篇得到69/44/34篇；180份响应重新解析/Prompt hash/selector回放与完成态身份核验通过，新增API=0。
+- [x] 对全部原2250篇（含Reserve）统一排除查询文本冲突source，分别替换69/44/34篇；保留pair不重选，按源池顺序合并，以seed=42重新生成各1000/1000/250的split。
+- [x] 新source/text隔离、开发排除、确定性split重算、查询身份/单槽替换和主预算通过；每套2000 source/6000 pair/12000 query，Reserve不参与主查询。全部2250篇查询文本冲突归零。
+- [x] 保存独立`reconciled_20260919`产物及[整合证据](../artifacts/v24/acceptance/reconciled_20260919.json)。旧输入/旧索引/关键源码32文件hash保持，不改历史失败结论。
+- [x] 三套新Member-only BGE dense索引完成：各1000 source，chunk分别3894/2744/3586；固定revision、128/32切块、768维FAISS。Member排他、切块回放、向量有限性/单位范数、文件hash和resume不重建通过。
+- [x] 配置改绑新nfcorpus输入和索引hash；真实10号CLI dry-run退出0、`prepared_inputs_only`，原查询冲突阻断解除。[索引/入口验收](../artifacts/v24/acceptance/reconciled_indexes_20260919.json)记录完整证据。
+- [ ] 正式运行前补齐固定Gemma权重，提交/冻结最终代码与config；其后单独启动nfcorpus首cell。当前没有运行victim，不能把dry-run写成formal完成。
+
+当前替换与重新索引任务完成。唯一下一步为Gemma固定权重与正式冻结准备；新source集合与split身份已变更，对应新索引，不得混用原split或旧结果。保留source换组16/5/5篇，新Member分别替换35/18/21篇，均为统一规则和固定seed的结果。本轮无源码修改、无Luna/victim/NLI/检索query/模型下载，真实建库编码10224 chunks；没有提交或推送。
+
+### 2026-09-19：服务器 Gemma 连接诊断（superseding）
+
+- [x] 按用户授权读取连接配置并使用现有客户端测试；仅合成提示、16输出token上限、30秒超时、无自动重试，没有发送数据集查询。
+- [x] 沙箱内外两次尝试均为连接拒绝10061，未收到HTTP响应或模型回答；入口为内网HTTP端口8000、`/v1`，未使用代理，未记录地址或密钥。
+- [x] 配置模型名为 `gemma-2-2b-it-bf16`，MODEL_VERSION未设置；正式Gemma profile仍为本地HF且禁用role环境覆盖，服务器未接入正式runner。本次配置、数据与索引不变，无正式结果。
+- [ ] 当前唯一下一步：检查服务器服务是否运行、监听地址与8000端口开放状态，恢复后重做最小连接测试。
+
+连通后再核实实际模型/revision并绑定正式服务器配置，完成config+代码冻结后准备nfcorpus首cell。本次连接失败不能解释为模型推理失败或正式实验失败，也不影响已完成的三套数据及索引验收；未提交或推送。
+
+### 2026-09-19：服务器 Gemma 复测成功（superseding）
+
+- [x] 用户授权下完成1次合成请求：temperature=0、max_tokens=16、timeout=20秒、自动重试0；provider返回 `gemma-2-2b-it-bf16`、回答 `OK.`，耗时138.11ms，连接阻断已解除。
+- [x] 正式数据集请求0，未修改配置/代码/索引，未启动正式实验；原连接失败记录保留。
+- [ ] 当前唯一下一步：核实服务器实际权重revision与运行配置，并将正式Gemma profile绑定该服务；随后完成config+代码冻结及nfcorpus首cell准备。模型别名与一次最小回答不构成权重revision或正式RAG验收证据。
+
+### 2026-09-19：服务器接入草案完成，system兼容待修复（superseding）
+
+- [x] 在原profile文件新增 `gemma2_2b_server`，V24首cell改用该profile与实际模型别名；原本地profile保留，未改攻击Prompt、数据、索引或评分。
+- [x] 实测health为BF16/CUDA，模型列表提供实际别名；用户部署说明已核对，未复制密钥。实际权重revision仍未知，版本字段留空。
+- [x] 通过正式factory的system+user请求及显式非流式复测均HTTP500，user-only对照成功；尚需服务端traceback确认根因。SSH主机密钥校验失败，未绕过。
+- [x] 独立输入/预算/Member索引校验通过：2000 source、6000 pair、12000 query、1000 Member；正式输出目录不存在。
+- [x] 实际CLI dry-run被空generator_version阻止，退出1；未把历史本地profile预检通过迁移为当前通过。
+- [ ] 当前唯一下一步：用户提供500 traceback及messages/apply_chat_template处理代码，解决system兼容并核实权重revision；再填一致版本并完成完整预检、提交冻结与首cell准备。
+
+本轮3次合成chat请求（2失败、1成功）及2次只读元数据请求；正式数据集查询、Retriever/NLI推理均0，无源码修改、无新治理文件、未提交或推送。服务器部署变化只影响后续victim执行，不要求重生成现有数据或索引。
+
+### 2026-09-19：服务器兼容完成，正式预检通过（superseding）
+
+- [x] 遵循用户明确要求，以 `gemma-2-2b-it-bf16` 记录其确认的完整BF16部署身份；不再等待权重hash，不声称独立核验HF commit。
+- [x] 服务器profile启用 `system_prompt_as_user`，复用本地Gemma原有“system原文+两个换行+user内容”格式；默认客户端行为及历史profile hash保持，新选项纳入启用profile身份。
+- [x] 修复后最小合成调用成功，返回 `OK.`，168.79ms；500兼容阻断解除，无需用户继续提供服务端代码。
+- [x] 4项定向测试通过，覆盖两种调用的消息内容、模型元数据、配置漂移、默认行为及factory回归；真实CLI dry-run退出0、`prepared_inputs_only`，2000 source/6000 pair/12000 query、Reserve=0。
+- [ ] 当前唯一下一步：整理相关未提交变更并完成代码/config提交冻结，随后启动nfcorpus × Gemma × dense单cell。当前未提交、未推送、未运行正式数据集查询。
+
+无需重跑数据构造或索引，无新协议世代。接入阶段累计4次合成chat请求（2次HTTP500、2成功）、2次只读元数据请求；无正式结果。原500和空版本失败记录保留，以本条作为当前状态。
+
 ### 2026-09-19：V24 主线合并交付
 
 - [x] 用户授权本地提交并将V24合并main；正式长任务由用户启动。
@@ -3939,6 +4069,1046 @@ PubMed resume 修复（2026-08-05）：
 - [ ] 完成本地合并后在主线验证干净状态、正式输入绑定与可用运行命令；正式cell尚未启动，不推送远端。
 
 冻结参数仍为nfcorpus × Gemma完整BF16 × dense BGE，2000主source、12000问，Reserve=0，top-k5、三对六问、PVS独立负惩罚；服务器版本按用户确认的部署别名记录。唯一下一步为完成主线合并验证并交付用户执行命令。
+
+
+### 2026-09-19：V24 主线合并与冻结完成（superseding）
+
+- [x] 保存V24补充提交 `fa3ba22`，本条随无冲突的main合并提交保存；不推送。
+- [x] 386项回归376通过、10既有skip；独立main工作树11项formal runner测试全部通过。
+- [x] 主线真实输入dry-run通过，2000主source/12000问/Reserve=0；CUDA、BGE本地缓存、固定NLI快照检查通过，无真实推理。
+- [x] 主线配置状态为 `frozen_nfcorpus_gemma_dense_ready`，采用config+Git提交冻结，无新治理文件；数据/模型使用本地链接，凭据不入库。
+- [x] 原目录42个无关文件hash保持，原论文/旧协议和文档未提交资产保留。
+- [ ] 唯一下一步：用户进入 `D:/MIA/mia_model/artifacts/v24/worktrees/main`，运行10号脚本的nfcorpus单cell命令；当前正式输出不存在，长任务未启动。
+
+沿用串行、20秒请求间隔、checkpoint_every=200及默认resume；12000问仅间隔约66.7小时。输出位于main工作树内的formal目录。未启动其他cell或评估，未推送远端。
+
+
+### 2026-09-20：请求间隔调整为5秒，等待本地提交与断点兼容
+
+用户已暂停进程并明确要求将等待从20秒改为5秒。原工作区与main工作树的现有V24配置仅调整 formal.runtime.generation.request_interval_seconds；max_workers=1、模型、Prompt、查询预算、split/index和PVS保持。逐项解析比较确认仅此字段变化，不需要重构造数据、重建索引或重跑既有成功响应，无新协议世代。
+
+main正式目录已有4200条响应、4200个唯一query，剩余7800问；响应文件SHA-256为9d13953171bf14c0a39b2b3e9868c354ddbb340f9168816922c81f772939b4d9。响应、运行summary与identity均未修改。原冻结配置20秒及旧commit仍绑定当前断点，因此当前不能直接续跑；仅dry-run通过不能代表resume兼容。
+
+当前唯一下一步：取得本次本地提交的明确授权后，保存配置及记录，保留旧断点元数据并完成仅请求节奏变化的绑定兼容核验，再交由用户恢复。当前未提交/推送，未启动实验；API/victim/Retriever/NLI真实调用均0。
+
+
+### 2026-09-20：5秒间隔本地提交与断点兼容（superseding）
+
+用户已明确授权本地提交及断点绑定兼容处理；本条取代上条等待提交授权的状态。main仅提交现有V24配置的20→5秒单字段修改及两份研究总表；max_workers=1及所有实验语义不变。原工作区独立V23、论文和其他未提交资产不纳入本次提交，不推送。
+
+原run_summary.json、rag_responses.identity.json与hash完全匹配的修改前配置已备份到正式输出目录的pacing_change_20260920/。已用现有runner执行无模型离线预检：外层真实输入/导出/响应绑定检查通过并在NLI初始化前停止；内层完整response identity检查通过并在首次写盘前停止。预检以候选绑定覆盖内存读取，不修改既有响应或断点。确认4200条成功响应可保留，剩余7800问；全部既有产物hash保持。Windows混合换行已按原hash准确还原备份，不把换行差异解释为实验变更。
+
+本条随本地配置提交保存；提交后仅将两个可恢复运行元数据中的config_sha256、code_commit及Git快照更新为本次提交，并在run_summary保留本次节奏调整的旧/新值、既有响应hash和备份位置。旧绑定逐字保留，不改response、query plan、selected pairs、split、index或scoring，无新协议世代或源码修改。最终提交身份及落盘后的离线校验结果见[兼容检查记录](../artifacts/v24/formal/reconciled_20260919/nfcorpus/gemma/dense/pacing_change_20260920/compatibility_check.json)（相对main工作树）。
+
+当前唯一下一步：上述记录状态为passed且main工作树干净后，由用户在main工作树恢复原10号脚本的nfcorpus命令，默认resume跳过已完成4200问。助手不启动实验；本次API/victim/Retriever/NLI真实调用均0。
+
+
+### 2026-09-20：5秒间隔断点兼容完成
+
+main本地提交8940256053c63eed972f2080985db096d2cf4fe7已保存，工作树干净；仅含配置单字段及两份研究总表。旧配置和元数据已逐字备份，run_summary与response identity绑定已更新，原4200条成功响应及查询/benchmark/selected pairs文件hash保持。真实落盘绑定通过外层resume检查（NLI初始化前停止）和内层identity检查（写盘前停止），remaining=7800，真实API/victim/Retriever/NLI调用0。最终[兼容检查记录](../artifacts/v24/worktrees/main/artifacts/v24/formal/reconciled_20260919/nfcorpus/gemma/dense/pacing_change_20260920/compatibility_check.json)状态passed。未推送，未启动实验；唯一下一步由用户在main工作树恢复原命令，使用5秒等待和单并发。
+
+
+### 2026-09-20：nfcorpus正式响应中途诊断，当前仅Member（diagnostic-only）
+
+按用户要求查看已处理样本，固定北京时间22:28:32的5600条响应快照，全部属于KB_Member；933篇六问齐全（2799对/5598问），另1篇两问不进入完整source统计。没有Non-Member响应，AUC、FPR、低FPR检出率和成员分类准确率均不可计算，不能宣称攻击成功或失败。
+
+复用冻结parser与PVS函数进行无模型分析：真实支持84.17%，反事实接受61.74%，两边同时支持58.77%，Q−否定22.51%，精确恢复原值3.07%；另211对非精确更正未运行NLI。Q−目标source命中率75.96%，命中的2126条中1488条仍接受反事实（69.99%）；仅说明命中文档不保证纠错，不能归因为检索、模型或构造中的某一环。反事实按构造标签解释，未独立证明其事实错误。
+
+统计单位为source，比例先在每source三对内计算再等权平均；2000次source bootstrap、seed42，报告95%点态描述区间，不把pair当独立样本。完整source中725篇无需NLI即可确定PVS、170篇待NLI、38篇存在解析缺失；未把该725篇子集均值当成整体效果，不把缺失置零。单次Member顺序前缀不能代表随机测试子集或跨seed变异；不作显著性结论。
+
+证据见[诊断报告](../artifacts/v24/diagnostics/nfcorpus_interim_20260920T142832Z/analysis-report.md)、同目录统计附录、两张图及JSON/JSONL。原配置、响应、正式summary/identity、split/index保持只读，main工作树不改；本轮API/victim/Retriever/NLI/GPU推理0，无新协议、提交或推送。诊断快照是正式test响应的阶段性曝光，不归为development。下一步保持原冻结运行，待Member与Non-Member均有完整响应后评估冻结评分；不据此调整selector/query/prompt/scoring/阈值。
+
+
+### 2026-09-21：nfcorpus请求完成，冻结PVS方向反向且评分仍不完整（superseding）
+
+用户通知运行结束后只读核验：nfcorpus × Gemma 2 2B完整BF16 × dense BGE完成12000/12000唯一query、2000篇source各六问、Member/Non-Member各1000；无缺失或接口失败。config、输入、响应、score及manifest hash通过。原实验已运行固定NLI，5944/6000对有分数，1954/2000篇source评分完整；run_summary仍为scoring_incomplete，不改写成completed。56对包含69条无法按冻结parser解析的回答，影响40篇Member和6篇Non-Member；不是victim调用失败。
+
+以冻结三对PVS均值、高分=Member方向，在960 Member+994 Non-Member可评分子集上，ROC-AUC=0.3240275，2000次source分层bootstrap、seed42的95% CI=[0.3008788,0.3476526]；TPR@FPR≤1%与≤5%均5.2083%（50/960），实际FPR=0.6036%（6/994），不插值/不拆分同分。不报告未经独立校准的分类准确率，不将该子集冒充完整2000篇主结果。每个缺失pair允许[-1,1]、保留已评分项并按三对聚合，完整2000篇AUC敏感性包络仅[0.3183685,0.3434130]，因此格式缺失本身无法解释到0.5以上；该包络不是填补结果。
+
+Member/Non-Member平均PVS分别-0.58255/-0.34317，中位数-2/3、-1/3。全部响应Q+支持率84.37%/41.93%，Q−支持率61.50%/34.33%，Q−不知道14.67%/53.70%。完整评分子集Member平均正项S+×R−=0.03724、负项A−=0.61979；Non-Member为0.00023/0.34339，独立负项使Member分数更低。这是算术与描述性解释，未因果识别构造、检索或模型问题，反事实有效性仍未独立审定。不能将此结果外推至其他模型/数据集，也不按正式结果翻转方向后称原方法有效。
+
+[完整结果检查报告](../artifacts/v24/diagnostics/nfcorpus_completed_review_20260921/analysis-report.md)、统计附录、两张实际图表、完整带标签source评分CSV和56对缺失诊断已保存。采用独立diagnostics目录，正式response/score/manifest不改、main工作树保持干净；本次API/victim/Retriever/NLI/GPU推理0，无代码/config修改、提交或推送。
+
+当前唯一下一步：保留本cell的scoring_incomplete及反向排序证据，先审阅报告再决定后续独立development诊断范围；不自动重试已完成请求、不修改冻结parser/query/scoring/阈值、不启动其他数据集。后续若提出受本次正式结果启发的新方法，需如实记录并独立评估，不能当作本次untouched正式验证。
+
+
+### 2026-09-21：Q−高接受率原因的只读诊断
+
+复查全部6000条Q−，2875条被判supported的原始回答去空白后均恰为Consistent，无Inconsistent误匹配为Consistent证据。Member目标source未命中时接受260/725（35.86%），命中时1585/2275（69.67%），排第一时1349/1927（70.01%）；这些是非随机条件分组，不作检索因果结论。MED-3459的15→16、MED-2184的几乎不变→显著增加、MED-1482的51.7%→40%均有明确目标top-1文本证据而被接受，确认存在证据核对失败，不能全部归因于未召回。
+
+MED-1683血小板样例的交换命题是否必假仍待独立审定；当前Luna prompt要求反事实为假，但代码主要做结构检查并明确没有独立语义验证，不称构造完全未要求有效性。回答格式后缀进入BGE检索，MED-2891_c02被检索2374次，含consistent词的上下文出现在4911/12000次请求中；只是可疑集中现象，未用检索消融证明后缀因果。不能按现有输出分配模型能力、prompt、检索或构造的贡献比例。
+
+证据与Assistant样例解读见[原因诊断](../artifacts/v24/diagnostics/nfcorpus_completed_review_20260921/counterfactual_acceptance_diagnosis.md)及同名JSON；不是独立人工盲审。正式配置、模型、response及评分不改，API/victim/Retriever/NLI/GPU推理0；原文hash复核保持。下一步仍需用户决定独立development原因对照范围，不在已曝光formal上改规则或重跑调参。
+
+### 2026-09-21：前三步只读分层复核
+
+- [x] 保留formal负结果：`scoring_incomplete`、原始response/score/hash和AUC=0.3240不改写，不反转分数。
+- [x] 检查理论覆盖：Member Q−未命中目标source为260/725=35.86%，命中但非top-1为236/348=67.82%，命中且top-1为1349/1927=70.01%；报告中的`target_not_top1=496/1073=46.23%`包含未命中样本，不能当作“命中但非top-1”。目标source是否命中是强分界，但目标证据进入context后仍有高接受率。
+- [x] 完成失效分类：反事实有效性尚未独立盲审；检索漏召回只能解释部分；明确数值/方向冲突且目标片段top-1仍被回答`Consistent`，支持模型/Prompt核对失败作为主要候选机制。
+
+以上是formal结果的只读诊断，不是development对照或因果估计；不修改协议、不重跑请求、不据此调整selector/query/prompt/scoring/阈值。证据见`artifacts/v24/diagnostics/nfcorpus_completed_review_20260921/`。
+
+### 2026-09-21：GPT-6 语义审计与四条件诊断
+
+- [x] 保留 nfcorpus formal 负结果：`scoring_incomplete`、原始 response/score/config/manifest/hash 和 AUC=0.3240 均不改写，不反转方向、不挑选有利子集重报。
+- [x] 完成 GPT-6 source-grounded development 审计：5 条完整 candidate 中 Q+ 支持 5/5、单槽位替换 5/5、语义角色一致 5/5，但明确否定 Q− 为 0/5；`valid_counterfactual=0`、`ambiguous=5`、`invalid_counterfactual=0`。
+- [x] 明确审计边界：这是 AI-assisted annotation，不是独立人工盲审；未读取 formal response、membership/group、AUC 或模型回答。
+- [x] 记录四条件矩阵为 `blocked / not identifiable`；因没有 valid counterfactual，不新增 victim、Retriever、NLI 或 GPU 调用，避免把无效 Q− 与检索、模型纠错和格式影响混在一起。
+- [ ] 在独立 development 集合重建 source 明确支持 Q+ 且明确否定 Q− 的 candidate，排除 ambiguous 样本；完成后预先固定并运行四条件矩阵。
+
+证据目录：`artifacts/v24/diagnostics/gpt6_counterfactual_audit_20260921/`。formal 结果保持只读，不据此调参或重跑。
+
+### 2026-09-21：source-explicit development 集合重建
+
+- [x] 从既有 Luna direct development 产物固定 18 条候选：nfcorpus、scidocs、trec-covid 各 6 条，保存 source context、Q+/Q−、槽位和输入 hash。
+- [x] 按 source-grounded 规则审计：17 条为 `valid_counterfactual`，1 条为 `ambiguous`；ambiguous 项为 distal/proximal，因原文未明确排除 proximal。
+- [x] 输出 `valid_candidates.jsonl`：nfcorpus 6、scidocs 6、trec-covid 5；原始候选和 audit 保留，AI-assisted annotation 不称人工盲审。
+- [x] 外部调用计数为 0；formal response、score、配置、索引、阈值和正式身份未修改。
+- [ ] 冻结 17 条 development 输入及四条件矩阵预算，随后在 development 上运行四条件矩阵；不得读取或调参 formal 结果。
+
+重建脚本：`scripts/53_rebuild_v24_valid_counterfactual_development.py`。证据目录：`artifacts/v24/development/valid_counterfactual_rebuild_20260921/`。
+
+### 2026-09-21：development 四条件矩阵完成
+
+- [x] 冻结17条source-explicit valid candidates、15个source key、四条件102条query plan。
+- [x] 完成standard_retrieval、oracle_q_plus、oracle_q_minus、stripped_retrieval四条件矩阵，102/102请求成功。
+- [x] 确认standard与stripped检索排序完全一致，目标source命中34/34；oracle context提高Q-拒绝但仍非全数拒绝。
+- [x] 保存独立development分析报告和运行manifest；formal response/score/config/index保持只读。
+- [ ] 后续仅在审阅该诊断并完成必要人工复核后，决定是否设计新的、独立冻结的query/selector successor；不得把该矩阵结果回写为formal结果或据此调参。
+
+### 2026-09-21：候选逐条复核（AI-assisted）
+
+- [x] 逐条复读17条candidate的source、Q+、Q−和单槽位替换关系。
+- [x] 保存`ai_recheck_report.md`：17/17 valid，13条high confidence，4条medium confidence。
+- [x] 明确该复核不是独立人工盲审；不把AI-assisted结果写成真人标注或人工一致性证据。
+- [ ] 若论文主张需要独立人工证据，仍需外部真人复核，优先检查4条medium-confidence候选；在没有真人复核前不升级证据等级。
+
+### 2026-09-21：小型 development successor（已完成，below gate）
+
+- [x] 冻结13条high-confidence候选、26条query（Q+ 13、Q− 13），固定oracle source-only context、Gemma 2 2B、temperature=0、5秒间隔和预设门槛（Q+≥90%、Q−≥80%）。
+- [x] 完成26/26 victim请求并写入独立 successor 目录；无Retriever/NLI/GPU调用，formal产物保持只读。
+- [x] 结果：Q+支持13/13=100%，Q−拒绝6/13=46.2%，状态`completed_below_gate`；nfcorpus/scidocs/trec-covid分别为3/6、1/4、2/3。
+- [x] 保留逐条响应、hash、manifest和分析报告；该结果仅为development诊断，不升级为人工复核或formal证据，不据此调参。
+- [ ] 下一步由研究设计决定是否构造更强的封闭数值/明确二值反事实，或停止该路线；任何新 successor 必须独立冻结，不能覆盖本次below-gate证据。
+
+### 2026-09-21：同一query的 prompt successor（已完成，below gate）
+
+- [x] 冻结13条high-confidence候选、26条query，保持完整`attack_query`同时用于dense检索和生成，仅替换生成阶段RAG prompt；top-k=5、Gemma 2 2B、5秒间隔。
+- [x] 完成26/26 victim请求与26/26本地检索，目标source命中26/26；formal产物保持只读。
+- [x] 结果：Q+支持13/13=100%，Q−首行`Inconsistent`为3/13=23.1%，状态`completed_below_gate`；严格有效纠错不超过2/13，未达到80%门槛。
+- [x] 保存独立freeze、query plan、responses、manifest和analysis；明确该结果不能升级为formal、人工盲审或黑盒主结果。
+- [ ] 暂停继续prompt微调；下一步优先决定换更强victim、改成两阶段事实抽取/比较，或将Gemma结果作为方法失败证据报告。
+
+### 2026-09-21：source-value recovery successor（已完成，below gate）
+
+- [x] 冻结13条high-confidence候选和26条query，固定A/B顺序、C=UNKNOWN、完整recovery query同时用于dense检索和生成。
+- [x] 完成26/26 victim请求和26/26本地检索；目标source命中26/26，formal response/score/config/index保持只读。
+- [x] 结果：Q+支持6/13=46.2%，Q−拒绝8/13=61.5%，15/26可解析A/B/C、14/26有效槽位匹配，状态`completed_below_gate`。
+- [x] 确认主要失败为Gemma 2B输出完整句子/扩展短语或标签而非候选值，严格schema校验失败；检索命中不足不能解释该结果。
+- [x] 保存独立freeze、query plan、responses、manifest和analysis；不升级为formal、人工盲审或理论支持证据，不修改formal协议。
+- [ ] 停止继续在Gemma 2B上无上限prompt微调；下一步评估更强victim或两阶段事实抽取/比较，并为任何语义变化新建独立development successor。
+
+### 2026-09-21：两阶段 value-choice successor（已完成，development gate 通过）
+
+- [x] 冻结13条high-confidence候选和26条query；Retriever使用原始Q+/Q−，victim只接收reference、neutral fact slot和A/B/C，最终比较由固定程序完成。
+- [x] 完成26/26 victim请求和26/26本地检索；目标source命中26/26，26/26严格解析为单token A/B/C，formal response/score/config/index保持只读。
+- [x] 结果：Q+支持13/13=100%，Q−拒绝13/13=100%，状态`completed_pass`；nfcorpus、scidocs、trec-covid均通过。
+- [x] 确认相较 source-value recovery，拆分事实选择和立场比较后没有完整句子输出、标签输出或解析失败。
+- [x] 保存独立freeze、query plan、responses、manifest和analysis；该结果仍是小型AI-assisted development诊断，不升级为formal或人工盲审证据。
+- [ ] 若要进入正式实验，需在看到formal结果之外独立冻结新的协议、输入和评估定义；当前不覆盖或改写原formal结果。
+
+### 2026-09-21：两阶段 query-exposure control（已完成）
+
+- [x] 固定复用两阶段 successor 已保存的26条 Top-K context、source/chunk顺序、context hash、fact slot和A/B/C映射；control 不调用 Retriever/GPU。
+- [x] 只把对应原始 Q+ / Q− 放回相同 value-choice generator prompt，完成26次Gemma victim请求；control目录独立保存，不覆盖基线。
+- [x] 结果：Q+ recovery 13/13=100%，Q− recovery 11/13=84.6%，26/26可解析，target source 26/26命中；基线为Q− 13/13。
+- [x] 26/26 context/source/chunk/候选映射完全一致，26/26 prompt hash不同；两条Q−退化，支持原始问题措辞对Gemma事实恢复有干扰。
+- [x] formal response、score、config、index和threshold保持只读；该control仍是AI-assisted development诊断，不升级为formal或人工证据。
+- [ ] 唯一下一步：冻结不暴露原始Q+/Q−的两阶段协议，先在独立Member/Non-Member development split上定义并验证source-level区分指标，再决定是否进入新formal successor。
+
+### 2026-09-21：neutral-anchor smoke 与 full development（已完成，below gate）
+
+- [x] 使用 `gpt-5.6-luna` 生成13条 neutral question；13/13通过静态 query-quality gate，冻结26条 Q+/Q− plan。
+- [x] 修正两个错误 smoke pair ID；最终5对/10条 smoke query全部成功，目标source命中10/10，smoke behavior gate通过。
+- [x] 完成13对/26条 full development query；victim 26/26成功，Retriever 26/26执行，目标source命中26/26，query-quality gate通过。
+- [x] full behavior gate失败：Q+原文11/13，Q−原文10/13，Q−反事实0/13，Q− UNKNOWN 3/13，解析失败5条；失败主要是数值/否定事实的自然语言表达未被当前canonicalizer稳定归类。
+- [x] 独立保存 plan、freeze、smoke/full responses、manifest和analysis；formal response、score、config、index、threshold保持只读。
+- [x] 将本轮标记为development below-gate诊断，不升级为formal、人工盲审或因果证据。
+- [ ] 后续不继续在Gemma 2B neutral-anchor end-to-end prompt上无上限微调；优先在独立Member/Non-Member development split上验证不暴露原始Q+/Q−的两阶段value-choice协议及source-level指标，再决定是否建立新formal successor。
+
+### 2026-09-22：neutral-clue asymmetry smoke（已完成，matched diagnostic）
+
+- [x] 在现有runner中增加独立 `--neutral-clue-asymmetry-smoke` 模式；复用冻结neutral question，不改neutral-anchor旧产物或formal协议。
+- [x] 固定5个smoke pair，source-available/source-excluded两组各跑Q_clean和Q_cf，共20条end-to-end RAG query；5秒间隔，victim 20/20成功，Retriever 20/20执行。
+- [x] member_proxy：Clean ORIGINAL 5/5、CF ORIGINAL 5/5、CF COUNTERFACTUAL 0/5、CF UNKNOWN 0/5；non_member_proxy：0/5、0/5、1/5、4/5。
+- [x] 探索性方向差满足预设门槛，但source hit同时为10/10 vs 0/10；source-excluded只是证据可用性matched proxy，不能写成正式Non-Member结果或独立membership信号。
+- [x] 保存独立 `neutral_clue_asymmetry_smoke_20260922` plan/freeze/response/manifest/analysis；formal response、score、config、index、threshold保持只读。
+- [ ] 不扩大完整development；下一步如需正式验证，先构建有真实Member/Non-Member标签且query事实绑定正确的独立development split。
+
+### 2026-09-22：canonicalizer 修复与 smoke 离线重算（已完成）
+
+- [x] 修复 asymmetry smoke 的`inconsistent`/`consistent`子串误匹配：反事实值按边界匹配并优先判断；旧 neutral-anchor/recovery 流程保持原 canonicalizer。
+- [x] 基于原始20条response离线重分类，victim/Retriever/GPU调用均为0，原始response不覆盖，hash保持不变。
+- [x] 修正后 member_proxy：Clean ORIGINAL 5/5、CF ORIGINAL 5/5、CF COUNTERFACTUAL 0/5、CF UNKNOWN 0/5；non_member_proxy：0/5、0/5、2/5、3/5。
+- [x] 独立保存 reclassified responses、manifest和analysis；formal结果与旧实验保持只读。
+- [ ] 不扩大完整development；source-excluded与source-available的目标检索命中仍为0/10 vs 10/10，后续若正式验证需先构建真实Member/Non-Member development split。
+
+### 2026-09-22：真实标签 neutral-clue development pilot（已完成，diagnostic-only）
+
+- [x] 从冻结 V24 source-level split 固定选择 `KB_Member` 10 条和 `True_Non_Member` 10 条，nfcorpus/scidocs/trec-covid 每组4/3/3条；保存 source、pair、hash 与标签绑定。
+- [x] 复用/生成并冻结20条 neutral question；Q_clean只含neutral question，Q_cf仅加入counterfactual_entity retrieval clue；两者均走完整end-to-end RAG。
+- [x] 完成40/40 victim请求和40/40 Retriever调用，固定5秒间隔；Luna 20次，GPU初始化1次；formal产物保持只读。
+- [x] 结果：`KB_Member` Clean ORIGINAL 8/10、CF ORIGINAL 8/10、CF COUNTERFACTUAL 0/10、CF UNKNOWN 2/10；`True_Non_Member` 分别为0/10、0/10、1/10、9/10。CF resistance为80% vs 0%，CF following为0% vs 10%。
+- [x] 明确标签与目标source命中完全共变（Member 20/20，Non-Member 0/20），因此结果只能作为evidence-availability diagnostic，不能宣称独立membership signal或formal攻击成功。
+- [x] 保存 `tagged_neutral_analysis.md`、query plan、freeze、responses和run manifest；不覆盖旧实验、不修改formal prompt/scoring/threshold。
+- [ ] 不扩大该neutral-clue pilot；若继续，先构建解耦evidence availability与membership标签的matched development control，或在独立标签集上验证已通过gate的两阶段value-choice协议。
+
+### 2026-09-22：真实标签 CF-A 弱搜索提示 pilot（已完成，探索性通过）
+
+- [x] 复用既有10条 `KB_Member` 与10条 `True_Non_Member` 的冻结neutral question；读取旧Q_clean响应，不重跑Q_clean或Luna。
+- [x] 新增独立 CF-A：Q_cf仅追加 `Search terms: subject; counterfactual_entity`，不加入纠错语句、yes/no命题或CF-B；subject确定性提取。
+- [x] 完成20/20 victim请求，固定5秒间隔；Retriever 20次，Luna 0次；旧pilot和formal产物保持只读。
+- [x] Member：CF ORIGINAL 7/10，CF COUNTERFACTUAL 1/10，CF UNKNOWN 2/10，Clean→CF change 1/10，target hit 10/10→10/10，hit drop 0/10。
+- [x] True_Non_Member：CF ORIGINAL 0/10，CF COUNTERFACTUAL 3/10，CF UNKNOWN 7/10，Clean→CF change 3/10，target hit 0/10→0/10。
+- [x] 两个预设探索性门槛均达到：Member CF ORIGINAL≥7/10，Non-member Clean→CF class change≥3/10；状态 `completed_pass`。
+- [x] 结论限定为小样本development probe：暂时保留CF-A候选，但不运行CF-B、不扩大development、不修改formal scoring；Non-member变化与目标source缺失仍共变。
+- [ ] 下一步先设计evidence-availability与membership标签解耦的matched control，并预注册source-level指标，再决定是否建立formal successor。
+
+### 2026-09-22：CF-A evidence availability / membership matched control（已完成，未通过差异判据）
+
+- [x] 在独立 shadow collection 中同时纳入20个selected target source：`KB_Member` 10条与`True_Non_Member` 10条；membership标签保持冻结，target-source availability不再按标签排除。
+- [x] 不复用旧 member-only Q_clean；使用同一批冻结neutral question，在matched collection重新运行20条Q_clean与20条CF-A，共40条end-to-end query。
+- [x] 完成40/40 victim请求和40/40 Retriever调用，5秒间隔；Luna 0次，GPU初始化1次；formal产物保持只读。
+- [x] CF target hit：Member 10/10、Non-member 10/10；clean target hit：Member 10/10、Non-member 9/10，证据可用性已基本匹配。
+- [x] Member：Clean ORIGINAL 8/10、CF ORIGINAL 7/10、CF COUNTERFACTUAL 1/10、CF UNKNOWN 2/10、Clean→CF change 3/10；Non-member：7/10、6/10、2/10、2/10、3/10。
+- [x] 判定未出现Non-member更敏感：两组class change均3/10，CF COUNTERFACTUAL仅2/10 vs 1/10；此前不平衡pilot信号不能独立解释为membership。
+- [x] 停止CF-A增强路线：不运行CF-B、不扩大development、不修改formal scoring；保存独立matched plan/freeze/responses/manifest/analysis。
+
+### 2026-09-22：CF-A matched control 解释更正
+
+- [x] 更正研究解释：在本威胁模型中，文档是否进入KB就是membership定义；成员可检索、非成员不可检索是合法的总membership/evidence signal，不是必须消除的混杂。
+- [x] 保留原始member-only pilot作为总membership signal：Clean ORIGINAL 8/10 vs 0/10，CF ORIGINAL 7/10 vs 0/10，CF UNKNOWN 2/10 vs 7/10。
+- [x] 将matched control重新标记为机制消融：把True_Non_Member target source放进shadow collection后，测试的是“证据可用性平衡时是否仍有额外CF-A组间敏感性”，不是正式membership评估。
+- [x] matched control的阴性结果只说明条件CF-A敏感性未分离（两组Clean→CF change均3/10），不推翻原始membership signal，也不改变formal协议。
+- [x] 后续报告区分“总membership signal”和“conditional CF-A sensitivity control”；不运行CF-B、不扩大development，除非重新提出明确的membership问题。
+
+### 2026-09-22：移除显式 UNKNOWN 指令的 prompt 对照（已完成，未增强）
+
+- [x] 新增独立 `no_explicit_unknown_prompt_20260922` 分支；复用冻结10/10样本、query plan和member-only Retriever collection，只删除生成prompt中的显式UNKNOWN指令。
+- [x] 完成40/40 victim请求和40/40 Retriever调用；Luna 0次，5秒间隔；旧pilot、matched control和formal产物保持只读。
+- [x] 新旧轮次retrieved source、排序和context hash均40/40一致，确认变化来自生成prompt而非检索。
+- [x] Member：Clean ORIGINAL 8/10、CF ORIGINAL 8/10、CF COUNTERFACTUAL 0/10、CF UNKNOWN 2/10，四项均未变。
+- [x] True_Non_Member：Clean ORIGINAL 0/10、CF ORIGINAL 0/10、CF COUNTERFACTUAL 1/10→0/10、CF UNKNOWN 9/10→10/10；唯一类别变化为一条CF `COUNTERFACTUAL→UNKNOWN`。
+- [x] 判定删除显式UNKNOWN指令没有增强membership signal，反而降低Non-member counterfactual following；保留为prompt-ablation失败证据。
+- [x] 不修改formal prompt/scoring，不运行CF-B，不扩大该路线。
+
+### 2026-09-22：Counterfactual Anchoring Probe（已完成，未通过）
+
+- [x] 复用冻结10/10样本和neutral question；读取旧Q_clean结果，只新增20条Q_cf。
+- [x] Q_cf严格统一为 `I came across {counterfactual_entity} in relation to this topic.` + neutral question；未加入错误提示、Search terms、Retrieval focus或二选一要求。
+- [x] 完成20/20 victim请求和20/20 Retriever调用，5秒间隔；Luna 0次，formal产物保持只读。
+- [x] Member：CF ORIGINAL 7/10、CF COUNTERFACTUAL 0/10、CF UNKNOWN 3/10，`ORIGINAL→COUNTERFACTUAL` 0/10，class change 1/10。
+- [x] True_Non_Member：CF ORIGINAL 0/10、CF COUNTERFACTUAL 0/10、CF UNKNOWN 10/10，`UNKNOWN/other→COUNTERFACTUAL` 0/10，class change 0/10。
+- [x] transition确认Non-member全为`UNKNOWN→UNKNOWN`；该probe没有产生counterfactual接受信号，不支持假设。
+- [x] 停止该方向：不继续加强prompt、不运行CF-B、不扩大development、不修改formal协议；保存独立plan/freeze/responses/manifest/analysis。
+
+### 2026-09-22：Counterfactual Anchoring force-answer prompt 对照（已完成，停止）
+
+- [x] 在现有 Counterfactual Anchoring Probe 上做最小修改；复用20条Q_cf、20条Q_clean基线、member-only Retriever collection和Gemma配置，只新增20次victim请求。
+- [x] 新prompt要求直接给出参考支持的具体事实，并禁止弃答、拒答或声称信息不可用；canonicalizer仍保留 `ORIGINAL / COUNTERFACTUAL / UNKNOWN`，不把UNKNOWN从评分定义中删除。
+- [x] 20/20 victim与20/20 Retriever成功，5秒间隔；新旧按pair比较的retrieved source、排序、target rank和context hash均20/20一致，确认变化来自生成prompt。
+- [x] Member：CF ORIGINAL 6/10、CF COUNTERFACTUAL 1/10、CF UNKNOWN 3/10、Clean→CF change 2/10、`ORIGINAL→COUNTERFACTUAL` 1/10。
+- [x] True_Non_Member：CF ORIGINAL 0/10、CF COUNTERFACTUAL 1/10、CF UNKNOWN 9/10、Clean→CF change 1/10、`UNKNOWN/other→COUNTERFACTUAL` 1/10。
+- [x] 结果未形成Non-member相对Member的反事实接受差异，且Member CF ORIGINAL由原anchoring的7/10降至6/10；判定该prompt变体失败，停止继续增强，不运行CF-B、不扩大development、不修改formal。
+- [x] 保存独立 `counterfactual_anchoring_force_answer_20260922` freeze、query plan、responses、manifest和analysis。
+
+### 2026-09-22：Counterfactual Presupposition Probe（已完成，停止）
+
+- [x] 复用冻结10/10样本、neutral question和实体值；Q_clean直接复用，只新增20条统一 `I saw {counterfactual_entity} associated with this topic.` Q_cf。
+- [x] 不加入错误提示、验证/纠正要求、二选一或UNKNOWN提示；victim完整end-to-end RAG，retrieval hit/rank仅作diagnostic。
+- [x] 新实验独立使用四类 canonicalization：`ORIGINAL / COUNTERFACTUAL / OTHER_SPECIFIC / ABSTAIN`；旧响应和旧分类未覆盖。
+- [x] 20/20 victim与20/20 Retriever成功，5秒间隔；formal产物保持只读。
+- [x] Member：CF ORIGINAL 7/10、CF COUNTERFACTUAL 0/10、CF OTHER_SPECIFIC 2/10、CF ABSTAIN 1/10、Original retention 7/10、Concrete drift 2/10、class change 1/10。
+- [x] True_Non_Member：CF ORIGINAL 0/10、CF COUNTERFACTUAL 1/10、CF OTHER_SPECIFIC 1/10、CF ABSTAIN 8/10、Original retention 0/10、Concrete drift 2/10、class change 2/10。
+- [x] Non-member仍主要ABSTAIN且Concrete drift未高于Member；判定该方向不值得继续，停止增强、不运行CF-B、不扩大development、不修改formal。
+- [x] 保存独立 `counterfactual_presupposition_probe_20260922` freeze、query plan、responses、manifest和analysis。
+
+### 2026-09-22：Counterfactual Correction Capability（已完成，候选信号）
+
+- [x] 复用冻结10/10样本、每source首个factual pair、neutral question和实体值；只新增20条统一纠错Q_cf。
+- [x] query使用固定 `A note states that {counterfactual_entity} is associated with this fact.` 模板，不暴露original_entity，不做yes/no、不提示UNKNOWN、不强制二选一。
+- [x] 20/20 victim与20/20 Retriever成功，5秒间隔；四分类仅在新probe内使用，formal产物保持只读。
+- [x] Member：ORIGINAL correction 3/10、COUNTERFACTUAL 3/10、OTHER_SPECIFIC 0/10、ABSTAIN 4/10。
+- [x] True_Non_Member：ORIGINAL correction 0/10、COUNTERFACTUAL 2/10、OTHER_SPECIFIC 1/10、ABSTAIN 7/10。
+- [x] Correction-rate gap 为30个百分点；三条Member ORIGINAL均target source命中，Non-member无ORIGINAL。
+- [x] 判定本轮出现小型候选信号，暂时保留该机制；不扩大当前pilot、不调prompt、不运行CF-B、不修改formal。后续若继续，应在独立development split上预先冻结source-level指标并复验。
+- [x] 保存独立 `counterfactual_correction_capability_20260922` freeze、query plan、responses、manifest和analysis。
+
+### 2026-09-22：Correction Probe canonicalization 修正（已完成）
+
+- [x] 对已保存20条 correction response 离线重分类，victim/Retriever/Luna调用均为0；不修改原始response文本。
+- [x] 修正复合数值的完整值匹配，避免共享子数值导致误判；新分类仍为 `ORIGINAL / COUNTERFACTUAL / OTHER_SPECIFIC / ABSTAIN`。
+- [x] 修正后 Member：ORIGINAL 3/10、COUNTERFACTUAL 3/10、OTHER_SPECIFIC 1/10、ABSTAIN 3/10；Non-member：0/10、3/10、1/10、6/10。
+- [x] Correction-rate gap仍为30个百分点（3/10 vs 0/10），候选信号结论不变；不扩大当前pilot、不调prompt、不修改formal。
+
+- [x] 追加最终分类边界修正：明确“no data/no evidence”表述归入ABSTAIN；最终 Member 四类为3/3/1/3，Non-member为0/2/1/7，顺序为ORIGINAL/COUNTERFACTUAL/OTHER_SPECIFIC/ABSTAIN；无新增外部调用，correction gap仍为30个百分点。
+
+### 2026-09-22：Sequential Counterfactual Revision Resistance（已完成，停止扩大）
+
+- [x] 新增独立 `--run-sequential-revision` 分支和 `sequential_counterfactual_revision_resistance_20260922` artifact目录；不覆盖旧实验、不修改formal。
+- [x] 复用冻结20条Q_clean响应；仅对四分类判定为具体答案的样本追加challenge。
+- [x] 实际新增10次challenge（全部KB_Member），10/10 victim和10/10 Retriever成功；True_Non_Member因10/10 Clean为ABSTAIN，没有challenge样本。
+- [x] Member transition：ORIGINAL→ORIGINAL 7、ORIGINAL→COUNTERFACTUAL 1、OTHER_SPECIFIC→OTHER_SPECIFIC 2；Clean=ORIGINAL子集revision resistance 7/8=87.5%，instability 1/8=12.5%。
+- [x] 判定Non-member没有可比的Clean-correct子集，不能估计组间revision resistance，也不能证明相对Clean-only有额外区分价值；停止扩大、不调prompt、不运行CF-B。
+- [ ] 若继续，先建立两组都有足够Clean具体答案的独立development split，并预注册source-level transition指标。
+
+### 2026-09-23：Sequential Revision Resistance 100×3 扩容（选样完成）
+
+- [x] 用户指定沿 Sequential 思路扩容：100 Member/100 True Non-member，每篇三个不同slot、三条Q_clean；仅在得到具体答案的slot上追加challenge。
+- [x] 在现有55号入口增加独立开发分支，不修改旧10/10和formal配置/产物；固定每组按三数据集40/30/30抽样，排除旧20篇，选样实际得到200 source/600 slot、两类文本hash零重叠，复跑一致。
+- [x] 预先固定source级 Clean-only 与 Sequential 评分、每数据集/macro AUC和覆盖率口径；600次Luna、600次Q_clean与最多600次challenge的上限，外部阶段每次最多50条且可续跑。4项定向测试通过。
+- [ ] 获得用户对真实Luna调用、victim调用和GPU长任务的明确执行授权后，依次生成600条中性问题、执行600条Q_clean，再对具体回答执行条件challenge。任一质量门禁失败即停止，不在回答可见后重选source或调prompt。
+- [ ] 完成后核对source级分母、两组challenge覆盖率、逐数据集结果与Clean-only增量；将结果保留为development diagnostic。现有V24 formal split已被使用且结果可见，不能将此扩容当作新的held-out formal test。
+
+当前唯一下一步：等待真实外部/GPU执行授权；选样已完成，Luna/victim/Retriever/GPU调用为0。若后续形成论文主结论，另需独立固定split复验，不覆盖已运行的formal结果。
+
+2026-09-23 superseding 执行更新：用户已授权本轮真实Luna、Gemma victim和GPU Retriever预算，并指定新100×3分支使用`gpt-6-luna`。首批生成在模型身份预检处零调用停止，随后已只修改新分支模型常量；旧pilot仍绑定原`gpt-5.6-luna`。当前唯一下一步为按每批最多50条启动Luna生成，质量门禁通过后再进入Q_clean。
+
+### 2026-09-23：fresh-slot 100×3 方案取代冻结pair扩容
+
+- [x] 用户要求三个slot的原实体及反实体重新由`gpt-6-luna`生成；旧pair扩容在50条中性问句后停止并保留superseded证据，victim/GPU=0。
+- [x] 增加独立56号入口：排除formal与已有development身份后冻结1,650篇无标签候选队列，按source生成恰好3组claim/原实体/反实体/中性问句，三组全过本地门禁才计入eligible。
+- [x] 中性问题新增至少8个英文词、40个可见字符的长度门禁；定向测试覆盖三槽grounding、反实体source-absence和短问句拒绝。
+- [ ] 在剩余550次Luna授权内按冻结顺序取得nfcorpus/scidocs/trec-covid各80/60/60篇合格源，然后固定40/30/30的各组开发split与600条Q_clean计划。
+- [ ] 确认CUDA后逐批运行600条Gemma Q_clean，再对具体回答条件追加challenge，完成source级Clean-only/Sequential比较；旧formal和旧pilot只读。
+
+当前唯一下一步：完成fresh-slot Luna生成和质量检查；不得混入旧50条问句或按victim回答重选文档。新方案为独立development诊断，非正式held-out结果。
+
+### 2026-09-23：fresh-slot 生成冻结完成，Gemma 连接待恢复（superseding）
+
+- [x] 在victim结果可见前加入共享数字实体对拒绝门禁，并从保存的原始响应统一重校验；4项fresh-slot定向测试通过，失败来源和原始响应保留。
+- [x] 新路线234次`gpt-6-luna`调用得到200篇合格source/600个新slot/600条Q_clean；旧pair诊断50次已停止，总Luna调用284次。各数据集Member/Non-member为40/40、30/30、30/30，问句最短8词/51字符。selected对V24正式split的source key/source hash/text hash重叠均为0。
+- [x] 冻结`selected_slots.jsonl`、`clean_query_plan.jsonl`、`clean_freeze.json`；其SHA-256依次为`6e1cfc1a64278e5bb30acdcbd9b471bc24b6a14a77a9671a8009afca74c01fad`、`569ce004cc75bf07e453f68ba2b79ec95bf8a41db6f12c2f685ecafb77895c1e`、`c3be3a4fe3a642ebc5a89d54950ab232bea98168af9c1d05a0cf081798267c29`。
+- [x] CUDA预检通过并加载本地BGE检索器；首次Gemma clean请求连接超时，短重试后停在长冷却前，实验响应0，challenge 0。服务器健康接口和1条认证合成推理均成功，provider为`gemma-2-2b-it-bf16`；当前Windows到8000端口的直连失败。SSH本机转发请求未获批准，未执行。
+- [ ] 用户恢复8000直连或明确授权本机SSH转发后，以当前冻结输入从Q_clean第1条继续，每批最多50；完成600条后按具体回答条件冻结并执行challenge，再算source级逐数据集和macro指标。不得切换模型、修改实体/问句或混用旧50条诊断数据。
+
+当前唯一下一步：恢复当前机器至Gemma服务器8000端口的连接。模型服务本机推理已证实可用；不能把合成probe或检索加载写成600条实验回答，更不能报告攻击AUC。
+
+2026-09-23 superseding 用户澄清：Gemma继续仅经现有OpenAI-compatible API调用，不迁移runner到服务器，也不实现SSH远程推理。此前经SSH发送的合成probe同样是对服务器本机`/v1/chat/completions`的API请求，只用于确认服务；不作为实验回答。当前唯一下一步是确认并配置从Windows实验进程可访问的Gemma API base URL，再按冻结计划从第1条Q_clean运行；模型、slot、query、scoring与已冻结输入不改。
+
+2026-09-23 superseding 直连恢复：用户要求重试原`.env`地址；现有Gemma API客户端合成probe在Windows端成功返回`gemma-2-2b-it-bf16`/`OK.`，无需改地址。首批50条Q_clean全部成功且provider ID一致、错误0，后续clean按每批最多50条串行后台续跑。已设置仅在600条clean完成后启动条件challenge的后台流程，并建立安静监控自动化；只在完成或阻断时报告。当前唯一下一步为让现有后台流程完成并核验source级报告，不并发启动重复批次，不改冻结输入。
+
+### 2026-09-23：Sequential fresh-slot 100×3 development 完成（superseding）
+
+- [x] 600/600条Q_clean与397/397条仅针对非ABSTAIN的challenge顺序完成；997条实验响应错误0，provider实际ID均为`gemma-2-2b-it-bf16`。clean/challenge query ID、冻结hash、source/slot分母和0新增调用复核通过；未改正式V24产物。
+- [x] source级逐数据集AUC（Clean-only→Sequential）：nfcorpus`0.996875→0.905938`、scidocs`0.964444→0.966667`、trec-covid`0.996667→0.875000`；macro`0.985995→0.915868`。分层source bootstrap 4000次、seed20260923的macro配对差值95% CI为`[-0.102779,-0.038889]`，属于当前development样本不确定性估计。
+- [x] 两组均为100篇、每篇3槽；Member/Non-member Clean ORIGINAL槽数220/3，challenge合格槽数298/99，ORIGINAL→ORIGINAL槽数150/2。Sequential没有在本次开发样本上改善Clean-only，不能宣传为正式held-out结论。完整产物与source分数见`artifacts/v24/development/sequential_revision_100x3_fresh_slots_20260923/source_level_report.json`，SHA-256=`361bf98033ee9cb5b29829c2219bd49a7b26de3e04a21976b03ce09c0eadb4bc`。
+- [ ] 若继续研究这一思路，须先在独立development中分析非Member clean覆盖不足和Member挑战后转为反事实的失败模式，再在未参与方法选择的固定test split上复验；不得基于本轮结果原地调参并称为formal。
+
+当前唯一下一步：向用户交付本次development报告；完成监控自动化已暂停，历史失败与superseded证据保留。未经新实验设计，不续跑或改写已完成的100×3结果。
+
+### 2026-09-23：100×3 已保存响应的离线审计（superseding 下一步）
+
+- [x] 核对冻结输入hash、997/997响应类别与200/200 source分数；完整逐文档和逐槽表、509个变化排序配对、两幅图与分析报告位于`artifacts/v24/development/sequential_revision_100x3_fresh_slots_20260923/offline_audit_v1/`。
+- [x] 定位macro AUC下降来源：57篇Member降分、1篇Non-member降分、0篇Non-member升分；nfcorpus/trec-covid各282/209个原Member胜出配对转为平分。3篇原正分Non-member中仅scidocs一篇降至零。
+- [x] 验证两阶段同一解析器、203条未挑战Clean ABSTAIN按冻结分母3处理；发现26条明确文字弃答Clean被错误挑战、16条Challenge漏判，做标签无关离线重分类。理论条件challenge覆盖371槽，冻结source分数/AUC不变；原结果保留。
+- [x] 在实际覆盖157篇上用同一解析器比较Clean-only、Challenge-only、联合macro AUC=`0.983136/0.910579/0.910133`；说明条件覆盖不对称、两轮提示/检索变化，以及23条数字短答和1条双值回答的解析边界。未调权重、未新增API/GPU调用、未改正式产物。
+
+当前唯一下一步：交付离线审计报告。若用户决定继续此方向，另行预先设计统一提示/检索与标签无关解析，并在独立开发集和固定test验证；不能把本轮200篇的探索性修正宣布为冻结方案成功。
+
+### 2026-09-23：第一人称反事实主张配对小试（完成）
+
+- [x] 固定24篇development source（每数据集Member/True Non-member各4篇），每篇1槽，包含全部3篇Clean回答原值的Non-member；同槽配对`Someone believes`和`I believe`，共48条计划。两臂复用相同旧Clean回答、中性原问题、反实体与Clean检索文本。
+- [x] 本地BGE检索24/24，top-5 source与context hash逐条匹配冻结Clean；Gemma API 48/48成功、错误0，provider实际ID全为`gemma-2-2b-it-bf16`；Luna 0。计划、参考文本、响应hash见`artifacts/v24/development/first_person_rebuttal_pilot_20260923/analysis-report.md`。
+- [x] 同一两行解析规则下，24对最终值21对相同；Member严格原值7/12→8/12，唯一变化为`lossless`短答→完整实体；Non-member两臂均1/12，两篇Clean误报难例变化方向相反，第三篇均unknown。`Verdict`常与最终值矛盾，不能将自报`contradicted`直接当有效反驳；没有代表性source级AUC或正式效果声明。
+- [x] 保留旧100×3及formal结果，不改变55/56冻结脚本、不搜索权重或匹配规则；独立入口为`scripts/58_probe_v24_first_person_rebuttal.py`，逐source结果在`analysis_report.json`。
+
+当前唯一下一步：交付本轮小试的阴性诊断报告。若继续反事实纠错方向，应先在独立development中解决`Verdict`与最终值不一致及短答解析问题，预先固定新提示和评分，再做端到端、source级评估；本轮24篇不得用于挑选最佳规则后宣布成功。
+
+### 2026-09-23：无Clean答案的单轮反事实端到端小试（完成）
+
+- [x] 复用前一小试固定的24篇source和每篇1槽；新victim请求不含旧Clean回答或原实体，只给反实体错误主张、原中性问题与单行最终值输出要求；完整用户请求进入BGE检索，原55–58号脚本及旧响应不改。
+- [x] 24/24次本地BGE检索与24/24次Gemma API调用完成，Luna0、错误0、重试0，provider实际ID全部为`gemma-2-2b-it-bf16`；新旧top-5 source列表仅1/24篇相同。产物与hash见`artifacts/v24/development/no_clean_counterfactual_pilot_20260923/analysis-report.md`。
+- [x] 严格评分：Member旧Clean原值12/12→单轮反事实原值6/12、反实体3/12、OTHER2/12、格式错误1/12；True Non-member旧Clean原值3/12→本轮原值1/12、弃答10/12、格式错误1/12。三篇旧误报Non-member中两篇转unknown、一篇仍答原值；3篇Member反实体错误中2篇目标文档已检中。
+- [x] 单列短答/等值及格式错误，不根据本轮标签修解析或调提示；24篇按旧Clean富集且一槽/篇，不计算代表性AUC，不升级为正式v24结果。独立入口`scripts/59_probe_v24_no_clean_counterfactual.py`与逐source`analysis_report.json`已保存。
+
+当前唯一下一步：向用户交付无Clean单轮反事实小试报告。当前证据不足以扩大该提示作为主攻击；若研究这一机制，须在独立development中预先固定事实有效性、解析与相同预算对照，并验证端到端source级排序和严格Non-member误报。
+
+### 2026-09-23：关系绑定成员信号小试（完成）
+
+- [x] 只依据现有开发源原文人工固定12篇可核验关系文档，三数据集各2 Member/2 True Non-member；每篇一组配对和两种对象顺序，共24条固定问句。旧Clean的三篇误报Non-member均不符合本轮同类型可交换选项的有效选样，因此不可声称本轮直接解决误报。
+- [x] 24/24次本地BGE与24/24次Gemma API完成，错误0、重试0，实际provider ID全为`gemma-2-2b-it-bf16`，Luna0；6篇Member的两次查询均检到目标source，10/12篇两次top-5列表相同。入口`scripts/60_probe_v24_binding.py`，冻结计划/响应保存在`artifacts/v24/development/binding_pilot_20260923/`。
+- [x] 冻结严格X/Y格式两次均正确为Member1/6、Non-member1/6；6条Member直接填写数值原样留为冻结FORMAT_ERROR。标签无关离线审计仅接受First/Second字段与候选值原文精确匹配，审计版变为Member3/6、Non-member1/6；原报告和响应不改，审计入口`scripts/61_audit_v24_binding.py`。
+- [x] 同12篇的旧Clean正分为Member6/6、Non-member0/6；绑定探针无额外分离证据。样本小且人工筛选，不计算公平AUC或升级正式方法；逐source诊断见`offline_audit_v1/analysis-report.md`。
+
+当前唯一下一步：向用户交付阴性小试报告。若未来重访关系绑定，先解决源覆盖率和强制选项猜测，并在新开发集固定两组独立关系/篇和同预算基线；不得从本轮12篇挑选成功关系宣布方法成立。
+
+### 2026-09-23：source-specific Clean 配对小试（development，准备中）
+
+- [x] 在独立62号入口预先固定三数据集各4 Member/4严格Non-member、每source三个相同事实槽的neutral/specific配对问句；两臂共用RAG提示、检索器和ORIGINAL解析器。新线索仅为候选原文逐字片段，不得含答案，设最少长度与罕见锚词门槛。
+- [x] 排除正式split、旧开发identity及旧100×3生成候选；按固定seed写入144篇候选顺序与简明实验配置。当前仅本地选样，Luna/Gemma/BGE调用0。
+- [ ] 获得本轮72次Luna、144次Gemma API、144次BGE检索的明确授权答复后，按不超过50条/批生成；质量合格的每数据集前8篇确定性分组，冻结24篇/72槽/144问。
+- [ ] 人工检查生成问题和答案泄漏，再为旧100加新12 Member的开发索引预取144条检索上下文，顺序运行144条Gemma请求；任何模型ID、source身份或检索组漂移都停止。
+- [ ] 用同一解析器输出source级逐数据集/macro AUC、配对差的区间、Member保留、Non-member误报、检中率及逐source变化；如新Non-member中没有误报，明确说明小样本无法检验误报缓解。只作development诊断，不修改正式V24结果或据此调阈值。
+
+当前唯一下一步：等待本轮真实调用授权，同时完成离线预检；不得把工具返回的提问已送达视作授权。
+
+### 2026-09-23：source-specific Clean 生成失败与背景线索派生版（superseding）
+
+- [x] 用户“继续”后执行72/72次`gpt-6-luna`；原62号严格逐字线索门槛仅通过nfcorpus8、scidocs8、trec-covid3篇，生成预算耗尽。原响应/错误保留，BGE/Gemma均0，原版未完成且不进入评分。
+- [x] 在任何victim结果前复核72份生成：三槽事实与中性问句本身通过的source为20/17/12。否决可能贴近答案的第一个线索草案`deterministic_clues_v2/`，保留其计划作为预审失败记录；BGE/Gemma仍0。
+- [x] 63号独立派生入口统一从原文抽取远离全部claim、无数字和答案词的早期背景片段。三数据集质量合格16/12/10，各取8篇并确定性分4/4；冻结`background_clues_v3/`24篇/72槽/144条匹配问句，原实体、反实体、评分与两臂预算一致。自动泄漏检查为0、人工逐槽复读完成；不根据标签/AUC调整。
+- [ ] 在旧100 Member加本轮12新Member组成的隔离开发索引中检索144条问句，每批≤50且CUDA必须可用；确认True Non-member没有入索引。
+- [ ] 按已授权总上限经现有API顺序运行144条Gemma回答，每批≤50，实际provider ID须为`gemma-2-2b-it-bf16`。用同一解析器出source级逐数据集/macro及配对区间，列出误报、Member保留和检中率；不调权重或阈值。
+
+当前唯一下一步：运行派生版的本地BGE检索阶段；如出现模型身份、索引成员或输入身份漂移立即停止。63号派生版不用追加Luna调用，62号失败证据不覆盖。
+
+### 2026-09-23：source-specific Clean 小试完成（superseding）
+
+- [x] 63号背景线索派生版已完成24篇/72槽/144配对问句；原62号72次Luna生成预算耗尽的失败和v2预审否决计划均原样保留，不进入结果。
+- [x] BGE 144/144、Gemma API 144/144顺序完成，批次50/50/44，错误0、额外重试0，provider实际Gemma ID全为`gemma-2-2b-it-bf16`；112篇检索索引仅含Member，144条上下文hash核对通过。
+- [x] 同一严格评分器给出的source级逐数据集AUC neutral→specific 为`1→1 / 1→1 / 0.875→0.875`，macro`0.95833→0.95833`；Member检中`32/36→36/36`、原值槽`18/36→20/36`，两篇Member各升1/3，Non-member两臂0/12正分。全部48个跨组排序配对不变，不能宣称误报缓解或区分增益。
+- [x] 24篇逐source、72槽转移、图、统计附录、限制及输入hash已写入`artifacts/v24/development/source_specific_clean_pilot_20260923/background_clues_v3/analysis-report.md`和机器报告。保留严格短答/文字弃答解析边界，不按标签或AUC追改；未修改正式V24产物。
+
+当前唯一下一步：向用户交付阴性小试报告。若再研究严格Non-member误报，应在新且事前定义的高风险负例集合中检验预先固定的事实选择策略，并保留同预算、同解析器的Clean基线；本轮没有基线误报，不能据此升级方法或在这24篇上调阈值。
+
+### 2026-09-23：错误主张固定检索文本隔离小试（完成，development）
+
+- [x] 复用58号24篇旧Clean所选槽与已保存top-5、59号完全相同的无先前答案错误主张问句和端到端结果；独立64号入口仅补“同一错误主张问句+原Clean检索文本”一臂，旧配置、脚本、响应均不改。
+- [x] 新Gemma API 24/24，错误0、重试0、provider实际ID全为`gemma-2-2b-it-bf16`；新增BGE/Luna均0。plan与旧上下文/响应hash及24个新回答身份核对通过。
+- [x] 严格同评分器的Member原值`12→4→6`、True Non-member`3→2→1`（Clean→固定检索错误主张→重新检索错误主张）；固定文本Member目标源12/12检中，仍有3篇明确接受反实体。固定与新检索的类别21/24不变，top-5源顺序仅1/24相同。
+- [x] 保存24篇逐source转移、两图、统计限制和原始新响应于`artifacts/v24/development/rebuttal_fixed_context_pilot_20260923/`。本批由旧Clean富集、每篇1槽；不算代表性AUC，不根据Member/NM标签修短答或格式解析，不升级为方法增益。
+
+当前唯一下一步：向用户交付这轮机制小试的阴性结果。若仍探索错误主张路线，须先在新开发集预先固定能测“明确、可核验反驳”的提示和相同预算Clean对照；本批不搜索话术、权重或阈值，也不改写旧100×3结论。
+
+### 2026-09-23：五槽盲定位文档修复小试（完成，development）
+
+- [x] 从100×3开发集按固定hash和统一长度/唯一位置门槛取候选；Luna补两槽实际16次，4次质量拒绝，选成各数据集2 Member+2 True Non-member，共12篇/60槽。四臂prompt、五槽文档、严格old/new评分在victim前固定。
+- [x] 仅100篇旧开发Member组成BGE索引，24/24次检索完成；Member两种查询目标源各6/6检中，严格Non-member未入索引。Gemma API 48/48、错误0、实际provider ID全为`gemma-2-2b-it-bf16`，48个request ID互异。
+- [x] 原65号冻结解析因48/48条完整JSON代码块而全部FORMAT_ERROR、四臂AUC均0.5，作为解析失败保留。66号统一代码块离线审计同规则重算：遮盖/标明位置/盲定位/无检索的Member严格修复槽`0/4/1/0`（各30槽）、Non-member均0，source macro AUC`0.500/0.833/0.583/0.500`；逐数据集、排序变化、额外编辑和原值出现上界在独立报告。遮盖臂不等于官方MBA，不能宣称击败基线。
+- [x] 保存冻结原始报告与响应、离线审计逐source/slot CSV、两图、统计限制和输入hash于`artifacts/v24/development/blind_document_repair_pilot_20260923/`。每数据集仅2+2，不能估低FPR/置信区间或证明误报缓解；未按本轮标签/AUC改匹配规则、权重或样本。
+
+当前唯一下一步：向用户交付小试的阴性结论。若继续该方向，应先在独立开发源上固定更简单的纠错输出格式、验证模型能完成基本五槽修复，并与官方MBA及同预算Clean公平比较；须另行确定真实调用上限。本批不升级V24主方法或论文创新结论。
+
+### 2026-09-24：显眼错值五槽恢复能力小试（完成，development）
+
+- [x] 用户将眼前目标明确为答对原值。独立67号入口复用65号12篇五槽源和固定`corrupted` top-5检索文本，仅让Luna重写为显眼错值；Luna12/12，其中2篇错值已在原文出现按统一门槛剔除，未补生成。留下10篇，Member/True Non-member各5篇、共50槽。
+- [x] Gemma新增10/10请求成功、provider实际ID全为`gemma-2-2b-it-bf16`、request ID互异；新增BGE/GPU0，5篇Member目标源均已检中。保持65号盲定位提示，旧新响应均用同一完整JSON代码块解析；主指标只要求JSON新值完整匹配原值，严格定位为次指标。
+- [x] Member旧错值→显眼错值完整原值`1/25→2/25`，Non-member`0/25→0/25`；严格定位同样`1→2/25`。仅1篇Member改善一槽，10条回答9条只提出一处编辑。定性短答/整句候选单列，不改冻结精确评分；本轮样本已见、固定旧检索文本与分时调用均限制因果解释。
+- [x] 逐篇CSV、原始请求/响应、质量失败和报告保存在`artifacts/v24/development/obvious_error_fixed_context_pilot_20260923/`；AST、无新增调用的resume、报告确定性复跑和`git diff --check`通过。65/66号、正式V24不改。
+
+当前唯一下一步：向用户报告“显眼错值只多答对1/25个Member原值”的结果。若继续追求恢复能力，下一步应事先固定要求逐项输出五个答案的简化提示和同一模型/源的能力检查，并在新开发样本复核；这一新实验需单独限定真实调用预算。当前结果不支持把盲修复作为论文创新结论。
+
+### 2026-09-24：Joint Clean Co-Recovery development pilot（完成）
+
+- [x] 独立68号入口复用冻结100×3 Clean的600条计划、响应、三槽原实体和标签；每篇仅把3条原中性问题编号合并，不加候选值、候选文档、背景提示或源线索。Joint query原样用于一次BGE检索和一次Gemma请求，top-5文本共享；原55/56号及正式V24不改。
+- [x] 事前按Independent命中数选12 Member与6 True Non-member；hard Non-member优先。trec-covid::5xe91ifs因一个原值COVID-19出现在另一条中性问题内，合并后会跨槽泄漏，故预先剔除；可安全合并的hard Non-member为2篇。选样条件和编号拆分规则在真实调用前固定。
+- [x] BGE 18/18、Gemma 18/18、Luna 0；实际模型ID全为gemma-2-2b-it-bf16，18个request ID各异，错误0；Member联合检索目标源12/12且均rank 1，Non-member 0/6，检索命中仅诊断。
+- [x] 冻结逐槽解析：Member Independent ORIGINAL 18、Joint ORIGINAL 19、ORIGINAL→ORIGINAL/OTHER/ABSTAIN为16/1/1，JCR=16/18；True Non-member 2、0、0/1/1，JCR=0/2；hard子集亦0/2。分数据集Member JCR为5/6、5/6、6/6；hard仅nfcorpus与scidocs各0/1。没有计算正式AUC。
+- [x] Assistant定性审计：一篇hard的Postmenopausal是postmenopausal women的短答近邻，另一篇hard的ReLU→Unknown为明确弃答；一篇Member三个值未编号，被事前结构规则记格式失败。不事后改解析，也不把短答强行算错事实。hard分母2且按旧Clean富集，本轮是机制线索，不是顶会创新或稳健改进的证据。
+- [x] 新产物在artifacts/v24/development/joint_clean_corecovery_pilot_20260924/；plan、config、contexts、responses、逐槽/逐source、报告、统计限制、两图与Assistant审计保留。零新调用resume、报告复跑和原始provider身份核验通过。未提交、未推送。
+
+当前唯一下一步：向用户交付Joint Clean小试结果及创新判断。不要在这18篇上调提示、组合或匹配规则；若要确认机制，先在独立development源中补足无跨槽泄漏且Independent Clean已答对的hard True Non-member，再预设同预算对照。正式v24仍保持原样。
+
+### 2026-09-24：Joint Clean 同等Clean难度核对（事后、零调用）
+
+- [x] 从本轮source_scores.csv离线分层：Independent仅1槽ORIGINAL的Member保留4/6，2槽ORIGINAL的Member保留12/12；前者中nfcorpus与scidocs合计2/4，对应两篇安全hard Non-member严格0/2。
+- [x] 识别hard 0/2中有Postmenopausal相对postmenopausal women的完整实体短答边界；另一篇ReLU→Unknown才是明确弃答。此为Assistant非盲定性敏感性，不改冻结评分或原报告。
+- [x] 原18篇pilot的数值0.889对0与事前描述性继续观察线原样保留；事后匹配说明样本难度不平衡且分母2，暂停把Joint作为论文主线，不在这批调prompt、合并方式或解析。新增API/GPU调用0。
+
+当前唯一下一步：先离线构造新的source-exclusive、与Member主题及检索难度匹配的严格True Non-member开发候选池，固定选样规则；再决定哪种攻击机制值得用真实API比较。Joint暂不扩跑，正式v24及既有报告不改。
+
+### 2026-09-24：V24 nfcorpus × Gemma MEntA 对比（待用户运行）
+
+- [x] 对齐当前nfcorpus正式split的2000篇source（1000/1000）；确认旧V20/V21 MEntA脚本不可直接复用，V24 source pool全文hash逐一匹配。
+- [x] 在独立main工作树准备V24专用MEntA入口及网络隔离测试；五问/篇，沿用Gemma服务器、BGE dense、固定NLI；离线预检与21项定向测试通过。
+- [ ] 在main工作树审核并提交新增脚本和测试，使API阶段具有干净的Git提交身份；不提交原工作区其他未提交资产。
+- [ ] 由用户依次运行prepare、victim、score、report；预期2000次Luna输入生成和10000次Gemma逻辑问答，真实调用前先确认端点、费用、GPU与可用时间。
+- [ ] 当前PCV source分数仅1954/2000；报告同source交集结果时显式标明缺失与两组数量，待主评分补齐后再做全2000篇正式配对比较及区间估计。
+
+本轮未启动任何Luna/Gemma正式调用、BGE/NLI推理、下载或安装，未改已有正式输出。当前MEntA对比的下一步是用户审核并提交main工作树中的新增入口，再运行离线预检与prepare；此前的development硬负例计划仍保留，但不代替本次对比。
+
+验证补记：全量unittest为894项、49 skip、2 FAIL、4 ERROR；均发生在既有V21/V23冻结证据/缺失产物测试，本次V24 MEntA定向21项通过。旧协议失败证据保留，未修改。
+
+### 2026-09-24：相似严格非成员开发候选池（离线完成）
+
+- [x] 独立69号入口固定seed、同数据集100篇Member锚点、正式及历史开发三种身份排除；未改68号Joint小试、正式V24、已有响应或MEntA正式对比。
+- [x] 三个source pool分别剩余664/22714/167412篇未占用源；各词面筛600篇、本地BGE重排600篇，各选30篇，共90篇未查询的True Non-member开发候选。最近Member锚点数17/15/15；入选文档相似度中位数0.869/0.829/0.868。
+- [x] 源池SQLite正文与候选key/原文hash/规范文本hash逐篇核对；90篇三种身份唯一，且与正式split、冻结开发源及33份历史开发JSONL零交集。选样长度、标题、5-gram近重复、三问泄漏和每锚点最多3篇门槛已执行。完整审计在artifacts/v24/development/hard_negative_similarity_pool_20260924/，候选清单SHA-256为2206e1f96aecd80128c507767c9821f1dc8f6e6d99cf9720d2367fb682e6f296。
+- [x] 本阶段本地BGE GPU推理完成；Luna、Gemma及受害模型真实调用均0。文档相似度仅为实际query检索难度代理，Clean误报和Joint保持率均未测。
+- [ ] 本开发支线若获真实调用授权，先固定每数据集前10篇：最多30次Luna三槽生成、90次Gemma Independent Clean、30次条件Joint；Joint前检查新三问跨槽答案泄漏，不按模型回答或成员标签补源。先统计实际Independent ORIGINAL hard Non-member，再对Clean难度匹配的Member做同预算对照；未见充分hard样本或明显JCR差异则停止Joint方向。
+
+当前开发支线下一步是决定是否授权上述最多150次真实API请求。独立main工作树的V24 MEntA正式对比仍按上一节待用户审核/提交，未由本离线池替代。
+
+### 2026-09-24：相似严格非成员 Joint Clean 后续小试（完成并停止）
+
+- [x] 用户明确启动已列明预算后，70号独立入口固定离线候选池各数据集前10篇，不按结果补源；复用56号三槽质量门槛、旧100 Member-only BGE索引、原Clean解析与68号Joint提示/拆分。Joint事前须有至少6篇安全hard Non-member、覆盖2数据集，才与同数据集同Clean命中数Member配对，最多15对。
+- [x] Luna30/30次，实际provider ID全为gpt-6-luna，26篇三槽质量通过、23篇可安全联合；profile的model_version仍误标gpt-5.6-luna，已在新配置与报告显式保留，不冒称实际权重revision。
+- [x] Gemma Independent Clean78/78次成功，实际ID全为gemma-2-2b-it-bf16；BGE检索78/78，top-5仅含旧100篇Member，目标Non-member命中0；Luna与Gemma共108个request ID互异。严格解析ORIGINAL 6槽/4篇source、OTHER_SPECIFIC54、ABSTAIN18；其中2篇hard的三问跨槽泄漏，安全hard仅2篇。
+- [x] 按预设6篇门槛停止：可匹配2对，但Joint plan为空，Joint Gemma调用0，JCR/AUC不定义；没有补源、放宽解析、改门槛或将其宣传为方法提升。六个ORIGINAL原值均在各自Member top-1检索文本出现，是跨文档事实重合的定性线索。
+- [x] 30/78/0请求数、provider身份、108个request ID、逐问prompt/context hash、冻结解析复算和Member-only检索边界独立核验通过。响应、逐source筛查、机器及文字报告保存在artifacts/v24/development/joint_clean_hard_negative_followup_20260924/；旧pilot及正式V24保持原样。
+
+本开发支线的唯一下一步：停止扩跑Joint，保留本轮阴性证据；若继续方法研究，先离线分析已识别的跨文档同事实误报如何区分source身份，再提出新机制与预设验证，不在这批响应上调提示/评分。独立main工作树的V24 MEntA正式对比仍按其原任务计划等待用户审核与提交。
+
+### 2026-09-24：Clean 阳性后来源绑定 oracle 机制小试（完成，development）
+
+- [x] 只读人工筛查已知7篇严格True Non-member Clean正分：为3篇构造相似库内Member与不同后续事实配对，1篇SARS信息近重复，本轮未找到可用不同事实；另3篇本轮未形成配对，筛查并非穷举。本轮用索引知识挑配对，明确只作oracle上界。
+- [x] 独立71号入口冻结3对/6条不含待答值的问句，验证目标后续原值不在旧100篇Member索引逐字出现；复用冻结BGE、top-5、RAG提示、Gemma及同一Clean解析器。未改旧响应、Joint或正式v24。
+- [x] 本地BGE 6/6、Gemma API 6/6、Luna0；实际Gemma ID 6/6为`gemma-2-2b-it-bf16`，请求ID互异、无失败。非成员目标问句严格ORIGINAL 0/3（ABSTAIN 1、回答配对Member值2），Member对照ORIGINAL 3/3；三对两臂top-1均为对应Member。
+- [x] 独立目录`artifacts/v24/development/clean_source_binding_oracle_pilot_20260924/`保存计划、输入hash、检索上下文、原始回答、机器与文字报告。样本3对且配对使用索引知识、问句不止单锚点变化；不计算AUC/低FPR或宣传黑盒攻击增益。
+- [x] 零调用补查仅以230篇开发/候选源正文做标签盲TF-IDF近邻：三篇oracle Member在同数据集候选里的排名3/1/1；代理池带有开发抽样限制，不把这一结果写成可部署选择器。
+
+当前此开发支线唯一下一步：停止在这3对上调提示或评分；如继续，先离线定义标签盲、无成员索引访问的相似来源/后续事实选择规则及同预算Clean对照，并在新development源达到事前覆盖门槛后再考虑真实调用。独立MEntA正式对比任务仍按其原有门禁推进。
+
+### 2026-09-24：第一人称谎称反实体 100×3 扩容（完成，development）
+
+- [x] 独立72号入口复用冻结200篇source、600条Clean、三个槽的原/反实体与Clean top-5；600槽全部发起旧58号相同第一人称提示，单批最多50，旧58号、正式v24和旧响应保持只读。
+- [x] Gemma新请求600/600，错误及格式失败0，实际模型ID全为`gemma-2-2b-it-bf16`，600个provider request ID互异；新增Luna/BGE/GPU0。第10条Windows写入临时文件经同一请求完整响应校验后恢复，未重复调用；旧小试重合24条完整回答24/24相同。
+- [x] 同一冻结实体解析器下，Member Clean→最终 ORIGINAL `220→162`槽、来源阳性`98→88`/100；Non-member `3→1`槽、来源误报`3→1`/100，无新误报。macro source AUC Clean/最终/联合为`0.9860/0.9379/0.9335`；一槽阈值和两槽阈值、3400对跨组排序变化及逐数据集结果均已报告。
+- [x] 600条原始响应独立重解析，逐source三种计数逐一复核；报告区分13个Member ORIGINAL→反实体与38个ORIGINAL→OTHER（部分是严格匹配短答边界），保留`Verdict`与最终值不一致的失败证据，不后验修改解析或评分。
+- [x] `artifacts/v24/development/first_person_rebuttal_100x3_20260924/`保存plan/config、原始响应、逐槽/逐source、机器与文字报告、统计附录和两图；关键hash见notes。无需重跑正式v24，不升级为论文方法，无提交或推送。
+
+当前此支线唯一下一步：向用户报告“减少2篇旧误报但损失10篇Member，一槽与两槽阈值权衡、整体排序下降”的开发结论。若要判断38个OTHER里有多少是真正答对，须另立标签盲、事前固定的语义等价审计；不在这200篇上调prompt、权重或匹配规则。独立MEntA正式对比仍按其原任务门禁推进。
+
+### 2026-09-24：第一人称 100×3 零调用标签遮蔽语义审计（完成，development）
+
+- [x] 独立73号只读入口复用冻结200篇、600槽、两轮已存响应；先固定相同等价规则，Final全部129条OTHER与Clean全部172条OTHER分别遮蔽审阅，标注hash先于解盲固定。审阅者为Assistant且先前见过少量案例，不宣称独立人工盲审；新增API/GPU调用0。
+- [x] 两轮均只把明确完整等价于原实体的OTHER加入事后诊断分数，PARTIAL/UNCERTAIN不计；冻结解析器和原分数不变。Final OTHER明确原值Member/NM为62/2，Clean OTHER为48/2。
+- [x] 200篇逐源对称重算：语义Member原值槽Clean→Final`268→224`，Non-member`5→3`；一槽阳性Member`100→98`、Non-member`5→3`。macro AUC由冻结`0.9860→0.9379`变为语义敏感性`0.9985→0.9859`，仍下降`0.0126`；逐数据集与3400对来源排序、bootstrap条件区间、两图、逐源表和hash已保存。
+- [x] Member 38篇语义降分/3篇升分；Non-member 3篇降分/1篇升分，其中1篇为新语义误报。第一人称提示的表观损害部分来自精确解析，但修正两轮后仍未优于Clean，不按AUC调提示或评分。正式v24及72号原报告不改。
+
+当前此支线唯一下一步：交付零调用审计结论，并暂停在这200篇上调第一人称提示。若后续要用语义评分立新方案，应先请独立标注者盲审（包括原已判ORIGINAL/COUNTERFACTUAL/ABSTAIN的样本），在新development源事前固定规则及同预算Clean对照；本次Assistant结果仅作失败模式与解析敏感性证据。独立MEntA正式对比仍按其原任务门禁推进。
+
+### 2026-09-24：TPR@1%/5%FPR 零调用补算（完成，development）
+
+- [x] 复用200篇逐source的冻结精确分数和双轮语义诊断分数，调用仓库无插值经验阈值指标；没有修改响应、解析器、分数或新调用。合并100篇负类时，精确Clean→Final的TPR@1%为`80%→88%`、@5%为`98%→88%`；语义诊断@1%为`94%→81%`、@5%为`100%→98%`。统计附录记录各点实测FPR和阈值。
+- [x] 逐数据集单独选阈值的等权macro另列：精确@1%`80.6%→76.9%`、@5%`97.8%→88.1%`；语义@1%`94.2%→84.7%`、@5%`97.5%→97.8%`。每数据集1%预算只能0误报，不能把池化精确+8百分点或语义macro@5%的+0.3百分点当作稳健攻击增益。
+
+当前此支线唯一下一步：向用户交付两种低FPR口径及离散阈值限制；在本200篇development上不调整提示、匹配或阈值。独立MEntA正式对比仍依其原门禁推进。
+
+### 2026-09-24：第一人称挑战类别不稳定的零调用归因核对（完成）
+
+- [x] 对称语义类别下，Non-member换类92/300槽、Member换类64/300槽；Non-member多数在零分类别间变化，来源原值分数96/100篇不变。Clean确答对的槽中，Non-member保留2/5、Member保留220/268；报告同时标明Non-member分母仅5。
+- [x] Member原值流失48槽中19转反实体、14弃答、15转其他/部分/不确定；48/48目标Member源仍在原top-5且原实体字面串位于正文。19个转反实体槽的反实体字面串0/19出现在top-5，Verdict 19/19写supported。更新审计报告与附录，不改冻结分数、响应、协议或正式v24。
+- [x] 解释限定为错误主张对有证据可见的回答造成干扰的观察性线索；无同时间、同格式无谎称对照，不能把全部损失单独归因第一人称措辞或声称严格因果效应。新增API/GPU调用0。
+
+当前此支线唯一下一步：向用户解释“Non-member回答类别更易变，但原值分数多在零分地板；Member在固定证据下仍会失分”。如需因果验证，在新的development源事前固定同预算无谎称对照与模型身份，不在本批调分数。独立MEntA正式对比仍依其原门禁推进。
+
+### 2026-09-24：挑战降分引用门槛的零调用必要条件核对（完成，development）
+
+- [x] 复用旧100×3响应、Clean top-5和两轮对称Assistant语义类别核对引用门槛的必要条件；新增API/GPU调用0，旧响应未要求引用，故未重算门槛分数或AUC。
+- [x] Member语义Clean原值流失48槽中19槽明确转反实体，但19/19反实体字面串都不在top-5；3个被清除的语义Clean-positive Non-member槽（1反实体、2弃答）的反实体字面串也都不在top-5。只按“引用中存在反实体”许可扣分会同时阻断旧数据里的误伤与误报改善，不能据此宣称新方法有效。
+- [x] 明确现有黑盒威胁模型看不到top-5；本地检索文本只用于诊断，引用核验若用于攻击分数必须限于最终响应与攻击者已有候选source，且验证事实关系而非只匹配字面值。正式v24、冻结Clean和旧挑战评分保持原样。
+
+当前此支线唯一下一步：先离线固定符合黑盒可观察范围的引用字段与核验规则，再在独立development源预设小样本、同预算Clean对照和停止线；真实Gemma/BGE调用须另获明确授权。本200篇旧响应仅供失败模式诊断，不用于按AUC调门槛。独立MEntA正式对比仍依其原门禁推进。
+
+### 2026-09-24：引用核验降分方向停止
+
+- [x] 用户确认该机制需要使用黑盒攻击者不可见的检索文本，决定停止；前节“固定引用规则并做新小试”的下一步已撤回。候选原文中的字面引用不等同于RAG实际检索证据。
+- [x] 不修改威胁模型、冻结v24、旧响应或评分；新增API/GPU调用0。旧零调用核对只作失败证据，不报新攻击性能。
+
+当前此支线无待运行的引用核验实验；若研究新方法，应在原黑盒能力边界内另行提出，不沿用本方向的未执行计划。
+
+### 2026-09-24：Clean 与 Challenge 字典序联合赋分零调用诊断（完成）
+
+- [x] 复用旧100×3逐source与600槽响应，不改旧产物；令C=Clean原值槽数、R=同槽Challenge仍保留原值数，事后按(C,R)排序，等价4C+R。与旧AND联合分数R/3明确区分。
+- [x] 冻结严格macro AUC Clean 0.985995→字典序0.986644；3400对同数据集跨组比较中9个Clean平局转Member胜、2个转负，已有Clean胜负均不反转。对称Assistant语义敏感性macro 0.998507→0.998634，平局4转胜/2转负。旧AND严格macro为0.9335。该事后改善微小，不宣称新攻击成功。
+- [x] 严格合并样本经验TPR@1%FPR 80%→93%，实测FPR 0%→1%；@5%同为98%且实测FPR 3%。语义诊断低FPR两点均无变化。无权重搜索、新API/GPU调用或正式v24修改。
+
+当前此支线无待运行的联合评分实验；若用户选择继续，先在新development源事前固定字典序规则及同预算比较，保留本轮为事后诊断，不能用旧200篇确认增益。
+
+### 2026-09-24：字典序联合低FPR指标补算（完成，development）
+
+- [x] 调用仓库无插值经验阈值函数回算Clean、旧AND及字典序4C+R的TPR@1%/5%FPR，分别给出合并100篇负类与三数据集各自选阈值的等权macro，并保留实测FPR。
+- [x] 冻结严格合并@1%为80%(0%) / 87%(1%) / 93%(1%)，@5%为98%(3%) / 87%(1%) / 98%(3%)；严格macro@1%为80.56% / 75% / 88.33%且各数据集均0误报，@5%为97.78% / 87.22% / 97.78%。顺序均为Clean / AND / 字典序。
+- [x] 对称Assistant语义合并@1%为94%(0%) / 80%(0%) / 94%(0%)，@5%为100%(5%) / 97%(2%) / 100%(5%)；语义macro@1%为94.17% / 83.89% / 94.17%且各数据集0误报，@5%为97.50% / 96.94% / 99.17%，对应字典序macro实测FPR 3.06%、Clean 2.22%。补正上一条“语义低FPR无变化”仅适用合并口径。
+- [x] 不在本200篇上选权重或升级方法；全部阈值为已知标签的development oracle，逐数据集1%只能0误报。新增API/GPU0，旧评分及正式v24未改。
+
+当前此支线唯一下一步：向用户交付合并与逐数据集macro的低FPR结果及实际FPR限制；若验证字典序联合方法，需先在独立development固定规则、阈值校准方式和同预算对照，再到未参与选择的测试源评估。
+
+### 2026-09-24：字典序联合的端到端机制门槛（完成，development负结果）
+
+- [x] 对旧397条真实重新检索Challenge零调用回算`4C+R`：严格macro AUC Clean `0.985995`→字典序`0.985104`；Clean同分76对中2转Member胜、9转负，合并经验TPR@1%FPR及@5%FPR分别同为80%（0%实际FPR）与98%（3%实际FPR）。与复用Clean上下文的旧第一人称正差分别保留，不能混成一个协议结果。
+- [x] 固定旧Clean恰好1槽ORIGINAL的全部18 Member/3 True Non-member，新增端到端第一人称与同预算中性复问两臂；每条第二轮query都重新BGE检索。74号2次格式探针按固定解析均为FORMAT_ERROR，原响应保留并标记superseded；75号r2改用既有Clean自然回答解析器后重新请求，未混用旧尝试。
+- [x] r2 Gemma 42/42成功、实际ID全为`gemma-2-2b-it-bf16`、请求ID互异；Member原值保留中性16/18、第一人称14/18；True Non-member两臂均2/3。Clean同分18对的Member胜/平/负从2/14/2变为2/12/4；额外2个Member明确转反实体，且两臂相同top-5、目标源命中。新增Luna0、Gemma总44、BGE本地检索44；正式v24和旧冻结产物未改。
+- [x] 因为这一标签已知的旧Clean同分cohort仅3个Non-member，只报告机制，不计算全样本AUC/低FPR或称独立验证。r2报告与补充审计见`artifacts/v24/development/first_person_e2e_tie_pilot_r2_20260924/`，报告SHA-256=`865380ad8f4ec84fb5a24afe03062ab1f00b720c4020a9019827c586906954e2`。
+
+当前此支线唯一下一步：向用户交付负结果；停止把这一具体第一人称端到端字典序实例扩到独立样本，不在旧数据上继续改提示、解析或权重。若今后研究其他Challenge，须另立事前固定且符合黑盒RAG的方案，再用独立development和未参与开发的test评估。
+
+### 2026-09-24：Clean 主排序＋第一人称 Challenge 同分细排被选为论文主方法方向
+
+- [x] 用户在看到端到端负结果后明确选择该方向作为后续主方法；上一节“停止扩容此实例”的优先级由本决定取代，原负结果及产物保留。
+- [x] 工作定义：source 的三个中性 Clean 槽计数为 $C$；只对 Clean ORIGINAL 槽发起独立端到端 RAG 的第一人称反实体 Challenge，仍保持 ORIGINAL 的计数为 $R$；主排序为 $(C,R)$，等价 $4C+R$。未挑战槽不当作 Challenge 错误，不使用隐藏检索证据或标签赋分。75号 r2 为开发提示与解析原型，不能直接冒充正式冻结协议。
+- [x] 明确证据状态：同预算局部机制小试对 Member 有额外误伤而对严格 Non-member 无净改善；旧端到端字典序 macro AUC 亦无改善。选定主方法不等于证实优于 Clean 或现有基线；旧正式 v24 与旧稿 PVS 仍是历史协议和当前未修订稿件。
+- [ ] 新协议进入正式 test 前：固定新的 source-exclusive development/test、端到端 query/模型/Retriever/解析/预算/阈值方式；用同预算 Clean＋中性复问控制和 IA/MEntA/DCMI 对照，按 source 报告逐数据集、macro AUC、TPR@1%/5%FPR、实际 FPR、区间、严格 Non-member、完成率和成本。不得在旧200篇上按标签或 AUC 调分数，也不得把旧 formal split 当 untouched test。
+- [ ] 论文稿件需整体重写方法、评估表、贡献和框架图；在完成之前，`paper/` 中的 PVS 三对六问稿标为旧方法工作稿，不能称为新方法已写入或新结果已验证。
+
+当前唯一下一步：先形成新主方法的最小独立 development 协议与可复现配置，再按仓库 API/GPU 授权规则执行；若证据仍为负，论文须如实呈现，不能仅凭“主方法”定位宣称顶会级效果。本次仅更新研究与稿件状态记录，新模型/GPU调用0，不改正式 v24。
+
+### 2026-09-24：Adaptive Conditional Linked-Evidence development 小试
+
+- [x] 只读核对冻结100×3 selected/Clean/source report与旧自然回答解析器；200篇、600条Clean未漂移。3篇Clean-positive True Non-member中，仅1篇scidocs拥有合格局部A→B，不为补样放宽局部窗口。
+- [x] 独立76号入口在新目录固定4篇scidocs source（1 hard True Non-member、3 Member；后者Clean ORIGINAL数1/2/3）、7个A→B配对、14条两臂query；同句优先于相邻句和短窗口，B选择不依赖其原Clean正确性。原冻结qB为Independent-B；Conditional-B只加入已恢复A及中性关联。计划SHA-256=`44a83353591e4398c8121abdb40c89482bf443c9a8ef42c339a6d4958f547170`。
+- [ ] 获本轮明确授权后，最多14次Gemma和14次本地GPU BGE，每次完整query独立检索，强制provider模型ID并保存原始响应；Luna0，不覆盖旧实验。
+- [ ] 用原冻结解析器报告Member/hard Non-member的`P(B=ORIGINAL | A=ORIGINAL)`、两臂B原值率、配对差、ORIGINAL→ORIGINAL/OTHER/ABSTAIN、source级计数及目标源检索命中诊断；不算正式AUC、不调prompt/权重。hard组1篇时只能给出机制观察，不能称为稳定差异。
+
+当前此小试唯一下一步：等待真实Gemma/GPU调用的本轮明确授权；随后按固定14条计划执行并更新两份总表。现阶段新增API/GPU调用0，正式v24和旧响应未动。
+
+### 2026-09-24：Adaptive Conditional Linked-Evidence 小试完成（supersedes 上节待授权状态）
+
+- [x] 用户授权固定上限后，Gemma14/14次、BGE14/14次、Luna0；provider实际ID全部`gemma-2-2b-it-bf16`、14个request ID互异、14条响应按旧解析器重算一致。旧Clean与正式v24未动。
+- [x] 7个A→B配对：Member 3篇/6对，Conditional-B与Independent-B均5/6 ORIGINAL，A→B为5 ORIGINAL、1 OTHER、0 ABSTAIN；hard True Non-member 1篇/1对，两臂均0/1，A→B为1 ABSTAIN。两臂7/7原始回答完全相同，Conditional-only=0、Independent-only=0。
+- [x] 目标源命中仅作诊断：Member两臂各6/6，hard两臂各0/1；各对top-5列表有差异，不进入攻击分数。逐source及逐配对报告在`artifacts/v24/development/adaptive_linked_evidence_pilot_20260924/`，机器报告SHA-256=`6e26e204eee148146fa4202864f821cef9be8227a07a13a7728f8ce4089f9351`，响应SHA-256=`f33d6205067504863eba5628b5a268a06c9df6600f944f34bd722425a6c795ed`。
+- [x] 结论为本批未见条件链接超出Independent-B的增益；hard仅1篇且局部关系级别与Member不同，不作稳定组间或跨数据集结论，不算正式AUC。按用户预设停止，不调prompt、解析或权重，不扩容该方向。
+
+当前此支线无待执行调用；向用户交付负结果及其1篇hard source的限制。此前Clean主排序＋第一人称Challenge的选定方向不因本小试自动改变，也不能借本小试声称它已验证。
+
+### 2026-09-24：Linked-Evidence `OTHER` 单例诊断（完成，零调用）
+
+- [x] 唯一Member `OTHER_SPECIFIC` 的B问题问入组人数，原句为`Twelve healthy males ... were enrolled`，两臂及旧Clean均答`Twelve.`；冻结original_entity含数量和性别，因此完整表面匹配漏判正确短答。该反实体也同时改数量和性别，记录为旧槽构造粒度问题，不称runner解析代码错误。
+- [x] 单例事后语义敏感性：Member两臂均从严格5/6变为6/6，hard两臂仍0/1；配对增益仍为0。未修改原报告、响应、解析器、source选择或正式v24，新增Gemma/BGE/Luna均0。诊断见`artifacts/v24/development/adaptive_linked_evidence_pilot_20260924/other_diagnostic_v1.md`。
+
+当前此支线仍停止；向用户说明冻结`OTHER`确实不是答错，以及该修正同时作用两臂、不能证明条件链接有效。
+
+### 2026-09-25：Clean 阳性槽双候选核验 development 小试
+
+- [x] 用户同意小试；独立77号只读冻结600条Clean和三个slot，固定全部3篇C=1 hard True Non-member及同数据集按hash选出的6篇C=1 Member，共9篇source。未修改旧Challenge、旧响应或正式v24。
+- [x] 每篇1槽固定中性复问＋正确值在A/B各一次，C=参考信息不足；数值候选对应数字至少相差原值15%，A/B换位、严格选择码解析及旧中性解析均在调用前固定。27条完整端到端RAG query计划SHA-256=`3b96442038ebd5aaa6e73355ad14e100f3b93ed927d1e764b21e821439c202e5`；静态泄漏、候选换位、数量与解析测试通过。
+- [ ] 在用户“行试试”的本轮授权范围内，最多27次Gemma及27次本地GPU BGE、Luna0；逐条保存原始回答、检索、provider身份并核对。
+- [ ] 报告Member与hard True Non-member中性复问原值、A/B两种顺序原值、双顺序稳定原值、C/错选/格式错误、目标源命中诊断；只有3篇hard、选项直接给出正确值，不能报正式AUC、低FPR或方法成功。
+
+当前本小试唯一下一步：执行已冻结的27条请求并离线出报告；不据回答调反实体、prompt、parser或权重。
+
+### 2026-09-25：Clean 阳性槽双候选核验小试完成（supersedes 上节待执行状态）
+
+- [x] 固定9篇source、27条query全部完成：Gemma27、GPU BGE27、Luna0；27个provider request ID互异，实际模型全为`gemma-2-2b-it-bf16`，无重试。响应与旧冻结Clean、计划、parser重放身份核对通过。
+- [x] 逐source检查：中性复问Member 6/6、hard Non-member 3/3仍为ORIGINAL；A/B两种顺序均选原值Member 6/6、hard 2/3；另1篇scidocs hard两次均C=ABSTAIN。错选0、格式错误0、顺序分歧0。
+- [x] 目标source检索命中仅作诊断，Member各臂6/6、hard各臂0/3；两篇仍误报的hard在其他Member top-5文本中各有2篇出现原实体词面，弃答hard为0篇。词面共现不等于相关事实支持，不进入攻击分数。
+- [x] 机器报告、`stats-appendix.md`、`figure-catalog.md`与逐source图保存在`artifacts/v24/development/clean_positive_value_choice_pilot_20260925/`；响应SHA-256=`d42f94088fa7ea8a408f292323af44aa26c0e2c55668cc28de667db57b828f17`，报告SHA-256=`3792ce662488afa292b9bb79010890773fc406f35d9240fee8e25b490c83e3cc`。
+- [x] 判定为development机制线索但未验证membership方法：仅3篇已知hard，2篇仍稳定误报；不报告正式AUC/低FPR，不按本批结果修改prompt、反实体、解析或权重，不动正式v24。
+
+当前此小试无待执行调用；向用户交付9篇source结果与限制。若另开方法验证，需事先冻结独立development与未参与选择的test，不沿用本批9篇作证明。
+
+### 2026-09-25：双候选核验扩容 development（用户新指令，supersedes 上节停止扩容）
+
+- [x] 离线固定78号扩容计划：旧冻结100×3内94 Member/3 True Non-member，新相似源Clean-positive hard True Non-member 4篇，共101篇；每篇一个按hash选择的Clean ORIGINAL槽、三臂。旧9篇27条请求严格复用，新增92篇276条，每批最多50条。4篇Member的冻结数值反实体过近，按已存在的15%门槛在调用前排除，不按结果替换。
+- [x] 计划SHA-256=`32384c1557ce82d010437ea081d62708abe6a0d610c79fee039387f5f2cd5f60`；离线检查303条query、101篇source、27复用/276新请求、原/反实体换位、最短64字符中性问句、parser预检、旧/新source身份与Member-only索引边界。计划与配置在`artifacts/v24/development/clean_positive_value_choice_expand_20260925/`，不修改正式v24或77号小试。
+- [ ] 按用户本轮扩样要求，最多276次Gemma及276次本地GPU BGE、Luna0；逐批≤50条，从已保存响应续跑，不重复不确定attempt；核对实际provider模型ID、request ID和完整性。
+- [ ] 用固定解析报告Member保留率、中性复问→双换位原值转移、C=1/2/3及逐数据集分层；7篇hard按旧3/新4两来源分开报告稳定误报和弃答。目标源检索命中及原值词面仅作诊断，不入攻击分数；不算正式AUC/低FPR，不调提示、候选、解析或权重。
+
+当前唯一下一步：执行已固定的276条新请求并生成source级扩容报告；新旧来源与小试复用须明确分开，不把此前9篇当独立验证。
+
+### 2026-09-25：双候选核验扩容完成（supersedes 上节待执行状态）
+
+- [x] 6批各46条，276/276次新Gemma及276/276次本地GPU BGE完成，Luna0；旧9篇27条原请求只读复用。303条联合记录provider ID均为`gemma-2-2b-it-bf16`、request ID互异，新增请求重试0/finish reason全`stop`；计划、冻结解析重放、top-5 Member文本hash核验通过。
+- [x] 101篇中性复问全部ORIGINAL；冻结双顺序稳定原值Member `72/94`，hard `6/7`。新调用来源Member `66/88`、新hard `4/4`；旧hard `2/3`。Member逐数据集`30/37`、`22/28`、`20/29`，C=1/2/3分别`12/17`、`26/36`、`34/41`；hard C=1 `5/6`。不可将条件分母写成全体FPR、正式AUC或低FPR。
+- [x] 22篇Member严格失分：11篇纯格式回显（13条`A. 原值`/`B. 原值`），事后对称格式敏感性Member `83/94`、hard仍`6/7`，不回写冻结parser；其余11篇实质不稳，7篇候选查询丢失目标source、4篇虽检中仍弃答/选错。6篇稳定误报hard的其他检索Member文本含原值词面，唯一弃答hard无该词面；诊断不入攻击分数。
+- [x] 逐source机器报告、统计附录与两张图见`artifacts/v24/development/clean_positive_value_choice_expand_20260925/`。计划SHA-256=`32384c1557ce82d010437ea081d62708abe6a0d610c79fee039387f5f2cd5f60`，新响应SHA-256=`478e671aa4c0e4b35ffa670da139db12132ef3458fe038e9e5eb0757e16b5dec`，机器报告SHA-256=`5524cba4d62a7c313f44ee9d5ca4f965933fab761bdaa3393ff1b16e01bb3638`。
+- [x] 固定候选核验扩容未复现小试“Member零误伤”，且7篇hard有6篇仍稳定误报；不升为主方法，不在本批调提示、候选、解析或权重。正式v24、旧响应及此前主方法方向未改。
+
+当前此扩容无待执行调用；向用户交付负结果和格式/检索失败拆解。若要研究候选核验的新版解析或检索稳定性，须先在独立development事前固定新规则，再用不重叠来源验证，不能将本批事后诊断写成成功结果。
+
+### 2026-09-25：Fact-Signature Verification development pilot（离线计划完成）
+
+- [x] 只读绑定旧100×3冻结Clean与先前相似非成员池Clean，固定全部7篇已有Clean阳性hard True Non-member；Member按源key哈希顺序分数据集取2/2/3篇。每源1个A，A必须有原始Clean=ORIGINAL，B可为A句±1句内新事实。
+- [x] 独立79号入口先整理每源2个局部候选，再经同段/句距、A/H/B不泄漏、B粒度和问题唯一性门禁，按预设类型→长度→距离→哈希选每源1个；14个签名中12个新B、2个旧B。实际Y_A进入Follow-up，Independent-B用同一预冻结qB；旧B沿用旧解析反实体，新B反实体仅离线供原解析器使用、不进入query。
+- [x] `artifacts/v24/development/fact_signature_pilot_20260925_r1/`中候选/计划/配置哈希=`eaea0f6b1ca6c75f2e7e7bc90ae7c7dcee500dcfb692754c07d9f38626dd5d27`/`503eb982fce9e3a38d7c0f0baaaae7f85a6a6b16a4bbb54054416cbe2c9a0cb7`/`6cf95e6437b01b036df4099c03efd4ade07d12f6f3f147032c20d8d478769c32`；28条计划重复生成一致、42项解析预检无错。更早未执行预检计划单独保留，不与本轮r1混用。
+- [ ] 获本轮明确授权后最多28次Gemma API和28次本地GPU BGE，Luna0；逐条保存原始响应、检索、实际provider模型身份，并验证28/28齐全。当前真实调用0。
+- [ ] 按source单位报告Member/hard两臂B原值率、Δ、A原值→B原值/OTHER/ABSTAIN、旧/新hard分层和逐数据集；目标源命中/rank、hard检索其他Member文档A/H/B同时词面命中、全KB签名collision只作development诊断，不入攻击分数。不算正式AUC、不调prompt/parser/权重、不改正式v24。无明显Member-specific增益即停止。
+
+当前唯一下一步：取得本轮Gemma/GPU明确授权后执行上述28条已固定计划并报告；未经授权保持离线计划状态。
+
+### 2026-09-25：Fact-Signature Verification development 完成（supersedes 上节待执行状态）
+
+- [x] 用户授权上限28次Gemma＋28次GPU BGE后，分两批各14条完成全部28个独立端到端RAG请求；Luna0、provider ID全`gemma-2-2b-it-bf16`、28个request ID互异，全部`completed`/`stop`、重试0。计划、解析、top-5 Member-only边界及context/prompt hash复核通过。
+- [x] source级冻结结果：Member Signature-B `7/7`、Independent-B `5/7`，Δ`+2/7`；hard True Non-member两臂各`1/7`，Δ`0`。Member A原值→B原值/OTHER/ABSTAIN=`7/0/0`，hard=`1/3/3`。旧hard 3篇均双臂非原值；相似池hard 4篇中1篇双臂原值。逐数据集/逐source见`artifacts/v24/development/fact_signature_pilot_20260925_r1/analysis_report.json`和`mechanism-audit.md`。
+- [x] 两例Member仅Signature-B答原值时目标源两臂均rank 1，说明增益非新增目标命中；Member两臂目标源各7/7，hard各0/7。严格词面完整三元组其他KB collision全0，但一篇SARS hard有另一篇Member的同义改写证据，其B被拼写差异对称漏判；另一篇hard有同主题Member证据。检索/collision均仅作诊断，冻结parser/主报告未改。
+- [x] 结果判定为有限方向性线索、未获稳健Member-specific增益证据；按预设停止在这批上调prompt、签名、parser或升级正式方法。development选择性样本不算正式AUC、低FPR或显著性。响应SHA-256=`a515717a6b9cf469525e6fbfe8922935fcb6a606fc4cba2962f29f1df01c38d2`，报告SHA-256=`37d84ddf8526591e8426c02b1a38fa5b0e927602175d2a48ff7c82d02422159b`；旧响应、正式v24未改，无提交或推送。
+
+当前此小试无待执行调用；向用户交付两臂比较、两例Member改善和hard近重复/解析限制。若另行验证，必须使用独立来源且调用前固定的方案，不能以本批结果调规则后当作成功验证。
+
+### 2026-09-25：7 篇 Clean 阳性 hard 误报来源零调用审计（完成）
+
+- [x] 只读核对旧/新Clean、FSV响应及100篇Member文本；用context SHA-256恢复新相似池Clean的top-5 source key，9个阳性槽45个上下文均唯一匹配同数据集Member，7个目标源均不在索引。Gemma/Luna/GPU BGE调用0。
+- [x] 冻结Clean C分布：7篇hard中6篇`1/3`、SARS近重复1篇`3/3`。旧100篇Member分布`2/18/38/42`，旧100篇True Non-member`97/3/0/0`；条件选样不并入正式指标，不把所有Clean阳性hard称为阈值误报。
+- [x] 逐source核对Clean阳性回答与其他Member证据：9槽中5槽有相同局部事实、3槽仅主题/实体线索、1槽ReLU无保存KB词面。FSV hard两臂分类逐篇相同；QuickVue与SARS的B可由其他Member的相关/改写事实回答，另4篇B在检索上下文缺明确支持且独立B也非原值。可可/黑巧克力例存在部分语义重合。
+- [x] 解析敏感性仅在报告标记：`New York`/`New York area`和`dyspnoea`/`dyspnea`，后者两臂对称；两个显式不回答被冻结解析作OTHER但不改变Clean ORIGINAL数。无parser、score、query或正式v24修改。详细证据在`artifacts/v24/development/fact_signature_pilot_20260925_r1/false_positive_provenance_audit.md`，审计SHA-256=`5e653bb513e722019ee62670cb715eab918dad1461f1f42527be2e5e058a2a1f`。
+
+当前此审计无待执行调用。FSV仍停在development；下一步论文决策应基于source身份与共享事实的边界及独立样本，不在这7篇上调提示/选槽。
+
+### 2026-09-25：FSV 独立来源扩容（离线计划已固定，待授权）
+
+- [x] 用户选择先补60篇未调用True Non-member；80号development入口固定相似池rank 11–30、每数据集20篇，source key/source hash/规范文本hash与旧100×3及先前30篇零重叠。计划和配置在`artifacts/v24/development/fact_signature_expansion_20260925/`，SHA-256=`51417a6b5a9cda862ad17ecd0d034462bfc4a9bf86dcef5d8ae619885162a0d7`/`5357b5a832f453745c8904229f2d9720b296b0c9dc09a0875aba9a4a34897f24`；重复离线计划一致，2项定向单测通过。
+- [x] 固定最多60次Luna三槽生成、180次Gemma Clean与180次BGE；仅新Clean阳性hard按池rank最多20篇，各配一个旧Member同数据集/近Clean命中数对照。A固定为最低索引的阳性槽。B至少两个局部候选，先固定后选；不合格整对流失且不补源。第二轮两臂合计最多80次Gemma与80次BGE。旧79号pilot结果不计入本轮独立来源验证。
+- [ ] 依AGENTS.md取得本轮付费API和GPU真实调用的明确授权；目前三类新增调用均0。
+- [ ] 每批最多50次完成生成、Clean、候选离线冻结与FSV；校验provider ID、Member-only检索、冻结解析重放及source级配对完整性。报告两臂B原值率/增益、Member与hard转移、逐数据集/C分层及候选流失；检索/collision仅作诊断，不算正式AUC/低FPR，不改正式v24。
+
+当前唯一下一步：取得本轮最多60 Luna、260 Gemma及260次本地GPU BGE的明确授权后执行；若Clean阳性少或局部B不可构造，按实报告并停止，不补源或调提示。
+
+### 2026-09-25：FSV 独立来源扩容完成（supersedes 上节待授权状态）
+
+- [x] 用户回复“开始”授权全部固定阶段；按每批≤50完成60/60次`gpt-6-luna`三槽生成，51篇质量通过、9篇失败保留不补源。153/153条Clean Gemma/BGE全部完成，provider ID全`gemma-2-2b-it-bf16`，153个请求ID互异；新Clean阳性hard仅6篇（scidocs2、trec-covid4，nfcorpus0），C=1五篇、C=2一篇。
+- [x] 从旧Member按预设数据集/C近邻规则配6篇；每源2个局部B候选离线定稿。原80号在汇总JSON整数键重放处误报漂移；保留已保存生成/Clean，用81号仅修复汇总键比较，并把24条新FSV响应放独立`_r1`目录。冻结计划重复生成一致、12篇都合格，无补源。
+- [x] 24/24条FSV完整端到端请求完成，实际provider ID全`gemma-2-2b-it-bf16`、24个request ID互异、`stop`/重试0；Member-only检索、context/prompt hash、冻结parser与source双臂重放通过。新增调用合计60 Luna、177 Gemma及177次本地GPU BGE，未超授权上限。
+- [x] 独立新来源结果Member两臂B原值均5/6、hard两臂均2/6；Signature-only/Independent-only均0，Member-specific配对增益0。旧pilot方向性增益未复现，按事前停止条件不继续调FSV prompt、候选、解析或权重，不升级主方法。两篇hard B原值均可由其他Member top-5文本提供，Member一篇目标源rank1仍两臂错。语义/弃答解析边界仅诊断，不回写主结果。
+- [x] 逐source、逐数据集/C分层、检索/collision与解析边界见`artifacts/v24/development/fact_signature_expansion_20260925_r1/mechanism-audit.md`及`analysis_report.json`；审计SHA-256=`29c5b1befd782b7035f8779fa0dd18f76a35973e1ce4f0bfb642c796614ba605`。本批仅Clean阳性development子集，新hard6篇，nfcorpus0篇，不计算正式AUC或低FPR，不改正式v24。旧79号7篇hard不混入独立验证，无提交或推送。
+
+当前此FSV扩容无待执行调用；向用户交付未复现增益的结论。后续若继续论文主线，应研究共享事实造成的source身份混淆或另选方法，不在本批调提示/解析并宣传AUC提升。
+
+### 2026-09-25：同一 Clean 事实的真实锚点持续性小试完成
+
+- [x] 用户同意尝试后，82号独立development入口从旧Clean阳性C=1按每数据集/组别hash各取2篇，共6 Member/6 hard True Non-member；每源预固定两条不含原值/反实体的局部原文锚点与4条仍问A的查询。旧Clean、FSV及正式v24不改。配置/计划SHA-256=`7931a3f8b3054c40ed56ef79cf240b37ee3c25da90967729643ad0f792022db4`/`849096b2ba368bb02dd7e9c26efa82a507d2b761b2bdf671a54df534a9ac6d7d`。
+- [x] 两批各24条完成48/48次Gemma与48次本地GPU BGE；provider ID全`gemma-2-2b-it-bf16`、48个request ID互异、`stop`/重试0；source/输入/plan/prompt/context hash、冻结parser重放及Member-only索引门禁通过。2项定向离线单测通过。
+- [x] Member中性1/锚点1/中性2/锚点2均`6/6` ORIGINAL；hard分别`6/6、4/6、4/6、4/6`。主比较锚点2对同层中性2额外排除hard为0，额外误伤Member为0，预设筛查条件失败。两例hard单锚点失分在中性2也发生；top-1未被挤掉，一例回答复述锚点。检索仅诊断，不算正式AUC或低FPR，不按本批调提示/解析/权重。
+- [x] 逐源机器结果及Assistant机制审计见`artifacts/v24/development/anchor_persistence_pilot_20260925/`。该C=1条件样本只有12篇，锚点非标签盲选；不升级主方法。响应/报告/审计SHA-256=`4fc0ec18d517de777b06e72402ed6fe3f1f5a9fbaff2dbe2fad07107d495f423`/`f8cd0deb22198e8fed9077d2b6669e7c052630118e51224c0e222c0d42f1fbfd`/`e372f1d70585ccab099bcddc8b54c42b67b94fd46347537b290478be0e369ce8`；无提交或推送。
+
+当前唯一下一步：向用户交付这轮负结果与逐源原因；停止这条具体锚点阶梯方案，不继续在同批Clean阳性来源上调参。正式v24仍保持原状。
+
+### 2026-09-26：AED 结构前提零调用复核
+
+- [x] 只读复核三个 development 来源中全部13篇不同的 Clean 阳性严格 True Non-member、16个阳性槽；对照候选全文、冻结 Clean 回答与当次 top-5 Member 文本。Luna/Gemma/BGE/GPU新增调用0；正式 V24、旧响应及解析均未改。
+- [x] Assistant 非盲探索性判读：较清楚的“共享A、不同局部研究属性”候选1篇（`trec-covid::zloyie6z`，Winthrop 的 Legionnaires 早期评分与检索到的 H1N1 评分）；待定3篇（`MED-5285`、`scidocs::76e04f69…`、`trec-covid::41l9uatj`）；其余9篇未见 AED 所需的明确互斥局部属性。13篇是条件选样，不报告总体成功率或正式 FPR。
+- [x] 复核限制：较清楚的候选源自身也提 H1N1；后续问句若去掉原 Clean 的“first clinically useful”限定会改变所指对象。尚无新的 profile/difference 响应，重复竞争答案不能确认来源；已有 FSV/锚点对照也未证明 AED 的自适应增益。详细依据追加于研究 notes。
+
+当前本支线下一步：先交付本次阴性为主的结构复核。若继续 AED，先在独立 development 来源事前固定同一关系的可问属性、无答案泄漏门禁和同预算静态/独立B/重复Clean对照；这13篇仅作方法形成证据，不在其上调提示或评分，不改变正式 V24。
+
+### 2026-09-26：Evidence Packing 本地检索小试（完成，diagnostic-only）
+
+- [x] 在检索前固定6篇 source：2篇至少2槽 Clean ORIGINAL 的严格 hard True Non-member，各配同数据集/同C、无三问题面答案泄漏的2篇 Member；双问取首个无答案泄漏的已答对槽组合，三问沿用原中性问题。独立计划见 `artifacts/v24/development/evidence_packing_retrieval_probe_20260926/plan.json`，SHA-256=`5a764c67ef04ea2c6422dd41ff0e812759d1e13ccbb045d408cb536ce9bd806b`。
+- [x] 复用100篇 Member 全文 BGE source-level 开发索引/top-5；18条历史单问 top-5 全部重放一致，新增12条本地双问/三问检索。两篇hard的各Clean阳性槽单问top-1均为同一篇替代Member；两种packing下均保留为top-1/top-5，无预期的证据分散或挤出。四篇匹配Member目标源双问及三问均rank1。SARS hard 三问题面泄漏 `Three`，仅双问是无此泄漏的检索诊断。
+- [x] 结果和输入身份见 `artifacts/v24/development/evidence_packing_retrieval_probe_20260926/report.json`，SHA-256=`08973f4760712cc4ab246aa7dbbc3ad075b8f7e2ee4e7ee796a8510b8c656ee3`。本轮本地 BGE 查询30次（含18次历史重放），Gemma/Luna/付费API调用0；无生成答案、retention、AUC或正式低FPR结论，不改正式V24，也不在这6篇上调query、pair或评分。
+
+当前本支线下一步：向用户交付检索层的阴性小试。若继续验证 Evidence Packing，先在独立 development 来源取得无跨问泄漏且多槽单问正确、经证据核对确属 K>=2 的严格非成员，再预设相同查询预算和生成负担对照；不要把这次检索诊断当作端到端攻击收益。
+
+### 2026-09-26：Evidence Packing 自然问句与远距离实体复核（完成，supersedes 上节目标方法解释）
+
+- [x] 确认旧小试 q12/q123 为原Clean题编号拼接，不是新生成自然联合问句；原两篇hard按答案实体任意出现位置最近距离≥128 BGE token均不合格（SARS最近59，JSTOR全文110）。旧artifact保留，结论限于编号拼接检索。
+- [x] 固定三篇每数据集一篇旧Member、已答对的远距双事实（最短实体间距187/162/213 token，全文≤512 token），手写不含答案的新自然双事实问句；以同99篇背景Member比较整篇K1、原文两半K2及补标题两半K2，并以编号拼接为查询对照。`artifacts/v24/development/evidence_packing_regenerated_far_probe_20260926/plan.json` SHA-256=`c473c6440f43eab02bd3f605a02b9ebdd84ec2a9b593e3f939b6124e6b992650`。
+- [x] 6条历史solo top-5复现；三篇两个K2布局的单问均取回对应半篇，新自然联合问句在K1均rank1、两个K2布局均将两半放在rank1/2（各3/3），编号拼接对照结果相同。共36组本地BGE排序，新增真实victim/Luna/Gemma/API调用0。结果 `artifacts/v24/development/evidence_packing_regenerated_far_probe_20260926/report.json` SHA-256=`4b586ff88feb14159db077f0c3c2a1c6db228baaa1529b732edc1862e9880f8a`；K2是人工拆分，并非自然True Non-member，不报告回答retention或AUC。
+
+当前本支线下一步：交付这轮修正与受控检索结果。若要测真实Gemma回答保留，先固定具体调用上限、问题、检索上下文与解析规则并取得AGENTS.md所要求的明确victim调用授权；若要证明自然hard非成员上的membership增益，还需另找满足远距、无答案泄漏且多槽单问可答的独立development来源。正式V24不变。
+
+### 2026-09-26：Evidence Packing 远距离自然问句 Gemma 回答小试（完成，supersedes 上节待调用下一步）
+
+- [x] 用户回复“开始”后，调用前冻结3篇source×K1全文/K2原文拆分共6条自然联合问句请求、top-5上下文、prompt、`gemma-2-2b-it-bf16`确定性参数及两个原值词面判定；执行计划 `artifacts/v24/development/evidence_packing_regenerated_far_probe_20260926/victim_query_plan.json` SHA-256=`1419bd60e6951c906a232aadae44b3d333b3e0451a02c9d9eeb009d02ee70f1d`。
+- [x] 6/6次Gemma完成、6个不同provider request ID、重试0；K1与K2分别3/3篇双事实均命中，三对生成回答文本逐字节相同。Assistant非盲复读与预定词面判定一致；不作为独立人工标注。响应SHA-256=`b746ed5f035b96b1033bc275a309ca374b23d1b68c7c2fa19eba48ff13aa9e96`，分析报告SHA-256=`84201859f303496118b9b70ceb34bfc8d6b6dfc09a414d2d28837172f1fc3361`；新增Luna/BGE查询0。
+- [x] 结论限于100篇Member全文source-level索引、top-5、同一Member人为拆分及三篇条件选择的development来源：没有观察到两事实回答保留下降。不是自然严格非成员对照，无LLM-only控制，不计算AUC/低FPR/显著性，也不外推正式chunk索引。旧记录的“真实victim调用0”是当时检索阶段状态，本节完成后本支线累计新增6次Gemma；正式V24、旧响应和评分未改。
+
+当前本支线唯一下一步：向用户交付本次阴性诊断并停止该固定6次小试。若继续研究自然membership效应，另在独立development来源事前找到满足远距、无答案泄漏、单问可答且由不同Member文档支持的严格True Non-member，固定同预算对照后再判断；本批结果不用于调问句或评分。
+
+### 2026-09-26：Evidence Concentration 实际检索粒度门禁（下一步，supersedes 上节先筛自然hard）
+
+- [x] 对照V24配置、三套索引manifest及runner：128-token/32-overlap切块，top-5为chunk，prompt只含被检中的chunk，无同源全文自动扩展；本轮三个远距Member事实对均不能同落一个128-token chunk。此前全文source-level K1单槽解释不适用于正式检索。零新增模型/GPU/API调用，正式V24与原产物未改。
+- [x] 复核现有13篇Clean阳性hard：只有2篇至少双槽原值，SARS最近距离59 token、JSTOR全文110 token，且每篇正槽历史单问top-1均指向同一替代Member；无现成的“远距且由不同source支持”的自然hard案例。
+- [ ] 下一步先固定独立development Member事实对、自然联合问句，按真实128/32切块与top-5做**检索层、零victim**共同召回检查；同时保留每个事实的单问可召回门禁。若Member两支持chunk在联合问句下罕见共同出现，停止此方向，不继续挑hard或调用Gemma。
+- [ ] 仅当Member门禁显示机制仍可运行时，另在独立development严格True Non-member中找远距、单问均可答、不同Member source分别提供语义支持的候选；固定与Member匹配的同预算控制后再决定真实victim小试。不得把既有人工拆分Member的6次回答当作natural hard结果或membership增益。
+
+当前唯一下一步：先做真实chunk粒度的Member共同召回可行性检查；正式V24不修改、不重跑。
+
+### 2026-09-26：Evidence Concentration 真实chunk检索门禁完成（supersedes 上节待执行项）
+
+- [x] 固定旧100篇development Member、三篇前轮远距Clean双槽正确来源及原自然联合问句；用现有128/32 token切块函数、BGE CUDA与FAISS IndexFlatIP按数据集建立内存索引，top-5按chunk。事前指定支持块nfcorpus 0/3、scidocs 0/1、trec-covid 2/0；计划 `artifacts/v24/development/evidence_packing_real_chunk_gate_20260926/plan.json` SHA-256=`c4da9cc2552911548d990840e6a344137634f54fb2359f1056f459c4a4c8aee6`。
+- [x] 本地BGE查询9条；6/6条solo检中对应支持块，3/3条自然joint同时检中两个支持块，joint排名分别为2/3、1/2、2/1。三数据集40/30/30篇Member切得157/73/87 chunk。逐条top-5与分数见同目录 `report.json`，SHA-256=`697292e34939b9aba76a3fe62feb8d017f24cf7699852872f395ad0307ef71bc`；Gemma/Luna/API调用0。
+- [x] 仅通过这三篇条件选取Member在**真实切块**下的共同召回可行性门禁。dev索引每数据集仅40/30/30篇，不是正式1000篇索引；无自然hard、无生成回答、无会员推断指标。正式V24配置/索引/响应未动，本次实验无需重跑正式阶段或创建新协议版本。
+
+当前唯一下一步：先在独立development非成员中取得远距、双槽单问可答、且各事实由不同Member source提供语义支持的自然hard案例，再固定与Member匹配的同预算联合问句对照；本批3/3不用于调选样、问句或评分。
+
+### 2026-09-26：Evidence Concentration 自然非成员远距事实 pilot（结构门禁失败）
+
+- [x] 从身份隔离的494篇候选中按首尾BGE代理固定30篇候选非成员（每数据集10篇）；计划/筛查SHA-256=`f7aefbf26fd83403474e63aeb4ad705fe1630baac3db0edb9ede83dd3f420282`/`ee59acebc77332d93102a80af7d22da4fe94939ec6839d204a27c87a70a3e57c`。代理使用Member检索信息，仅作development机制上界，不把候选称为已验证Clean阳性hard。
+- [x] 在Member文本/victim响应可见前按固定轮转顺序检查13篇，跳过1篇近重复，固定12篇各两条自然solo问句和新写joint问句；答案最短距离159–297 BGE token，问题不含答案表面形式。事实计划SHA-256=`3de9875cc9d5c434f722b6e4a3fa8be7f6784829fdb2ff7fd11f9b98e03bba1a`。
+- [x] 在旧100篇Member-only开发KB上完成36条CUDA BGE的128/32 chunk、top-5检索及全部solo片段的Assistant非盲语义审计；24事实仅3个答案词面在同数据集Member全文中出现、1个进入对应solo top-5且是错误队列关系。结构合格来源0/12。原始检索/机器报告SHA-256=`8b2addfe4ffbc347ae73d1ef1fd299a816a1932ef1e52e2682c217d63ec13e01`/`4267c65687c7af1de97180de28aa17a91fc31ce3f972ad0d96a7a213264bd633`。
+- [x] 条件性Gemma/匹配Member比较因无合格K2输入而按预设停止，Gemma/Luna/API调用0；没有端到端retention、AUC或低FPR结论。正式V24与旧产物未改，不创建新协议版本或重跑正式实验。
+
+当前唯一下一步：先判断更丰富、身份隔离的开发Member KB中自然非成员的双事实异源支持基率；若仍稀少，停止Evidence Concentration当前假设。任何后续端到端比较都需新来源、事前冻结规则及同预算Member对照，不能在本批12篇上换事实/问题后当作验证。
+
+### 2026-09-26：此前13篇Clean阳性hard重选实体与自然问句复测（完成，development）
+
+- [x] 保留13篇source及历史Clean身份，仅据候选原文重新选两事实、新写solo A/B与joint自然问题；12篇答案任意出现位置最短间距130–566 BGE token，1篇JSTOR全文110 token列为不合格。题面无目标答案词面；计划SHA-256=`69e82719f70253ab89ccb63ceaae3b4bbe7916263f21e047ef19b1cb26ad2cb0`。历史Clean阳性不等于新事实可答，此为结果条件选取的development重测。
+- [x] 旧100篇Member-only开发KB按128/32 token、top-5完成12×3=36条CUDA BGE检索；检索SHA-256=`d0e56ced300772750d505726667aaf443c0cc9ff7672d1c8e95014fcd841a1e5`。调用前固定Gemma prompt、检索上下文与答案别名，victim计划SHA-256=`a5ad2cbfe997b9abe533554f7a8f68ad6a2c70088280417ad7feac1cf8cdbee2`。
+- [x] 真实Gemma 36/36次完成、重试0、36个不同provider request ID，Luna0；solo A/B正确分别2/12、0/12，joint A/B分别2/12、0/12。双solo均正确0/12，故条件联合保留率未定义，不能声称联合提问导致遗忘。响应SHA-256=`e42447ecebb291157a3dda14d1fde4b09ed771cc7d2c1bb8082a131c321cba31`。
+- [x] 本轮B原值在同数据集Member全文和solo top-5均0/12；探索性73窗口扫描仅`MED-841`显示不同Member top-1，人工非盲复核仍无候选特定关系的异源K2支持。扫描SHA-256=`1c28c38b4042ea15c43e6f7e1e7742c8f1cf008b57455d212fe26b44d7eff22b`；逐篇报告SHA-256=`36d6be781bd2961698df8c02dd19a81c0595f75cebacba4d84b719203497d13c`。无匹配Member/LLM-only对照、AUC或低FPR结论；正式V24未改，无新协议版本或正式重跑。
+
+当前唯一下一步：若继续Evidence Concentration，先用身份隔离、更丰富的development Member KB估计自然非成员异源K2语义支持及双solo可答的基率；只在事前合格的**新来源**上冻结同预算Member对照与joint生成测试。若基率仍低，停止该方向。此前13篇仅保留为方法形成与失败证据，不再用其优化问句、实体或评分后当独立验证。
+
+### 2026-09-26：远距Member可答性历史产物复核（完成，只读）
+
+- [x] 冻结BGE tokenizer检查旧100篇Member来源的三个slot：34篇有至少一对答案所有精确出现位置的最近距离≥128 token，共49对；pair非独立单位。明细`artifacts/v24/development/member_far_answerability_audit_20260926/report.json` SHA-256=`b616d0a4aaf6a7a12e231638317c4915164c3464921c1cbd71c740fd244342d1`。
+- [x] 非盲复读确认三个成员侧单问明确错误：`MED-870`间距433、`AMPK→SIRT1`且目标未检中；`MED-712`间距283、`leukemia→Breast cancer`且目标未检中；`scidocs::6bd87d13…`间距181、目标全文rank1仍把`holdout validation sample`答成`WMT europarl-7 dataset`。旧精确解析会把`Two`等语义正确短答误记OTHER_SPECIFIC，不用49对原始类别估计真实失败率或距离因果效应。
+- [x] 区分已有联合测试：事前按双solo正确挑选的3篇远距Member在全文K1/人工拆分K2自然联合问均3/3双事实正确；真实128/32 chunk联合检索3/3两支持块共同进入top-5，**但尚无该chunk上下文的Gemma回答**。新增victim/Luna/BGE/GPU调用0；正式V24不变，不重跑、不新建协议版本。
+
+当前本问题结论：远距Member事实确实也可能单问答错；现有证据不能把错误归因于距离，也不能推断真实chunk条件下的联合失败率。如专门研究距离效应，先在独立development固定近/远距Member配对与相同检索、问句和生成预算；本条不改变上节关于自然非成员异源K2基率的主线下一步。
+
+### 2026-09-26：Clean正确锚点＋远距问题小试（准备完成，真实victim待授权）
+
+- [x] 每数据集各1篇Member/历史Clean阳性True Non-member，共6篇；保留原Clean正确锚点，源文独立新写远处solo及自然joint，最近答案距离133–304 BGE token。计划SHA-256=`d5055525983e31e6ce69f19efb7a3ce75de69bdb20701e74e0fdf565cc402f71`；非独立development选样，正式V24未改。
+- [x] 旧100篇Member-only开发库以128/32 chunk、top-5执行18条新CUDA BGE检索，另3条历史查询top-5精确重放。检索SHA-256=`1fa655252c191522e91d7b7f7622bd8bbd54c21f326ce361ebb611f4acc85f06`；成员joint可见两目标片段，非成员远目标词面未见于joint top-5。原Clean近锚点在新切块设置下需重问，不用旧结果充当本轮答案。
+- [x] 冻结6篇×锚点solo/远处solo/joint共18条Gemma请求、prompt/top-5身份及答案别名；victim计划SHA-256=`dfafb80d77fc67d9417e78985597ba27d3190e1893ac097a4e31ffdb184ed866`。截至本条真实Gemma/Luna/API新增调用0。
+- [ ] 仓库AGENTS.md要求真实victim调用前获明确授权；获授权后最多18次`gemma-2-2b-it-bf16`、重试0，按source审计本轮锚点可答、远事实单问及joint两事实。若授权范围或“近距离答对”定义改变，先固定新开发计划，不续用此计划混算。
+
+当前本支线下一步：等待针对上述固定18次真实Gemma调用的明确授权；未经授权只交付计划与本地检索诊断。本条不替代此前关于独立开发KB异源K2基率的研究主线。
+
+### 2026-09-26：Clean正确锚点＋远距问题小试（真实回答完成，supersedes 上节待授权）
+
+- [x] 用户明确授权冻结6篇×3问最多18次Gemma、失败不重试、Luna0；调用前复核计划/检索/prompt/profile哈希及全部18条prompt，底层自动重试为0。
+- [x] 真实Gemma 18/18完成、`stop`/重试0、provider ID全`gemma-2-2b-it-bf16`、18个request ID互异；原始响应SHA-256=`3a2fc460ef27b3e8c7df270ec12871feea8c473896682eb3c06f199390cf18b4`。本阶段Luna和BGE新调用0。
+- [x] Assistant非盲按source语义复核：Member近处solo/远处solo/joint双事实均3/3；历史Clean阳性hard在新chunk设置下分别1/3、1/3、0/3，joint远处0/3。只有nfcorpus一对双方近处solo本轮均正确；其Member远处solo/joint正确、hard远处solo失败且joint连近处也丢失。SciDocs hard远处solo的NLP正确但无top-5目标关系证据；TREC hard joint近处来自高度相近Member源。逐源报告SHA-256=`79ff014f973e0d5fb70793566be4311a18f155f6a31a68fe27262dc2f57bee67`。
+- [x] 结论限定为6篇结果条件选取development诊断：不报距离因果、普遍稳定性、正式AUC/低FPR或显著性；不在本6篇上事后调问题/事实/评分。正式V24未改，不需新版本或正式重跑。
+
+当前本支线唯一下一步：向用户交付这轮逐源结果并停止本批调用。若继续研究，先在身份隔离的新development来源按同一128/32 top-5设置做零victim的双方近处solo可答及远事实来源支持门禁，并事前固定近距对照；门禁未通过前不追加真实调用。
+
+### 2026-09-27：Clean原实体＋远距B扩容（准备完成，真实调用待授权）
+
+- [x] 沿用既有三槽实体选择，从13篇历史Clean阳性hard中按最早阳性原槽A及所有出现位置≥128 BGE token门禁筛得9篇；同数据集/最近文长匹配9篇旧100 Member。B从原文另选，A/B/joint三问全部重写；3篇hard重用上轮pilot来源，最长TREC来源文长匹配不足，均记为开发限制。18篇计划SHA-256=`3b55f8f87d6a7e186712900dda97d9f1676fb8db8985490153c007ed2878f8f5`。
+- [x] 本地CUDA BGE按128/32 token、Member-only top-5 chunk完成54条新检索和3条历史top-5重放；9/9 Member的目标A/B在solo/joint top-5均有词面，hard的B在对应top-5为0/9；检索SHA-256=`ba8a59a3c6aa119201b9457823cea99813c7f36d8b51ff0e9769a29c87dcda82`。词面不是生成正确性。
+- [x] 固定54条Gemma prompt、上下文hash、模型ID、温度0、max_tokens512、零重试；victim计划SHA-256=`47a1d3c6c888dcd5f91a8b61756c104a8479d19268f98df560750fe4a4b141a5`，全部prompt及客户端配置预检通过。主比较为source-level Clean-only A solo 对 A solo+B solo，Clean+joint为次要；不混入正式V24。
+- [ ] 按AGENTS.md先取得本轮**最多54次真实Gemma**明确授权（上轮18次授权不延用）；授权后按冻结顺序执行、失败不重试、Luna0，保存每次原始响应及provider身份，并按source逐数据集报告增益、Member损失、hard排除和失败模式。当前新增Gemma/Luna/API调用0。
+
+当前本支线唯一下一步：向用户交付固定计划与本地检索诊断并请求针对上述54次Gemma的明确授权；未授权不执行真实调用。正式V24配置和旧结果不变。
+
+### 2026-09-27：Clean原实体＋远距B扩容（真实回答完成，supersedes 上节待授权）
+
+- [x] 用户授权最多54次Gemma，按冻结计划完成54/54次，模型ID均`gemma-2-2b-it-bf16`、stop、重试0、54个request ID互异、错误0；Luna 0，原始响应SHA-256=`6725136d303006d670af7510276e6094704deab9beddf238825f82f40f4b2821`。
+- [x] Assistant非盲逐source语义复核：新Clean A solo的Member/hard阳性为9/9、6/9；A solo＋远B solo为8/9、0/9，额外排除6篇hard、损失1篇Member，满足事前描述性筛查条件。A solo＋自然joint严格双事实为7/9、0/9。逐数据集、macro、边界答案宽松敏感性和描述性区间见`artifacts/v24/development/near_clean_far_expansion_20260927/report.json` SHA-256=`8d774549d351037da2af64fa3c20f7a0030501770bb88cac88cb88ecd1ba3f7a`。
+- [x] 解释边界：9篇hard远B目标词面均未进top-5，Member均进入；本9对历史Clean阳性结果条件选取，3篇hard与上轮pilot重叠，B及问题非盲手写。无近B同源对照、独立盲审、正式AUC或1%/5% FPR分辨率，不能把开发增益归因于距离或宣称正式泛化。正式V24未变，不需重跑或新协议。
+
+当前本支线唯一下一步：本批54次调用停止；如继续方法验证，在身份隔离的新来源中事前固定同来源近B/远B、答案类型和查询预算匹配，并做独立盲审与冻结后的来源级评估。本9对仅保留为development diagnostic。
+
+### 2026-09-27：新鲜来源近 B／远 B 对照前检（完成，victim 前停止）
+
+- [x] 从历史未调用且身份隔离的候选中固定6对来源和Member/True Non-member分配；沿用原 Clean 三槽 prompt/整体门禁。来源计划SHA-256=601c780b61a6bc0785134f2abfc57d4c0410a7fe7ca7106b6ad8b377c25cb741。
+- [x] 用户授权最多12次 gpt-6-luna；12/12完成、重试0、Gemma0，原始事件SHA-256=b23e0f900bc40e3ec253806a7a5725da9e3de4d4ffe364d38863ad3b5890e306。整体门禁10篇通过、2篇失败；两个TREC配对整对剔除。
+- [x] 检索前固定其余4对8篇的 Clean A、同源近/远 B 与24条重写 solo 问句；最短距离近24–69、远133–258 BGE token，计划SHA-256=56f2cd93d4f1bb7608dc406cb73189cacbfe998bd3aefaa8e391b98d06e918b6。
+- [x] 旧100 Member加4新Member的独立 nfcorpus/scidocs 索引完成24条本地BGE检索及2条旧索引精确重放；42/32篇、167/80 chunk，固定 top-5/prompt 计划SHA-256=f2ba8677570cfc99ae22665e143b3547a51be98604674a01bc07da400606b600。Member A/近B/远B目标片段12/12进入top-5；True Non-member对应12个目标答案词面在同数据集整库及top-5均0/12。
+- [x] 本批未形成“非成员近B有支持、远B无支持”的对照，检索后探索性停止，Gemma新增0，不按检索结果换槽/实体/问题。前检报告SHA-256=2e68b3044c6217fffc2688bfc74c2cbe8082831913a850f3b7a6b0adb5d33646。词面前检不是生成正确性或距离因果结论；正式V24不变，无需重跑或新正式版本。
+
+当前本支线唯一下一步：另用身份隔离的新开发校准来源，先核实非成员候选A和近B在Member库的关系级支持、远B缺支持，再冻结样本/问题/预算并做成员侧近远均可检中的同预算验证。未经新授权不调用新的Luna或Gemma；本批24次Gemma不执行。
+
+### 2026-09-27：确定 A 锚定远事实联合追问为后续方法方向（设计阶段）
+
+- [x] 记录用户选定的两步思路：先问原Clean事实A，A答对后以不泄漏答案的独立自然联合问同时问A与同源远事实B；主假设为Member可取得同文档两处证据，hard相似Member仅支持A而不支持B。“联合检索锁定相似文档”列为待检机制，不写成已证实结论。
+- [x] 对照既有开发证据：9对扩容的A单问+远B单问为Member/hard 8/9、0/9；A单问+自然联合问为7/9、0/9，尚无联合提问的额外增益。新鲜来源近远前检因非成员A/近B/远B词面整库0/12而停止，Gemma0；不将其解读为距离效应。
+- [ ] 在身份隔离的新开发校准来源固定A、近B、远B及答案类型/间隔/问句；用真实128/32 chunk、top-5审计A/B关系级支持，保留所有来源和失败。冻结两问预算主臂A→联合A+B远、同预算远B独立单问与近B联合对照、来源级严格判据及检索机制指标；完成具体调用计划后再按AGENTS.md要求申请新的真实victim/API授权。
+- [ ] 若开发验证显示joint在相同预算下确有可复现增益，再以独立后续配置冻结并评估；正式V24和已冻结历史产物不修改。
+
+当前唯一下一步：先做新来源的离线候选事实与关系级检索支持筛查，再固定两步联合问及同预算近距/独立远问对照。当前无新Luna/Gemma/BGE调用授权或待执行victim计划，不续用上一批24条Gemma计划。
+
+### 2026-09-27：用户澄清远 B 必要、近 B 污染（supersedes 上节近 B 门禁）
+
+- [x] 核心方法固定为Clean A答对后，联合追问同一候选source中远离A的B；近B可能被相似Member文档的局部内容污染，不是主攻击事实，也不要求hard近B可答。
+- [x] 撤销上一节“先找hard的A和近B关系级支持”“近B联合问为必要对照”的建议。近B只可作为可选污染诊断，不能用于新来源或B的正式入选。此前新鲜4对Gemma0的前检未测A真实可答性，近B词面缺席不构成方法阴性结论。
+- [ ] 在身份隔离的新开发来源先按原Clean规则确定A，并从候选原文按预先固定的最短token间隔选远B；冻结A单问、A+B远距自然联合问、同两问预算的远B独立单问对照。记录top-5来源/片段与A/B关系支持，用source为统计单位，保留A未答对来源于总体分母。
+- [ ] 具体新victim调用前按AGENTS.md重新取得明确授权。若将此核心query/score用于正式主评估，先以新的独立配置冻结，不改既有V24正式产物。
+
+当前唯一下一步：为A锚定的远B联合问准备新的身份隔离development来源与固定离线问题计划；近B不作前置门禁，现有4对前检也不当方法失败证据。没有新的真实API/victim调用授权。
+
+### 2026-09-27：Clean A＋远 B 联合追问 100/100 扩容（来源与配置冻结，执行中）
+
+- [x] 用户确定100篇事前选定的相似非成员，A答错也留在总体分母，A阳性条件子集另报；同预算远B独立单问作为主对照，近B只作可选诊断。
+- [x] 从离线相似池固定新鲜100对（NF/Sci/TREC 40/30/30），同旧Member锚点内按seed分配Member/True Non-member；排除正式split、已真实生成/查询来源及各类精确身份重叠，跨组选中来源无文本hash重复，近重复Jaccard<0.8。来源计划SHA-256=`3094c785e1b8f0013334717c1d5a053790eb38a4acc5d132184d2732f0704407`。
+- [x] 冻结原Clean三槽、远B所有答案出现位置最短≥128 BGE token、自然联合问无A历史注入、旧100加新100 Member-only 128/32 top-5检索、两问预算主分及独立远B对照。配置SHA-256=`f52b89762ac85e4ddea148c2ea70f83ac2d692d585d0cc8d4dff7903595c9992`。新增独立入口和5项本地定向测试通过，正式V24未改。
+- [x] 用户明确授权最多400次gpt-6-luna、600次`gemma-2-2b-it-bf16`及本地CUDA BGE，失败不重试；授权仅针对本100/100开发实验。
+- [ ] 按来源计划完成原Clean三槽及远B生成，失败来源留分母；冻结查询后建Member-only检索并保存top-5原始片段/来源身份。
+- [ ] 完成A单问；仅对A正确且B构造合格来源调用自然joint和独立B单问；按source、逐数据集、macro、总体与A阳性子集报告Clean、joint、B单问，附生成流失、Member损失、非成员排除、词面检索支持与解释边界。
+
+当前唯一下一步：在已授权上限内先运行可断点续跑的Luna Clean生成；每阶段核对真实模型ID、调用数与输入hash，不根据中途回答重选来源/事实/问题。此条追加时新模型/GPU调用数仍为0。
+
+
+2026-09-27会话中断后进度核对：Clean Luna首个1次＋一波50次已完成，共51/200篇；38篇三槽通过且有远区A、11篇质量门禁失败、2篇`uncertain_transport`且不重试。`clean_generation.jsonl` SHA-256=`37d196ec659757aea7db2e75b9ac1fcb6d2270cfdd26e3f0251e5a21e9fbd802`。进程已退出；后续149篇Clean、远B、BGE及Gemma均未执行。本会话中断后不自动续发真实请求，恢复时先核对该产物及用户意图，再按已固定来源顺序推进。
+
+
+### 2026-09-27：A 不做远区预筛，只有追问 B 满足远距（r2 修正）
+
+- [x] 用户更正A沿用原Clean第0槽，不以远距空间筛A；旧r1配置与原始Clean生成记录保留。修正配置`experiment_config_r2.json` SHA-256=`d173154035531ca494fc958ae4b4deb04293788c0fe2ffdc46f4499b99bb7372`，来源计划SHA仍为`3094c785e1b8f0013334717c1d5a053790eb38a4acc5d132184d2732f0704407`。
+- [x] 更正到达时Clean批次已停止于142条attempt记录：109 passed、30 failed_quality_gate、2 uncertain_transport、1 attempt_started；最后1条不得重试。远B/Gemma/BGE均0，尚无victim结果参与r2修改。
+- [x] 6项定向测试及AST通过；旧`a_slot_index`仅为r1诊断，r2后续生成B和冻结query统一取三槽索引0。
+- [ ] 在用户已授权400次Luna上限内按未尝试来源继续完成Clean三槽；之后仅在B构造时检查与A所有出现位置的≥128 token间隔，保留失败来源于总体分母。
+
+当前唯一下一步：核对142条attempt身份及授权余额，继续尚未尝试的Clean来源，不重发中断时`attempt_started`的请求；完成Clean后按r2配置生成远B。
+
+### 2026-09-27：先实测 A，再只追问 A 正确来源（r3 覆盖上节执行顺序）
+
+- [x] 200篇Clean Luna各尝试1次：155 passed（Member72、Non-member83）、42质量失败、2传输不确定、1中断状态不明；零重试，所有来源保留在原100/100分母。`clean_generation.jsonl` SHA-256=`fa6ed0dc838dce087d290743d65520beb31bc1aa8c38cc61b970d7a184e1a146`。
+- [x] r2过早执行的18篇B生成在首个Gemma调用前停止，原始`far_generation.jsonl` SHA-256=`3b2aa65953d39add7f87e118df0c9ce83c3821ff6c4bf50d2a75412b39d24115`保留；用户指定仅在对应A后来答对时复用，不重复Luna调用。A答错来源不生成新B、不发第二问。
+- [x] r3配置SHA-256=`4f5d31d8029a1a5b506f4946c6892c12f0e83439884c4c7124244a60ed1ad02b`固定上述顺序；原Clean A第0槽不要求远距，只有B对A所有出现位置的最近距离要求≥128 BGE token。7项定向测试通过，正式V24未改。
+- [x] 已冻结155条A单问计划SHA-256=`cecab8b1c0b663c77ce5412178e66ea3cc71eee19db6073b4bc36ebd8ba01776`，本地CUDA BGE Member-only检索SHA-256=`4d5bb6638e7c43f6399eb57a39358fb330c82c9e42fdf2f8047d9e92b522b15c`；当前Luna总尝试218、Gemma 0，均在用户授权上限内。
+- [ ] 在冻结的A计划上最多155次Gemma单问，按原值严格判读A是否正确；失败或中断不重试。核对真实模型ID、请求记录和A阳性数。
+- [ ] 对A正确者复用已有B或每篇仅新生成一次远B；冻结自然联合问及同预算B单问，再建Member-only检索，仅对A正确且B通过质量门禁者调用第二问。
+- [ ] 以全部100/100来源为总体分母，另报A正确条件子集、逐数据集/macro、Wilson区间、二值分数AUC、Member损失与失败模式；同预算B单问验证联合是否有增益，不声称距离因果或正式test性能。
+
+当前唯一下一步：按已冻结A问题和检索计划分wave调用真实Gemma；在A全部尝试完成前，不再生成新的B或发送任何联合问。
+
+A执行中本地bug记录：最初50条`a_responses.jsonl`因runner调用不存在的victim方法而在HTTP前全部报`AttributeError`，旧文件SHA-256=`6a9de8f7de6054c9085d00e08fa3a5539bc252af691f4d4a711080e56bcb5ff4`原样保留并标为superseded，实际Gemma调用0。已在同一runner改用`generate_with_metadata`、底层零重试，8项定向测试与接口预检通过；新`a_responses_r3.jsonl`首个1＋50真实A调用完成，51/155均为指定Gemma模型且provider request ID互异。当前唯一下一步仍是只完成其余A单问，勿把旧本地错误算进调用预算或A结果。
+
+第二批A终端异常退出后，`a_responses_r3.jsonl`全零受损（98,190字节，SHA-256=`fba113f602630455613a658e60b488512fbdf6ea9d64ee9aadc429e8cca90553`），无可恢复副本；至少66、至多101条真实A调用可能已发出，具体次数不伪推。该文件保留为受损证据，不计评分。runner已加入写盘fsync、回读校验及单份有效备份；9项定向测试通过。用户已明确授权对原155条冻结A问题最多重跑155次、其中最多101条可能重复，总Gemma上限仍600次，新失败不重试。后续写入`a_responses_r4.jsonl`，原查询/检索不改。当前唯一下一步：分小wave重跑A，逐wave核对文件完整性与provider模型，A完成前不生成新B。
+
+- [x] A重跑155/155成功，`a_responses_r4.jsonl` SHA-256=`4f1373e887546592b0356844f866222b16085e56b1ba715eeb14aeac63d8199c`；155个真实Gemma request ID互异、零新失败/重试。原值A正确Member 41/100、True Non-member 2/100（仅TREC），A正确条件子集只有43篇，后续hard条件估计样本极少。
+- [ ] 43篇A正确中，6篇有早期B尝试并按用户选择只复用（3 passed、3 failed_quality_gate）；其余37篇各最多新生成一次远B，不为A错误者生成或追问。
+
+当前唯一下一步：在已授权Luna余额内完成上述最多37篇新B，保留所有失败，然后冻结第二问；不根据2篇hard的真实A回答挑选或更换B。
+
+### 2026-09-27：100/100 扩容已完成，当前实现未获增益
+
+- [x] 43篇A正确来源的B阶段完成：6篇早期复用，37篇新Luna各尝试1次；合计12篇B通过（Member11、Non-member1），26质量失败、4传输不确定、1请求中断状态不明，不重试。`far_generation_r3.jsonl` SHA-256=`9757170e613c4a111ddb0d0a4d00b47d8455541e4092ce9ae90b74350fe30dde`，通过者最短A/B间隔129 BGE token。
+- [x] 首版完整`query_plan.jsonl`错误地把B元数据附到A行，本地门禁在第二问前拒绝，原文件保留。修正后A的155条问题/query ID及检索prompt hash完全一致，实际`query_plan_r2.jsonl` SHA-256=`ed82372cb5147f7a9db256e3d9c590ac7d524a7d753a606c126835072523954e`（155 A＋12 joint＋12 B solo）；`retrieval.jsonl` SHA-256=`adb4eb2da0a878719d170322ec9f3fe209ec4255e277f386e1474603977478cb`，Member-only index identity不变。
+- [x] 24/24条第二问真实Gemma完成，模型/请求ID校验通过，SHA-256=`309a1ae0c0f289d93e08c503a616e0b08f2dd534611752b3adca4a298ebd091d`；零第二问失败/重试。
+- [x] 来源级诊断报告`report_r2.json` SHA-256=`690a6e211eb8618744f892f1317b6a955629b7bdfa4fc190e8207a915fdd521b`：Clean A Member/Non-member 41/100、2/100，二值AUC 0.695；联合问1/100、0/100，AUC 0.505；同预算B单问4/100、0/100，AUC 0.520。联合没有增益，Member比Clean损失40篇，B构造上限仅11篇Member。逐数据集/macro/Wilson和200行失败状态均在报告中；0/100 FPR的95% Wilson上界约3.70%，不能宣传为1%低FPR。
+- [x] 条件样本仅2篇A正确Non-member，其中1篇B合格；11篇B合格Member的联合问只有3篇top-5同时含A/B精确词面，联合保留A 8篇、B 2篇、两者1篇。非盲复读发现B长短语、等价词面和至少2条不直接询问B关系的问句，不能当独立人工盲审或事后更改已冻结严格得分。
+- [x] 物理调用边界：Luna共255个尝试记录/246个互异真实响应ID；可评分Gemma 179个互异响应ID，加受损r3批次至少66至多101个真实请求，Gemma物理总数245–280，均未超授权上限。旧本地接口错误50条实际HTTP调用0；受损、superseded、失败文件原样保留。
+
+当前唯一下一步：停止在本批上追阳性或改阈值；在独立的新开发来源先解决Clean A的成员稳定性、B事实原子性与联合问关系正确性，并复核top-5能否同时支持A/B，再冻结新方案评估。现有100/100只作development阴性/失败模式证据，正式V24不变。
+
+用户追问后的解释更正：本批200篇虽各生成原Clean三槽，victim实际仅询问每篇槽0的1条A；41/100成员命中是“单槽A”结果。历史原Clean为每篇3条A问题、source分数=答对槽数/3，两者不可直接对比。`report_r2.json`中`clean_score`只在本支线内表示单槽A，不是原三槽Clean复现；原报告和响应不改写。当前唯一下一步相应收紧为：在新的独立开发配置中先明确是单槽还是三槽Clean，若沿用原Clean则固定3条A问及A阳性后唯一槽位路由、查询预算和远B规则，再验证；不对本批事后补问槽1/2冒充预先冻结结果。
+
+### 2026-09-27：三槽Clean＋远B联合恢复的新开发来源已准备，待真实调用授权
+
+- [x] 新入口 scripts/84_run_v24_three_anchor_far_joint.py 与旧83号单槽实验隔离；固定每篇三条Clean、每槽远B、无历史自然复合联合问、同条件同预算B单问和来源级字典序评分。旧正式V24及83号响应均未修改。
+- [x] 首次来源草稿与旧83号200篇重叠，已离线发现并保留为 overlap_superseded 文件；修正后来源计划/配置SHA-256分别为922dc70dd80d37c5ce626326c8fa5c337638b41a15231a881a6b502d6ec9f42c、6264436d0c7d79504f1b0e5a9aa5d4f4c869de9f9d6df2e11e78897e10e96a7d。
+- [x] 新来源按nfcorpus/scidocs/trec-covid的40/30/30对固定，旧83号来源及正式split的key/source hash/text hash交集均为0；两组离线BGE相似度中位数近似匹配。Conda mia_model的18项定向测试及来源计划重读通过。
+- [ ] 尚未生成具体三槽A、各槽B和问句，亦未建新BGE索引或询问Gemma；本支线新增Luna/Gemma/GPU调用均为0。新调用的最大物理额度为Luna 400、Gemma 1800，以及本地CUDA BGE索引和最多1800条查询；失败不重试，单数据集单阶段执行。
+- [ ] 获得本支线明确授权后，按固定来源顺序先做Clean和B生成并审核构造覆盖率，再在首个victim响应前冻结query plan；完成三槽Clean、条件联合与条件B单问对照，保留全部来源分母与逐数据集/来源级报告。若质量差或hard Clean阳性稀少，按阴性或不可判定结果报告，不在本批改提示、补源或放宽解析。
+
+当前唯一下一步：取得本支线Luna、Gemma与本地CUDA BGE的具体调用额度授权；未授权前保持离线准备状态。
+
+同日预调用配置更正：补充联合问top-5检索诊断计数后，当前脚本SHA-256=`2941711adff445deffa6871958bdbe79e7215b0ace5bf91cca7dfcc07e118a48`，当前实验配置SHA-256=`fbdb7c76910f9061ac0429d447d49242a554650f429d27b395014a389d9b80fa`；此前所列`6264436d...`为尚未调用模型时的草稿配置。来源计划SHA不变，18项定向测试再次通过，下一步仍为明确调用额度授权。
+
+### 2026-09-28：三槽远B开发运行完成，B单问对照失效（supersedes 上方“待授权/待执行”）
+
+- [x] 用户授权后完成Luna Clean 200次、远B 144次；Clean通过144篇，远B有效153槽。Luna有效响应323个互异ID；18次传输不确定、3次中断状态不确定原样保留，无重试。
+- [x] 在victim前冻结432 Clean＋153联合＋153 B单问的`query_plan.jsonl`，SHA-256=`924606f3d880f20dfbcb4c811c3356eb0a83d761a5a049e03eb9b3308d294861`；本地CUDA BGE、Member-only检索738条，SHA-256=`2f6dfa5fec312e6d51d0d3a18ce5da56093d02d63a1cdf8c29d14f6b68d5799b`。
+- [x] Gemma Clean 432＋条件后续88=520次全部完成，520个互异响应ID，实际模型固定；来源级报告`report.json` SHA-256=`ceb51f359fbbba8c6c1f6ebe0ef1cb11b819e2502b7bf561d0ed61780308122a`。整体Clean/联合/B单问AUC=0.8003/0.8016/0.8013，macro=0.8044/0.8063/0.8052；逐数据集与低FPR见报告及notes。条件有效远B仅Member 41槽、Non-member 3槽。
+- [x] 运行后冻结问句审计发现`b_solo`有76/153条原样包含完整A问句，实际条件发出的44条中至少23条被污染；12条联合问有`and and`。此报告只能作为development diagnostic-only，不能证明联合优于独立B单问；原始失败证据与分数不改写。
+- [ ] 在新的独立开发来源和首个新victim响应前修正B-only门禁、复合问句构造与关系级预调用复核，冻结新来源/问句/判读后重做三臂比较。不得从本批响应或label补源、修问或筛选阳性；不得触碰正式V24冻结产物。新完整100/100模型调用需单独明确额度，因为本次Luna已用344/400。
+
+当前唯一下一步：离线准备最小修正与新来源可用性核查；新真实模型/GPU调用前按所需额度取得明确授权。本批保留为诊断与失败模式证据，不并入论文主表。
+
+同日来源容量核查已完成：现有screen与token/近重复规则排除旧83号和本84号后，scidocs最多47篇、trec-covid最多36篇可按严格规则保留，均不足原各60篇要求。下一步须先确定独立来源扩充或更小的新开发样本量，再预先固定无A子问的B单问及联合问；本批不能修补成有效对照。
+
+### 2026-09-28：Non-member Clean 阳性两两联合问诊断已完成
+
+- [x] 从84号开发响应固定选出8条True Non-member Clean原值阳性问题（7篇trec-covid source），事前写定28对问题及固定解析，1对同源、27对跨源；问题计划SHA-256=`9653da98ac859eec770d31df432f03cf210f9216b0e0c8f3f419083736c6e7ae`。此选题已使用已知标签与回答，仅作事后机制诊断。
+- [x] 复用Member-only、BGE CUDA、top-5的本地检索，共28条，SHA-256=`372cf7be8a8aea0aaab371ac98bfea47f6d0474894f98e05e84b381df300cdf8`；28/28 Gemma回答完成、真实模型及28个互异request ID核对通过，响应SHA-256=`d46d13646c09fd476c5b6410a70fe2eb8bcd1d2b0ce45e1bd7a59f185cbc30b6`。本次Luna 0、Gemma 28、BGE检索28，无重试或正式test调用。
+- [x] 原始28对单问/联合问逐条见`artifacts/v24/development/nonmember_clean_pair_probe_20260928/report.md`，机器报告SHA-256=`0b1c5e34f31ab7b7ff395d27151d0ad62d01703f6c487f34bd4803d23b23d659`；Assistant非盲复读`interpretation.md`记录16对两题均保留目标原值、12对仅一题保留，其中唯一同源对的`ARBs`单问目标变为联合问中的`ACE inhibitors`。第25对第一题没有直接作答；固定词面评分有同义漏判和跨子句误归因，不能当最终语义标注。
+
+当前唯一下一步：继续在新的身份隔离开发来源离线修正B-only门禁、联合问构造与来源容量，先冻结三臂配置再做新实验；本28对不作为无偏AUC、同篇远B收益或正式论文主结果，也不修改84号历史产物。
+
+同日只读检索对照已完成：84号原单问与85号联合问的Member-only索引身份、BGE/切块/top-5设置一致；联合问相对第一/第二单问的top-5 source文档集合分别有25/28、28/28对变化，14/28对返回两单问top-5并集外的source。唯一同源第08对top-1文档相同、chunk不同，联合chunk仍含ARBs与ACEI的目标关系句；因此答案变化不能直接归于证据完全缺席。逐对依据及具体chunk列表见本批`interpretation.md`。新增模型/GPU调用0，当前唯一下一步不变。
+
+### 2026-09-28：第08对固定上下文交叉诊断完成
+
+- [x] 只复用第08对同源B单问与联合问的两组已保存top-5上下文；已有两格保留原响应，事前固定另两格问题/上下文。独立配置与计划SHA-256分别为`16d18c3c1719fe9347348ed7d528d04ae4c99835fa5aadd86b2f62fd956b3845`、`2ba75c356c8e0027b74fca9da9d44b8234f4f1f380987e3951da5273eb4cdd62`。
+- [x] 新增Gemma恰好2次，均completed且真实模型、request ID核对通过，无Luna/BGE/GPU/正式test调用和重试。响应SHA-256=`07d4bd1dadfcb2bc2fae0b621c28bd6747214f6e5820ae3cea93bee565a0506a`；四格原文`artifacts/v24/development/pair08_fixed_context_20260928/report.md`，机器报告SHA-256=`7f0e476c10ca84f596f59f66f4277f63446223dbb5468b432dfd53c00bb89321`。
+- [x] 两种上下文的B单问均提ARBs与ACEI；B单问上下文中的联合问也提二者；只有旧“联合问＋联合上下文”只提ACEI。此例不能把ARBs目标缺失归于单独的检索或问法变化；B问句容许双答案，且旧/新调用不同时间、无重复，只能记为后验单来源诊断。
+
+当前唯一下一步仍是独立开发来源中的干净B-only门禁、联合构造与三臂预冻结；不依据此例修改旧84/85响应、评分或正式V24。
+
+### 2026-09-28：两篇不同来源的独立关系固定上下文诊断完成
+
+- [x] 只读排除85号第03对：数据库题存在多个原值候选，未为其调用模型。改用第01对两篇不同True Non-member来源的病毒名称/SARS-CoV-2与生理酶/ACE2，关系与答案不同但共享COVID主题。固定两组原有top-5片段及交叉问题；配置、计划、固定片段SHA-256分别为`c3a8519d4dcb7f6bf699f6976fec2497715e6a7b8b7b83d18ff52e4f8887eb4b`、`3197e341ad39e6f69bad66d43ab10c86937b15737b1bea5df17d3cc0620470e5`、`5672cdb5955139a92246b39f8bceb604dae054429d2a2b889014cb66b63c7661`。
+- [x] 补齐两格Gemma，共新增2次、均completed且实际模型固定，无Luna/BGE/GPU/正式test调用或重试。新响应SHA-256=`5a838a1cc80a0337418c2ed03390402451bf60b7738bed64f2696cc2ea31dc5b`；四格机器报告SHA-256=`667f704091093fdd5ce56a31ed08cc2dd7b439b62c502eb198466a2532f2f022`，人读版在`artifacts/v24/development/pair01_fixed_context_20260928/report.md`。
+- [x] 两组固定上下文下，B单问均答ACE2、联合问均答SARS-CoV-2与ACE2；此选定单对未见答案改变。仅作development机制阴性诊断，不能推出普遍不变或正式MIA性能。
+
+当前唯一下一步仍是新身份隔离开发来源、唯一答案B和干净B-only门禁的事前设计与三臂预冻结；不根据本单对改写旧报告。
+
+### 2026-09-28：第01对交叉答案污染审计（supersedes 上节机制阴性解读）
+
+- [x] 只读审计B单问top-5：第2/3/4个chunk已含A目标`SARS-CoV-2`，全部5个含B目标`ACE2`/`ACE-2`。原四格回答不变，但第01对不能用于检验独立A事实是否因联合问而恢复；已在`artifacts/v24/development/pair01_fixed_context_20260928/answer_contamination_audit.md`逐chunk记录，标为failed-control/development diagnostic-only。
+- [x] 核对索引隔离：两篇候选True Non-member文档未在B top-5；检索chunk全属KB_Member；与旧100＋新100 Member索引的source key/source hash/normalized text hash交集均为0。这是其他Member文档共享答案的信息污染，没有证据表明目标source进入主索引。只读审计新增模型/GPU调用0。
+
+当前唯一下一步：在新的身份隔离开发来源和任何新victim响应前，增加两种单问上下文的交叉答案/关系支持检查，选唯一且低常识可答性的A/B事实，随后冻结干净B-only、联合问与三臂比较；不依据第01对改写已有响应或正式V24。
+### 2026-09-28：配对索引干预离线机制验证完成（development-only）
+
+- [x] 新增配对索引干预入口与4项定向单测，覆盖world绑定、source/替代支持统计、空分母和support displacement逻辑；AST编译与`git diff --check`通过。
+- [x] r3完成本地CUDA BGE检索：52个干净三臂事实组、30个source、156条query、312个配对world记录；报告 SHA-256=`ecc947d9f0c89345779ddf8084e788767bd2c0ecc7f2f510661bf2288e69ff01`。
+- [x] 机制筛查未形成可执行victim cohort：Non-member仅1个competition-eligible组，联合后替代A支持掉出为0；其余无替代支持样本不计作competition证据。
+- [ ] 当前唯一下一步：扩大或重新设计独立开发来源池，事前提高Non-member替代A关系支持覆盖并完成离线关系级审计；在达到可行性门槛前不调用Luna/Gemma、不申请新victim预算、不改正式V24。
+
+### 2026-09-28：source-bound evidence coherence 只读分析完成
+
+- [x] 新增 `scripts/89_analyze_v24_source_bound_coherence.py` 与 `tests/test_v24_source_bound_coherence.py`；覆盖完整边界匹配、数字答案边界、同源不同chunk、跨源唯一和source-level分母。定向单测4/4、AST编译和`git diff --check`通过。
+- [x] 读取r3配对检索，不重跑GPU、不调用Luna/Gemma/API；最终报告位于 `artifacts/v24/development/source_bound_coherence_20260928/report.json`，SHA-256=`70090d7e541db3cb4a3089ee19051ee3928ff78935e2847b4663a92f8462324a`。输入query/retrieval hash保持`6093da749d0fcc30d49082c5c2a330508fbee75a9515fd57cee4e6d7f3b06462`/`68351de79cc68a93cc6b663263fa635fb723d3ea5238d6b573a45eb0fb501455`。
+- [x] 52个fact-group、30个source完成分层；`Clean A ∧ B-solo B`条件下Member为3/3篇同源不同chunk，True Non-member为0/0篇，比较标记`insufficient_conditioning_support`。Non-member null不能解释为0%机制率；全量词面支持诊断也不替代关系级盲审。
+- [x] 失败/修复中间产物保留为`analysis_config_attempt1/2.json`、`fact_groups_attempt1/2.jsonl`、`report_attempt1/2.*`并在最终报告登记hash；正式V24、r3 query/retrieval和历史响应未改。
+- [ ] 当前唯一下一步：扩大或重新设计独立开发来源池，事前获得足够Non-member双单问支持并完成关系级审计；条件cohort可估计前不申请victim预算，不把本批写成方法成立。
+
+### 2026-09-28：受控合成 source-binding 检索诊断
+
+- [x] 完整词面数字边界与单事实原子问题门禁；未达原估计配额时按实保留1个合格pair，不补造来源。非原子问题及长bridge尝试以superseded文件保留。
+- [x] 固定A-solo、B-solo、joint三臂及absent、neutral insertion、synthetic insertion三世界；1 pair共9条本地CUDA BGE检索。计划/query/retrieval/report hash见研究总表同日“受控合成 binding”条目。Gemma/Luna/victim/API调用0。
+- [x] 唯一pair两个单问均命中各自答案；joint在三世界均无A+B双top-5，synthetic相对neutral的双支持差为0。结论为development-only、cohort不足且未支持source-binding联合收益；89号宽松数字命中下的3/3条件结果已标记需按完整词面复核，历史artifact保留。
+- [ ] 当前唯一下一步：若继续受控路线，先从身份隔离开发Member源筛选更多彼此不重叠的单事实A/B pair，完成关系级支持与问句交叉污染审计；达到预定来源级条件分母后再考虑victim验证。不得根据本单pair调整正式V24或将复制合成pair计作自然独立样本。
+
+### 2026-09-28：91号 ranking controls 已完成（development-only）
+
+- [x] 在90号唯一固定pair上完成4 arm × 4 world × 3 ranking的48行本地CUDA BGE检索；same/split使用逐字相同的A/B chunk文本，仅source identity不同；A+B与B+A顺序分开冻结。配置/计划/检索/报告SHA-256为`ca0a6bfcfbf72559f395feacaf7d44be83e97270a6817a3907650120063e528d`、`553812fb610f3bf9dab2c6773e8742f3d1c7869772e3fbf5c280fde91bc5b9e2`、`65db64406f83eacdf572ed8c13bd5ef75be60abd53fc873e5a553e62c9ea648f`、`0b8c8b46c0aeb586beeb9c735e15e1f538d30f1db9ca1862ee752591e0433ebd`。
+- [x] 两种query顺序和三种ranking下，same_source与split_source的双支持差均为0；联合query始终A支持为真、B支持为假。source_cap_1去重同源chunk后仍未恢复B，故本pair只支持“联合query的A偏置/证据竞争”，不支持source identity binding收益，也不能把null结果泛化。
+- [x] AST、18项相关单测、`git diff --check`和CUDA门禁通过；无Luna/Gemma/victim/API调用，正式V24、90号历史artifact未改。BGE运行出现一条超过512 token的模型截断警告，作为实现限制保留，不作为机制证据。
+- [ ] 当前唯一下一步：暂缓source-binding扩展和新的victim预算，优先完成Clean主线；Clean完成后再根据成员稳定性、条件样本量和基础检索质量决定是否重启source-aware验证。90/91号结果仅作development诊断，不并入正式V24。
+
+### 候选方案文档索引：DASC 双锚点源一致性（未验证）
+
+- [x] 详细方案写入`研究记录/思路v24_双锚点源一致性攻击.md`：独立A/B原子锚点、同源/跨源置换、双锚点minimum分数、可选source-level retrieval coherence、预算匹配和失败判据。
+- [ ] 该方案尚未创建实验身份、尚未调用模型或victim；必须等待Clean主线完成，并通过anchor capacity、B-only污染和关系级支持门禁后再决定是否实施。
+
+### 新方法：正确性门控的源一致性递进攻击（v25，设计阶段）
+
+- [x] 已完成方法文档：`研究记录/思路v25_AnchorMIA事实锚定成员推断攻击.md`。
+- [x] 已固定概念协议：三条初始原子事实与三条同源独立追问链；Luna 预先生成并冻结全部六条 query；先执行三次 Clean，再对初始回答为 `correct` 的槽位逐一追问。
+- [x] 已固定查询预算：每个 source `3 + 初始正确槽位数`，范围 3--6；Clean 恰好 3 次；不把未触发追问记成错误，不把 Clean 结果与额外独立三问叠加。
+- [ ] 待在 development 中完成 source 容量、事实原子性、交叉答案污染、条件分母和主分数冻结。
+- [ ] 待完成 Clean-3、正确性门控递进、无条件六问、Follow-up-only-3、独立 B-only 和同事实重复改写的匹配对照；在正式 test 前不得根据响应调参、补源或改问。
+- [ ] 当前无代码实现、无模型/API/GPU 调用、无正式实验结果；既有 V24、PCV、DASC、受控合成和 source-binding 产物不纳入本方法结果。
+
+当前唯一下一步：先在身份隔离的 development 来源中离线筛选至少六个互不泄漏的原子事实并完成 query plan 冻结，再决定是否申请真实 Luna/victim 调用额度。
+
+### 2026-09-29：v25 gated-followup pilot（构造失败，已停止）
+
+- [x] 离线代码门禁：v25 runner AST、定向单测 6/6、`git diff --check` 通过；修复仅为自包含答案归一化/边界匹配 helper。
+- [x] `prepare` 固定 8 个 fresh source（4 Member/4 True Non-member）；source plan SHA-256=`6591f19d3b9ab0536918eb820716fea4ad537fc0390f6a7d0809d354ef5661ea`。
+- [x] 已使用授权额度完成 Luna 8/8 次，无重试；六事实构造通过 2/8，且仅 1 Member + 1 True Non-member、跨不同数据集，条件比较分母不足。原始生成和失败原因保留在 `artifacts/v25/development/gated_followup_pilot_20260929/query_generation.jsonl`。
+- [x] 停止下游：query freeze=0、BGE/GPU retrieval=0、victim=0、formal test=0；不把构造失败改写成机制阴性或阳性结果。
+- [ ] 状态：`development_only / insufficient_construction_support`。后续需新身份隔离批次，先提高六事实结构通过率并形成同数据集匹配对，再重新申请外部调用额度；不复用本批失败 source、response 或 membership 结果。
+
+### 2026-09-29：v25 格式／检查器修复与离线回放完成（supersedes 上方后续要求）
+
+- [x] 在现有 runner 和测试中明确六槽 schema，记录缺失编号的确定性推断，拒绝显式冲突；删除词数硬限制，修复 `previous methods` 误判，覆盖全部六槽的交叉答案检查，保留原文证据与重复事实检查。
+- [x] 新增 `--replay-generation`，只读旧 8 条生成，独立写出 `artifacts/v25/development/gated_followup_pilot_20260929/generation_replay.json`；原始 2/8 状态不变，新检查器结构通过 7/8，4 篇补编号，剩余一条为证据首字母大小写不符。该数字不代表语义合格率、新 Prompt 效果或机制成立。
+- [x] `generation_replay_review.md` 记录 Assistant 非盲语义问题示例、复现命令和限制。原 source/config/generation 保留，原 runner 快照已存。19 项定向测试、AST、CLI help 通过；本轮新增 Luna/victim/Retriever/GPU/formal 调用全部为 0。
+- [x] 更正额度与复用边界：用户授权 Luna≤48、victim≤48，目前累计 8／0，剩余 40／48；本批脚本上限 8 不等于授权总额。可用同 8 篇进行开发回归，无需仅因字段修复强制换源或重新申请已授权额度；后续新生成须保存独立输出并重新冻结 query，不能覆盖历史结果或当成 fresh test。
+- [ ] 当前唯一下一步：复核六事实独立性、问题自包含与最小答案，再安排新 Prompt 的开发验证。当前只完成修复／离线回放，不运行旧批下游，不新建正式协议版本。
+
+### 2026-09-29：v25 修正 Prompt 8-source 开发验证完成（条件样本不足）
+
+- [x] 新输出目录完成 8 次 Luna 生成；结构门禁 6/8，调用无重试。原始生成、结构状态和 promptfix runner 快照均保留。
+- [x] 完成 victim 前 Assistant 非盲语义复核；仅接受同一 TREC-COVID 数据集的 1 Member + 1 True Non-member，共 12 条冻结 query；6 篇被拒 source 保留为构造诊断。
+- [x] BGE CUDA retrieval=12；Gemma initial=6、gated follow-up=3，总 victim=9，真实 model ID 和 request ID 校验通过；无重复调用。
+- [x] Member source 三个 initial 全部 correct，三个 follow-up 全部 correct；Non-member 三个 initial 均未 correct，follow-up 未触发。source-level 报告 SHA-256=`de72fcbad23782bcf9a9fa3a897a83420f7a903d8547de47dca4a3dedcdc764a`。
+- [ ] 该批仅 1+1 source，Non-member 条件追问分母为 0；状态为 `development_only / insufficient_conditioning_support`，不能支持机制、B-only 优势、AUC 或低 FPR 结论。
+- [x] 报告阶段 iterator 计数 bug 已修复并通过 23/23 定向测试；该修复只影响 report-only 运行，未改变冻结 query、检索或已保存 response。
+
+当前唯一下一步：在剩余 Luna≤40、victim≤39 的授权上限内，启动新的身份隔离 development source 扩展，预先固定同预算 B-only/Follow-up-only 对照；本批结果不进入正式主表，不从 Non-member null 分母推断机制阴性。
+
+### v25 两阶段构造器（2026-09-29）
+
+- [x] 已实现候选事实生成、确定性事实选择和独立问题生成三个阶段。
+- [x] 已加入连续证据 span、答案边界、重复事实、问题泄漏和错配门禁。
+- [x] 26/26 定向测试、AST、CLI 和 smoke test 通过。
+- [ ] 尚未运行两阶段模型实验；当前按用户要求暂停后续外部调用。
+
+### 2026-09-29：恢复 v25 一次性生成实现
+
+- [x] 回退 `scripts/92_run_v25_gated_followup_pilot.py` 的两阶段构造器代码，恢复单次 Luna 返回完整六槽 payload 的一次性生成入口。
+- [x] 删除两阶段 CLI、预算字段、临时输出路径和 3 个两阶段单测；保留原一次性生成、冻结、检索、初问、门控追问和报告路径。
+- [x] 未产生新的外部调用；两阶段历史 artifact 与记录保留为 superseded/diagnostic-only 证据。
+- [ ] 下一步：仅在用户再次明确授权后，基于一次性生成版本安排新的 development 验证；不复用两阶段输出作为一次性生成结果。
+
+### 2026-09-29：放宽 v25 答案独立性条件
+
+- [x] 思路文档和一次性 Luna Prompt 改为要求“其他 query-answer 对不能直接推出目标答案”，允许 paired facts 共享 claim、句子、chunk、主体或上下文。
+- [x] 本地质量门禁保留重复答案和跨 query 问题泄漏检查，移除重复 claim 硬拒绝；新增被接受 source 的六槽答案非可推导复核字段，缺失或失败即拒绝冻结。
+- [x] 定向测试 25/25、AST、Prompt 检查和 `git diff --check` 通过；本轮外部调用为 0，旧实验 artifact 与 2/8、6/8 历史结果未改写。
+- [ ] 下一步：对已有生成做一次独立离线语义复核，按新答案非可推导标准区分“仅因旧独立性标准被拒”与仍不可用的 source；不把重审结果并入原始通过率。
+
 ### 2026-09-29：V25 successor 主线代码交付（未启动实验）
 
 - [x] 从当前 V24 工作分支建立 `codex/v25-successor-mainline`；新增配置驱动的 V25 source split/helper、主 runner 绑定和 source-level `S_chain`/AUC/CI 报告路径。
@@ -3946,3 +5116,1194 @@ PubMed resume 修复（2026-08-05）：
 - [x] 固定 Clean-3、unconditional-6、follow-up-only-3 source-matched query controls；主流程仍是三初问后逐槽触发追问，预算 3--6 次，主统计单位为 source document。
 - [x] 新增配置/source/hash 隔离、Member-only index、六槽/预算、零 follow-up 分母、source-level dataset/macro 指标测试；定向 V25 测试 32/32 通过。
 - [ ] 仍须先通过 development 容量门槛后才能进入 formal；本次未运行 Luna、victim、Retriever、GPU 或 API，不产生正式结果。
+
+### 2026-09-29：V25 前文件永久清理
+
+- [x] 按用户明确选择，删除旧版专属代码/配置/测试 517 个文件、V21–V23 全部旧产物、V24 中非 V25 依赖的旧产物，以及旧生成数据目录和 EDGAR 备份；未打包、未提交。
+- [x] 保留全部研究和论文记录、`legacy/` 审计归档、原始数据、模型、V25 产物，以及 V25 当前读取的 V24 source pool 和历史对照；含未跟踪文件的独立 `artifacts/v24/worktrees/main/` 工作树也保留。
+- [x] 更新 README、AGENTS.md 和包入口说明；代码清理后 V25 离线定向测试 32/32 通过；外部调用与 GPU/检索调用均为 0。
+- [ ] 历史 V21–V24 本地证据已删除，不从当前目录续跑旧协议；V25 仍为 `development_only_pre_formal`。当前唯一下一步是按 V25 配置核验 development 容量和固定输入身份，再另行决定是否启动后续调用。
+
+### 2026-09-29：清理后 V25 历史开发批次输入链核对
+
+- [x] 核查 5 个 V25 历史开发批次的 `experiment_config.json`：每批同样引用 7 份已删除 V24 输入，当前无可验证的原 hash 副本；保留原 V25 字节，不补造旧文件、不改写状态。
+- [x] 当前 V25 successor 配置与 12 份 source pool 输入仍在，13 项输入哈希计算、32/32 定向单测及 CLI help 均通过；未运行 API、GPU、victim 或 Retriever。
+- [ ] 旧开发批次不得按完整 provenance 续跑或并入 formal。当前唯一下一步是用完整保留的 V25 source pool 在新开发身份下核验容量和输入身份，后续外部调用仍须单独授权。
+
+### 2026-09-30：V25 门禁修复后的 10-source 重试
+
+- [x] 增加列表/多实体、OCR 损坏、完整答案、百分比单位和泛化短答案门禁；定向测试 `34/34` 通过。
+- [x] 新 10-source 批次完成 10 次 gpt-6-luna 调用，原始结构通过 `2/10`，当前门禁复核为 `1/10`，语义接受为 `1/10`。
+- [x] 唯一接受 source 为 `nfcorpus::MED-1015` True Non-member；无 accepted Member，未进入 query freeze、Retriever、victim 或 formal。
+- [ ] 下一步：优先降低跨槽问题泄漏和多值句选择；保持门禁，不以放宽规则换取 matched cohort。
+
+### 2026-09-30：V25 10-source gpt-6-luna 构造重试
+
+- [x] 配置 query generator 改为 `gpt-6-luna`，开发 Luna 上限为 10；V25 其余协议条件保持不变。
+- [x] 端口恢复后的独立 retry 批次完成 10/10 Luna 调用，结构通过 8/10，结构构造失败 2/10（20%）；失败原因为一个问题答案泄漏、一个事实不足。
+- [x] 失败批次与 retry 批次均未进入 query freeze、Retriever、victim 或 formal；首批 10/10 transport failure 作为单独诊断保留。
+- [ ] 下一步：完成 8 个通过 source 的 Assistant 非盲语义复核；未形成足够同数据集 Member/True Non-member cohort 前，不进入下游或 formal。
+
+### 2026-09-30：V25 实体抽取分阶段开发批次
+
+- [x] runner 改为 Luna 实体抽取、确定性六槽选择、逐槽独立问题生成和兼容 materialize；保留 source/hash 隔离与失败 artifact。
+- [x] 新批次完成 `10` 次实体抽取、`48` 次问题生成；实体池 `8/10`，问题结构 `38/48`，完整六槽 `2/10`，非盲语义接受 `1/10`。
+- [x] 新增 polarity mismatch 门禁并完成 V25 定向测试 `42/42`、AST、CLI、`git diff --check`。
+- [ ] 当前状态：`development_only / insufficient_matched_cohort`；接受样本没有同数据集 Member/True Non-member 配对，query freeze、Retriever、victim、formal 均保持 0。
+- [ ] 唯一下一步：根据 `query_review.json` 中的极性反转和结构拒绝原因继续改进抽取/问题提示；不复用旧 query，不放宽门禁，不把本批结果并入正式主表。
+### 2026-09-30：V25 r3 语义复核完成，继续阻断下游
+
+- [x] 已加入并测试未决关系门禁 `question_underspecified_reference`，覆盖“未指定主体”和“关系另一侧”问句。
+- [x] r3 开发批次：Luna 实体抽取 `10` 次，逐槽问题 `48` 次；实体池 `8/10`，问题结构 `36/48`，完整六槽 `2/10`。
+- [x] Assistant 非盲复核接受 `1/10`：`trec-covid::002czx8v`（True_Non_Member）；SciDocs 完整 source 因 `e1_prime` 关系主体未指明而拒绝。复核 artifact：`artifacts/v25/development/gated_followup_entity_slots_10sample_r3_20260930/query_review.json`。
+- [x] accepted cohort 无 Member、无同数据集匹配 pair；query freeze、Retriever、victim、GPU、formal 均保持 `0`。
+- [x] V25 定向/全量测试 `44/44`、AST、CLI、review hash 校验、`git diff --check` 通过；新增外部调用 `0`。
+- [ ] 下一步：新身份继续构造并优先形成同数据集匹配 cohort；保持实体抽取由 Luna 完成、槽位选择本地确定，保留跨槽答案泄漏、未决关系和多值事实拒绝门禁。
+
+
+### 2026-09-30：V25 六槽容量门修复（当前下一步）
+
+- [x] 修改 `scripts/92_run_v25_gated_followup_pilot.py`：本地六槽选择增加 6 槽容量门、target 上限、relation 去重、泛化/去指代/未决关系拒绝和同 claim 别名去重；不改变预算、评分、模型或 Retriever。
+- [x] 修改 `tests/test_v25_gated_followup_pilot.py`：新增容量不足、去指代答案和未决 relation 回归测试；定向测试 `46/46` 通过。
+- [x] 已对 r3 fact candidates 离线回放，确认容量门在问题生成前生效；外部调用数保持 0。
+- [ ] 下一步：完成静态检查与全量 unittest；通过后再由用户决定是否授权新一批 Luna 开发 source 生成。
+
+
+### 2026-09-30：V25 容量门修复后 10-source 开发批次
+
+- [x] 新 source plan：10 source，排除已有 V25 source；source plan SHA-256=`8f91d0b9dbd407c47429897ecdcdfca6d09705f481f132a4030fc43ac6905d11`。
+- [x] Luna 实体抽取 `10` 次，候选池 `9/10`，六槽容量门 `7/10`。
+- [x] Luna 逐槽问题生成 `42` 次，结构通过 `34/42`，原始完整六槽 `2/10`。
+- [x] 加入 `question_placeholder` 门禁，拒绝最终问题残留 `[MASK]`；定向测试 `47/47` 通过。
+- [x] 非盲语义复核接受 `1/10`，仅为 trec-covid KB_Member；无 matched cohort。
+- [ ] 当前唯一下一步：继续改进问题生成失败率或补充独立 source；不得因单个 accepted Member 进入 query freeze、Retriever、victim 或 formal。
+
+### 2026-09-30：更正语义复核并简化后续方向
+
+- [x] 新增 `artifacts/v25/development/gated_followup_entity_slots_capacity_10sample_r2_20260930/query_review_correction.json`，明确此前 `1/10` 不是独立语义接受结果；当前按语义金标准计为 `0/10`，结构完整 source 为 `1/10`。
+- [x] 保留原始生成和失败 artifact，不改写 response/query 行，不进入 freeze、Retriever 或 victim。
+- [ ] 后续只保留一个简单 source-level 构造契约，避免继续叠加 target/relation、容量门和多层复核规则。
+
+### 2026-09-30：V25 简化 source-level batch 构造完成
+
+- [x] runner 简化为“Luna 实体抽取 + 本地六槽选择 + 每 source 一次批量六问”，不再让模型推断 target/relation 或逐槽单独请求。
+- [x] 通过离线定向测试 `47/47`、AST 和 `git diff --check`；问题生成预算记录改为每 source 一次 Luna 调用。
+- [x] 新批次 `gated_followup_entity_batch_10sample_20260930`：10 source，实体抽取 `10/10`，六槽选择 `9/10`，批量问题 `9` 次，结构通过 `6/9`。
+- [x] Assistant 非盲复核接受 `3/10`，复核 artifact `artifacts/v25/development/gated_followup_entity_batch_10sample_20260930/query_review.json`；接受样本仍无同数据集 Member/True Non-member matched pair。
+- [ ] 当前状态仍为 `development_only / insufficient_matched_cohort`；不冻结 query，不运行 Retriever、victim、GPU 或 formal。
+
+### 2026-09-30：V25 简化构造换样本重试
+
+- [x] 新批次 `gated_followup_entity_batch_10sample_r2_20260930` 已建立并排除已有 V25 source；10 source，source plan SHA-256=`1bf639c72100868b3ff47d88cd16604c58838ec8bc0a08f8df151dcf0357bd53`。
+- [x] 实体抽取 `10/10`，六槽选择 `7/10`；候选池/六槽不足共 3 条，未进入问题生成。
+- [x] 7 个 source 各 1 次批量问题调用，结构物化通过 `6/10`，结构问题生成拒绝 `1/7`。
+- [x] Assistant 非盲语义复核 `0/10`，复核记录 `artifacts/v25/development/gated_followup_entity_batch_10sample_r2_20260930/query_review.json`；主要问题为答案粒度、问句范围和未明确主体。
+- [ ] 当前仍为 `development_only / insufficient_matched_cohort`，不冻结、不运行 Retriever/victim/formal。
+
+### 2026-09-30：V25 initial/follow-up 拆分问题生成验证
+
+- [x] 问题生成改为每 source 两次调用：initial 三问与 follow-up 三问分开，follow-up 只读取对应 pair 的两条 masked claim；问题预算上限调整为每 source 最多两次调用。
+- [x] 新批次 `gated_followup_entity_split_questions_10sample_20260930`：实体抽取 `10/10`，六槽选择 `8/10`，问题调用 `16` 次，initial `8/8`、follow-up `6/8`、完整六槽 `6/10`。
+- [x] Assistant 非盲语义复核 `3/10`，复核记录位于 `artifacts/v25/development/gated_followup_entity_split_questions_10sample_20260930/query_review.json`。
+- [ ] 当前仍为 `development_only / insufficient_matched_cohort`；拆分方向暂时有效，但不能据此冻结 query 或启动下游。
+
+### 2026-09-30：V25 逐槽遮罩与元问题门禁验证
+
+- [x] 完成最小构造修复：逐槽 Luna 请求、source 内六答案统一遮罩、命题句答案拒绝、元问题门禁；未改变 V25 query budget、scoring、runtime 或 Retriever。
+- [x] `gated_followup_per_slot_10sample_20260930`：10 facts、6/10 source-level 六槽、36 question calls、0/10 完整结构；保留为失败诊断。
+- [x] `gated_followup_per_slot_masked_10sample_20260930`：10 facts、8/10 六槽、48 question calls、1/10 完整结构；跨槽泄漏下降但仍不具备语义可用性。
+- [x] `gated_followup_meta_gate_10sample_20260930`：10 facts、9/10 六槽、54 question calls、4/10 完整结构；Assistant 非盲语义复核 `0/10`，`query_review.json` 标记为 diagnostic-only。
+- [x] 定向测试 `54/54`、AST、`git diff --check` 已通过；Luna 仅用于 development 构造，Retriever/victim/GPU/formal 均为 `0`。
+- [ ] 当前唯一下一步：暂停下游，保留失败证据；在没有同数据集 Member/True Non-member 语义 accepted pair 前不冻结、不运行 formal。
+
+### 2026-09-30：V25 恢复 source-level 两阶段联合生成
+
+- [x] 主入口改为每 source 两次生成：initial 批量三槽实体+claim+query，follow-up 批量三槽实体+claim+query；两次响应合并后统一通过六槽结构校验。
+- [x] `--generate` 调用上限调整为 20（10 source × 2 phase）；旧分阶段 CLI 保留兼容，但新开发批次不复用其 artifact。
+- [x] 增加两阶段合并、pairing 和 initial 失败闭门测试；定向测试 `56/56`，AST 与空白检查通过。
+- [ ] 下一步仅在新 source identity 下验证该主路径的结构/语义通过率；不改写旧批次，不运行 Retriever、victim、GPU 或 formal。
+
+### 2026-09-30：V25 两阶段联合生成开发重试
+
+- [x] 新批次 `gated_followup_two_phase_joint_10sample_r3_20260930` 完成 source-exclusive prepare；10 source，排除全部既有 V25 source plan，source plan SHA-256=`bc4ef1e13e9e0a82c327f6a5fd6321762281bcbc4e1266213ee0a64b905517ae`。
+- [x] Initial/follow-up 各一次 source-level 联合生成，共 20 次 Luna 调用；结构完整 `1/10`，主要失败为 multipart、列表答案、未解析指代和跨槽泄漏；generation SHA-256=`38d12cf2869ed2340c07fb28810788c528158df52b4bbdc4b203b0631b3fe757`。
+- [x] 唯一结构通过 source 在非盲语义复核中因 `e3_prime` 未明确主体被拒，语义接受 `0/10`；复核记录 `artifacts/v25/development/gated_followup_two_phase_joint_10sample_r3_20260930/query_review.json`。
+- [ ] 当前仍为 `development_only / insufficient_matched_cohort`；不冻结 query，不运行 Retriever、victim、GPU 或 formal。
+
+### 2026-09-30：V25 门禁简化并保留检索有效性约束
+
+- [x] 移除列表/OCR/泛化词/百分比/答案片段、代词、multipart、元问题、极性和 relation 词表等机械阻断；这些属于语义复核内容。
+- [x] 保留 schema/槽位、逐字 claim、answer-in-claim、答案和跨槽答案泄漏、占位符、六槽唯一性及 source/hash 隔离。
+- [x] 新增 query 检索门禁：至少 3 个内容词，且至少 1 个内容词与对应 claim 重合；不使用 Retriever 或相似度模型做生成期调参。
+- [x] 定向测试 `54/54`、AST 和 `git diff --check` 通过；未产生新的外部调用。
+- [ ] 下一步以新 source identity 重新生成开发 batch 并做非盲语义复核；旧 artifact 不重写。
+
+### 2026-09-30：V25 两阶段联合生成 r4（当前状态）
+
+- [x] 新建并固定 `_r4` source plan：10 source、5 对、排除 24 份历史 V25 source plan；未读取 membership label、旧 query、response 或 score。
+- [x] 完成 20 次 `gpt-6-luna` source-level 生成；initial `10/10`、follow-up `8/10`、完整六槽 `6/10`。
+- [x] 完成非盲 development semantic review：接受 `5/10`；只有 trec-covid 有同数据集 `KB_Member`/`True_Non_Member` accepted pair，nfcorpus/scidocs 未形成有效匹配。
+- [x] 修复 `_reviewed_generation` 对两阶段 phase artifact 的 hash/record 校验并新增回归测试；定向测试 `55/55`。
+- [ ] 保持 `development_only / insufficient_matched_cohort`；query freeze、source index、Retriever、victim、formal 均未执行。下一步是补充独立 source 开发批次并优先取得每个数据集的有效匹配对，不放宽当前科研必要门禁。
+
+### 2026-10-01：V25 r5 development query freeze（当前状态）
+
+- [x] `_r5` source plan 已排除全部历史 V25 source，10 source、5 对，未读取旧 query、response、score 或 membership label 作为选择输入。
+- [x] 完成 20 次 `gpt-6-luna` 生成：initial `9/10`、follow-up `10/10`、完整六槽 `8/10`；非盲语义接受 `7/10`。
+- [x] 三数据集均有 accepted Member/True Non-member development pair；冻结主 query `42` 条、control query `84` 条，三臂计数为 clean-3 `21`、unconditional-6 `42`、follow-up-only-3 `21`。
+- [x] `_fixed_queries()` hash/identity 校验通过；当前 batch 未生成 retrieval、initial response、follow-up response 或 report。
+- [ ] 仍不能进入 formal：当前仅每数据集一个匹配 pair，下一步应先做本地 cohort/容量检查并决定是否继续补充 source，不能以该批小样本直接运行 Retriever 或 victim。
+
+### 2026-10-01：V25 Luna query 生成运行时提速
+
+- [x] `luna_query_generator` 请求速率上限调整为 8 RPM；现有三个 Luna 生成循环移除成功请求后的固定 1 秒等待。
+- [x] 未改变 query 语义、query budget、模型、重试策略、Retriever、victim 或评分；本轮外部调用为 0。
+- [ ] 后续新开发运行须记录新的 profile hash；旧 artifact 不续跑、不改写，query freeze、Retriever、victim 与 formal 仍保持暂停。
+
+### 2026-10-01：V25 r6 development source batch
+
+- [x] 完成 6 个新 source 的 source-exclusive prepare，排除全部已有 V25 source plan；未读取 membership label、旧 query、response 或 score 作为选择输入。
+- [x] 完成 `gpt-6-luna` 两阶段生成 12/12 次；完整六槽结构 `2/6`，非盲语义接受 `2/6`（SciDocs 1+1）。
+- [x] 保留并记录结构失败原因：claim overlap 不足、问题泄漏自身答案、follow-up 跨槽答案泄漏；`query_review.json` 已通过 hash/record 校验。
+- [ ] nfcorpus 仍无新增 accepted pair，development quota（2 对）未满足；不冻结本批 query，不运行 Retriever、victim、GPU 或 formal。下一步继续独立补 nfcorpus pair。
+
+### 2026-10-01：V25 r7 development source batch
+
+- [x] 完成 6 个新 source 的 source-exclusive prepare，排除全部历史 V25 source plan；未读取旧 query、response、score 或 membership label 作为选择输入。
+- [x] 完成 `gpt-6-luna` 两阶段生成 12/12 次；完整六槽结构 `4/6`，nfcorpus 两个 source 均通过。
+- [x] 完成 Assistant 非盲语义复核 `4/6`：nfcorpus 和 trec-covid 各 1 对，SciDocs 两个结构失败 source 拒绝；review hash/record 校验通过。
+- [x] r5/r6/r7 接受 source 的最低匹配对数达到 nfcorpus 2、scidocs 2、trec-covid 2，V25 development capacity gate 通过。
+- [ ] 保持 `formal_release_allowed=false`；需要先生成并固定一个跨批次 development cohort/query identity，确认后才考虑离线 retrieval 预检，暂不调用 victim 或 GPU。
+
+### 2026-10-01：V25 cross-batch cohort freeze and offline precheck
+
+- [x] 固定跨批次 development cohort：8 source，达到 nfcorpus 2 对、SciDocs 1 对、trec-covid 1 对最低配额；source/generation/review provenance 已写入 cohort artifact。
+- [x] 冻结 48 条主 query 和 96 条 controls，三臂计数为 24/48/24；`_fixed_queries()` 与 review hash/record 校验通过。
+- [x] 完成无模型的离线 retrieval 预检：query/source/hash、claim 逐字、内容词和 lexical anchor 全部通过；Retriever/victim/GPU 调用数为 0。
+- [ ] 当前唯一后续是评估是否授权真实 BGE Retriever 开发预检；即使执行，也只能使用该冻结 cohort，不得根据召回结果改写 query 或 source 选择。
+
+### 2026-10-01：V25 BGE retrieval development precheck
+
+- [x] 在 CUDA 环境对冻结 cohort 完成真实 BGE dense retrieval，48 条 query 全部写入 retrieval artifact，Member-only index 边界保持有效。
+- [x] 离线诊断通过：Member target-source hit@5 `24/24`，Non-member target-source hit@5 `0/24`，Member answer-surface hit@5 `14/24`；未产生 victim/API 调用。
+- [x] 保留 `578 > 512` tokenizer 长度警告，暂不改 chunk/query 协议；该提示需要单独的 chunking audit。
+- [ ] 继续保持 `formal_release_allowed=false`；下一步应先完成 chunking warning 的只读审计并决定是否需要新 development revision，不能根据 retrieval 数字调 query。
+
+### 2026-10-01：V25 retrieval surface audit
+
+- [x] 复核全部 10 条 Member answer-surface miss：目标 source 均已进入 top-5，固定归一化后 `10/10` 恢复，`cross_chunk_only=0`。
+- [x] 将 `14/24` 保留为严格 lexical diagnostic，不把它写成真实答案召回率，也不据此修改冻结 query 或 chunking；审计 artifact 已保存。
+- [ ] 若继续到 victim，先把该归一化规则作为冻结 scoring 输入，再执行回答与评分。
+
+### 2026-10-01：V25 retrieval surface audit
+
+- [x] 复核全部 10 条 Member answer-surface miss：目标 source 均已进入 top-5，主要是 tokenizer 标点空格变化和 chunk 边界造成的严格词面 false negative。
+- [x] 将 `14/24` 保留为保守 lexical diagnostic，不把它写成真实答案召回率，也不据此修改冻结 query 或 chunking。
+- [ ] 若继续到 victim，先冻结答案归一化和跨 chunk 证据判定规则，再执行回答与评分。
+
+### 2026-10-01：V25 development victim pilot
+
+- [x] 完成答案匹配归一化实现及回归测试；定向测试 `57/57`、AST、`git diff --check` 通过。initial/follow-up 对历史 cohort 使用显式 runner digest snapshot 的 audited runtime-drift 路径，未放宽默认身份校验。
+- [x] 冻结 cohort 完成 24 条 initial 和 9 条 correctness-gated follow-up victim 调用；总调用 `33`，无 transport/provider-model drift。initial 标签 `9 correct / 9 ambiguous / 6 incorrect`，follow-up `8 correct / 1 incorrect`。
+- [x] report 已写入 source-level `S_initial`、条件 `S_followup`、`S_chain`、`S_depth`、逐数据集和 macro 指标；Member 平均 `S_chain=0.6667`，Non-member `0`，三数据集各只有 1 对，AUC=`1.0` 仅为 development diagnostic。
+- [ ] 保持 `development_only / formal_release_allowed=false`；唯一下一步是扩大 source-level matched cohort，并在新 runtime identity 下重做下游检查，不能用本批小样本结果进入 formal 或调参。
+
+### 2026-10-01：V25 source-level matched cohort 扩充完成
+
+- [x] r8：8 source、16 次 Luna 调用、结构 `5/8`、语义接受 `5/8`，新增 nfcorpus 2 对；失败 source 保留在批次 artifact。
+- [x] r9：8 source、16 次 Luna 调用、结构 `4/8`、语义接受 `3/8`，新增 nfcorpus 1 对；SciDocs 无新增 pair，trec-covid 通过结构的单个 source 因时间条件模糊拒绝。
+- [x] expanded r2 cohort 已固定为 14 source、7 对：nfcorpus 5 对、SciDocs 1 对、trec-covid 1 对；主 query `84`、control `168`，计数 `clean_3=42`、`unconditional_6=84`、`followup_only_3=42`。query plan SHA-256=`a54dbc3c293afa25b3f2a1395978650b69cc881a380c6c1051eef6e8618a99cb`。
+- [x] 合并器保留原始 generation rows，重新通过 `_reviewed_generation()` hash/record 校验；没有读取 V24 labels、responses、scores 或 legacy controls，也没有新增 Retriever/victim/GPU 调用。
+- [ ] 保持 `development_only / formal_release_allowed=false`；下一步是对 r2 做离线 retrieval 预检，正式 victim 前仍需单独授权并重新核对 runtime identity。
+
+### 2026-10-01：V25 expanded r2 retrieval precheck 完成
+
+- [x] r2 `84` 条主 query 的 BGE dense retrieval 已完成；artifact SHA-256=`f5f0c2d9e38e0005e7f24cd2b3fd8025856dcfe9907454e62ecca7d706670b73`，query plan=`a54dbc3c293afa25b3f2a1395978650b69cc881a380c6c1051eef6e8618a99cb`，index identity=`94a4c0a1c8901d9359536f6a0929fa7201e37c803ec5f04c2e5e6a4035d1a31c`。
+- [x] Member-only/source/hash 门禁通过：Member `41/42` target-source hit@5，True Non-member `0/42`；source hash mismatch=`0`，非 Member chunk=`0`。
+- [x] 答案表面只作诊断：严格 Member `21/42`，归一化目标 chunk `40/42`；`27%`、`98.4%` 两条均在目标 chunk 内，未发现跨 chunk-only 证据缺失。chunk audit 仅发现一次整篇 source `578 > 512` 提示，128/32 chunk 窗口保持冻结。
+- [ ] 状态继续为 `development_only / formal_release_allowed=false`；下一步是重新核对新的 runtime identity 和答案判定规则后，再决定是否授权 r2 development victim pilot；不能用 retrieval 数字调 query、预算、chunk 或 scoring。
+
+### 2026-10-01：V25 r2 development victim pilot 完成
+
+- [x] 用户授权后完成 `42` initial + `15` correctness-gated follow-up，共 `57` 次 victim 调用；initial `15/42` correct，follow-up `12/15` correct、`2/15` incorrect、`1/15` ambiguous。
+- [x] 修复 follow-up budget drift：按 query plan 容量而非固定 48-call 上限计算；第一次失败未发请求。补充回归后 V25 定向测试 `58/58` 通过，r2 runner snapshot 与 audited runtime drift 校验通过。
+- [x] report=`artifacts/v25/development/gated_followup_cross_batch_cohort_r2_20261001/report.json`，SHA-256=`3cef5841456ac2c7333083dd6035ce02926f2f6c689beb78f3d200c0caaf9fbe`；Member 平均 `S_chain=0.5714`，Non-member `0`，nfcorpus AUC=`0.80`，SciDocs/trec-covid AUC=`1.00`，macro AUC=`0.9333`。
+- [x] 全量 unittest `58/58` 通过；report hash、runner hash、response 行数和 runner snapshot 均复核一致。
+- [ ] 仍为 `development_only / formal_release_allowed=false`；不将小样本 AUC、低 FPR 或 report 写成 formal 结论。唯一下一步是结果审计并决定是否继续扩大 source-level matched cohort。
+
+### 2026-10-01：V25 expanded r2 审计完成
+
+- [x] 独立只读审计通过：14 source、7 对、84 主 query、168 controls、42 initial response、15 follow-up response 的身份、隔离、预算、触发和 source-level score 与冻结产物一致。
+- [x] 审计 artifact：`artifacts/v25/development/gated_followup_cross_batch_cohort_r2_20261001/audit.json`；无 Luna、Retriever、victim 或 GPU 调用。
+- [ ] runtime drift 记录仍需在后续新 runtime identity 中明确包含 iterator materialization 与 follow-up capacity 两项修复；在此之前不得把 r2 报告升级为 formal。
+- [ ] 唯一下一步：若继续扩大 matched cohort，先新建 source/query/runtime identity；否则保留 r2 作为 development diagnostic，不调参、不改写旧 artifact。
+
+### 2026-10-01：V25 r10 扩容与 r3 query freeze
+
+- [x] r10 完成 12 source、24 次 `gpt-6-luna` 两阶段调用；结构通过 `4/12`，语义 accepted `2/12`，仅形成 SciDocs 1 对；失败记录和复核 artifact 保留。
+- [x] r3 合并 r2+r10，形成 16 source、8 对（nfcorpus 5、SciDocs 2、trec-covid 1）；`query_plan.jsonl` 96 条、controls 192 条，三臂 `48/96/48`，`_fixed_queries()` 验证通过。
+- [x] 代码验证：全量 unittest `58/58`、AST、`git diff --check` 通过；本轮 Luna 调用 24，未调用 Retriever、GPU 或 victim。
+- [ ] r3 仍是 `development_only / formal_release_allowed=false`；下一步若授权，只能对 r3 做固定 query 的 BGE retrieval 预检，不能据召回结果回改 query 或 source 选择。
+
+### 2026-10-01：V25 r3 BGE retrieval development precheck
+
+- [x] 在已核对 CUDA 环境中对固定 r3 运行 `--retrieve`；96/96 query 写入 `retrieval.jsonl`，未调用 victim 或外部 API。
+- [x] 通过 query ID、query-plan hash、单一 index identity、Member-only index 和 source hash 检查；Member target-source hit@5=`47/48`，True Non-member=`0/48`，返回 chunk 混入非 Member=`0`。
+- [x] 按数据集记录 Member target-source hit@5：nfcorpus=`29/30`、SciDocs=`12/12`、trec-covid=`6/6`；严格答案词面命中为 `26/48`，仅作 lexical diagnostic。
+- [x] 完成 warning 的只读 chunking audit：仅 `nfcorpus::MED-1106` 整篇 source 为 578 tokens，128/32 原始滑窗最大 128，解码再编码最长 131，实际 chunk 均低于 BGE 512 上限；保留 `retrieval_precheck_summary.json`（SHA-256=`18fb2e31db8462a0a90e01596b6c4d92941aaef9a53d56a1947c132e96803063`），不修改冻结 query 或 chunk 配置。
+- [ ] 状态保持 `development_only / formal_release_allowed=false`；下一步由用户决定是否授权 r3 victim pilot，且需使用新的 runtime identity。
+
+### 2026-10-01：V25 三实体双事实候选方案
+
+- [x] 完成 30 个 source 的盲容量审计：每个数据集 10 个，固定 seed=42，排除 V24 development exclusions 和历史 V25 source。
+- [x] 初步容量：likely feasible 19/30，borderline 5/30，not feasible 6/30；nfcorpus 7/10、SciDocs 7/10、TREC-COVID 5/10。
+- [x] 审计 artifact：`artifacts/v25/development/three_entity_two_fact_capacity_audit_20261001.md`；外部调用 0，未改变 r3。
+- [ ] 唯一下一步：对保留 source 开始新的 development entity/fact generation，并在生成后复核原文 span、双事实独立性、答案非可推导、跨槽隔离和 query 可检索性；未满足条件前不得合并 V25 主思路或进入 formal。
+
+### 2026-10-01：V25 三实体双事实 development generation r2
+
+- [x] 完成 24 个审计保留 source 的 `gpt-6-luna` entity/fact 抽取，产物为 `artifacts/v25/development/gated_followup_three_entity_two_fact_generation_r2_20261001/`。
+- [x] 结构通过 `3/24`，失败/不确定 `21/24`；主要失败为少于三个实体、实体记录不完整和 claim 未逐字包含实体。Retriever、victim、GPU/API 调用均为 0。
+- [x] 对 3 个结构通过样本完成 Assistant 非盲语义复核：接受 1/3（nfcorpus `MED-1242`），拒绝 SciDocs 2 条（跨实体重复、答案可由 initial 推出/实体过泛/事实不完整）；review artifact 已保存。
+- [ ] 当前只有 1 个 nfcorpus candidate、没有匹配 pair；不生成 query、不合并主线。下一步先继续新的 membership-blind source capacity/generation 批次或复核候选池计数差异，再决定是否扩大。
+- [ ] 审计汇总的 `19/5` 与逐 source 明细及本批实际 `18/6` 不一致；保留该问题，后续先核对，不改标签和历史 artifact。
+
+### 2026-10-01：V25 六槽构造稳定性修复
+
+- [x] 完成最小代码修复：失败 phase 只 repair 失败槽位一次，通过槽位不替换，repair 后复跑全部既有质量门禁。
+- [x] 保留 original/repair raw response、response hash、failed slots、provider identity；schema/phase size 错误时一次性 repair 三槽，禁止无限重试。
+- [x] 测试与验证完成：V25 `63/63`、全量 unittest `63/63`、AST、repair prompt format、`git diff --check` 均通过。
+- [ ] 当前仍未运行真实 Luna 或新 source generation；下一步若继续，先用新 artifact/runtime identity 生成开发批次并统计结构通过率与语义接受率。
+
+### 2026-10-01：V25 repair runner 新 source generation r11
+
+- [x] 新建 10-source 独立 development batch，使用新 source plan/runtime identity；未覆盖历史 source、generation 或 review artifact。
+- [x] 完成 20 次主 Luna phase 调用和 8 次失败 phase repair；结构通过 `5/10`，最终非盲语义接受 `4/10`，形成 nfcorpus 2 对。
+- [x] 失败证据与 repair 原始响应完整保留；主要失败为跨槽答案泄漏、claim overlap 不足、follow-up schema/slot 错误，以及 SciDocs 多值答案。
+- [x] 语义复核和生成摘要已写入新批次；Retriever、victim、GPU 和 formal 调用均为 `0`。
+- [ ] 下一步是继续扩大 source-level matched cohort，优先补 SciDocs/trec-covid；不能把本批 2 对 nfcorpus 结果当作 formal 或跨数据集结论。
+### 2026-10-02：V25 构造门禁简化
+
+- [x] retrieval question length/claim overlap 降为 diagnostic-only；不再单独阻断 source 或 phase。
+- [x] 保留六槽、逐字 source evidence、answer binding、当前/跨槽泄漏、follow-up pairing/non-derivability、provider 与 source/hash 隔离硬门禁；完整枚举答案允许但仍需 source 证据。
+- [x] repair 改为每个失败 phase 最多一次完整三槽重生成，repair 通过完整 phase 校验后替换；删除失败槽合并逻辑，保留原始/repair response 与 hash。
+- [x] 配置记录 `generation_repair: {max_repairs_per_phase: 1, scope: full_phase}`；定向测试 `63/63`，未执行外部调用。
+- [ ] 使用新的 development identity 重新生成小批 source，统计简化后的结构通过率和语义接受率；不得覆盖 r11 artifact。
+
+### 2026-10-02：V25 简化门禁新 development source 批次 r12
+
+- [x] 创建独立 10-source source-exclusive batch，排除全部历史 V25 source plan；source plan SHA-256=`c80b3b21708b0ef7071126a5651fad52d74df228eae2f7dbca2cfb78c6caed20`。
+- [x] `gpt-6-luna` 主 phase `20` 次、完整 phase repair `2` 次；结构通过 `7/10`，语义接受 `6/7`；失败证据和原始响应保留。
+- [x] 语义复核拒绝一个包含明显 `ρg/ml` 编码异常的 source；未修复原文或答案。
+- [x] 修复并测试两阶段 generation 的 offline replay，r12 replay structural pass=`7/10`，Retriever/victim/GPU 调用为 `0`。
+- [ ] 保持 development-only；下一步只能在用户明确决定后，对 accepted source 形成新的 query plan 或继续扩大 matched cohort，不得将 r12 直接当 formal 结果。
+
+### 2026-10-02：V25 shared-remote-target successor 候选设计
+
+- [x] 在 `研究记录/思路v25_AnchorMIA事实锚定成员推断攻击.md` 记录 3-local-anchor + 1-shared-`G` 的候选协议、逐槽门控、`G` 选择门禁、region 分层、source-level 评分与机制对照。
+- [x] 明确不同 source region 仅为优先条件；同 paragraph/chunk 可保留并记录，不据此单独声称 remote navigation。
+- [ ] 当前仅完成设计文档；V25 配置和代码未改，未生成 query plan，未运行 Luna/Retriever/victim/GPU。下一步先审阅设计；若决定推进，再以新 development identity 做 membership-blind 离线容量审计。
+
+### 2026-10-02：V25 shared-remote-target 小实验完成
+
+- [x] profile：Luna 默认模型已固定为 `gpt-6-luna`；配置 hash 绑定到 r3 run config。
+- [x] 实现独立 development runner `scripts/95_run_v25_shared_g_pilot.py`；不依赖旧六事实 runner，不修改 V25 主配置或历史 artifact。
+- [x] 构造：r3 6 source、6/6 source 通过 shared-G 结构门禁；r1/r2 的标题容量和逐字 claim 失败保留为失败证据。
+- [x] 执行：Luna `6`、BGE retrieval `54`、victim initial `18`、conditioned follow-up `10`；初问正确后才发送对应两臂 follow-up。
+- [x] 结果：触发槽 anchored `5/5`、no-anchor `2/5`；Member source 中 anchor 更好 `1/3`、持平 `2/3`；AUC 仅为 anchored `1.0` vs no-anchor `0.8333` 的小样本诊断。
+- [x] 记录：结果 artifact 为 `artifacts/v25/development/shared_g_anchor_pilot_r3_20261002/`，状态 `development_only`，未进入 formal。
+- [ ] 评分敏感性待处理：一个 no-anchor 输出是 G 的短形式（`2007–2010` vs `2007–2010 NHANES`），当前无预注册 alias，不能将 `5/5` vs `2/5` 解释为稳健 anchor 增益。
+- [ ] 唯一下一步：扩大 source-level matched cohort，并在冻结前加入 remote-only 与 wrong/permuted-anchor 对照；不根据当前 6 source 结果修改 query、预算、Retriever 或 scoring。
+
+
+### 2026-10-02：V25 shared-remote-target Non-member 追问诊断完成
+
+- [x] 新增 runner 诊断入口 `--run-nonmember-followup` 与独立报告入口 `--nonmember-followup-report`；只选择 `group=True_Non_Member`、`arm=anchored` 的 9 条冻结 query，不读取 initial correctness，不改写 gated follow-up artifact。
+- [x] 完成 9 次 victim 调用：`completed=9`，回答标签 `ambiguous=9`，`correct=0`；目标 Non-member source hit@5=`0/9`，G answer surface hit@5=`0/9`。
+- [x] 诊断 artifact 已保存到 `artifacts/v25/development/shared_g_anchor_pilot_r3_20261002/`，状态为 `diagnostic_only / development_only`；不得合并到 `followup_responses.jsonl`、`report.json`、主分、AUC 或 formal release。
+- [ ] 当前唯一下一步仍是扩大 source-level matched cohort，并在冻结前加入 remote-only、wrong/permuted-anchor 与预注册 answer alias；不根据这 9 条拒答结果调 query、Retriever、预算或 scoring。
+
+
+### 2026-10-02：V25 shared-remote-target query 构造率分解
+
+- [x] r3 当前 cohort 的 6/6 source 通过 generation 质量门禁；54 条冻结 query（18 initial、18 anchored、18 no-anchor）全部构造成功，`q1/q2/q3`、`q1'/q2'/q3'` 每个 slot 均 `6/6=100%`，Member/True_Non_Member 各组均 `3/3`。
+- [x] 同步记录检索分解：initial q1/q2/q3 target-source hit@5=`3/6, 2/6, 3/6`；anchored/no-anchor 各 slot=`3/6`，Member=`3/3`、True_Non_Member=`0/3`。
+- [x] 结论边界：100% 仅表示当前 r3 选入 cohort 的 query 构造通过，不表示所有 source 都能构造，也不表示 query 一定可检索或 victim 一定可回答；r1/r2 失败 artifact 继续保留。
+
+
+### 2026-10-02：V25 shared-G 100-source cohort 构造 partial attempt
+
+- [x] source frame 已固定为 100 个 source：`KB_Member=50`、`True_Non_Member=50`；独立 artifact 与 r3 隔离，downstream calls 仍为 0。
+- [x] partial generation 已记录 `9 passed / 2 failed_quality_gate / 1 attempt_started / 88 missing`；当前仅有 81 条 passed-source query capacity。
+- [ ] 继续 88 个未尝试 Luna source 及 non-passed retry 需要用户明确授权；Retriever/victim 仍未启动。
+
+
+### 2026-10-02：V25 shared-G 100-source cohort 构造完成（首次生成 + 一次 retry）
+
+- [x] 100-source frame 已完成首次构造与失败重试：`93/100` source 通过，`7/100` 保留为 `insufficient_atomic_facts` 失败证据；没有遗留中断记录。
+- [x] 可用 query capacity=`837`（93 source × 9）：initial/anchored/no-anchor 各 `279`；Member=`47/50`，Non-member=`46/50`。
+- [x] 数据集构造率：nfcorpus `34/34`、SciDocs `34/34`、trec-covid `25/32`；所有 downstream Retriever/victim 仍未启动。
+- [ ] 若要达到严格 50+50 的 query-usable cohort，下一步应先固定新的 membership-blind replacement source plan，替换 7 个 TREC-COVID failure source，再单独运行 replacement Luna construction；当前 100-source identity 不直接进入 Retriever/victim。
+
+### 2026-10-02：V25 shared-G replacement 7-source 构造完成
+
+- [x] 完成历史 V25 source 使用审计：80 个 source plan/manifest artifact、469 个已使用 source key；选择过程保持 membership-blind，未查看新响应或下游结果。
+- [x] 按 frozen TREC-COVID source-pool 顺序和固定 `3 Member + 4 Non-member` 配额选择 7 个未使用 source：ranks `128,129,130,131,132,133,135`；rank 134 已有历史使用记录。
+- [x] 新增独立入口 `scripts/97_run_v25_shared_g_replacement.py` 和 replacement artifact `artifacts/v25/development/shared_g_anchor_replacement_7_20261002/`；旧 100-source 与 r3 artifact 未修改。
+- [x] 用户授权的 7 次 Luna 构造调用已完成：`5/7` 通过，`2/7` 因 `insufficient_atomic_facts` 失败；Member=`2/3`，True Non-member=`3/4`。
+- [x] replacement 通过 source 提供 45 条 query capacity（initial/anchored/no-anchor 各 15）；与既有 cohort 合计 query-usable=`49 Member + 49 Non-member`，仍未达到严格 `50+50`。
+- [x] Retriever、victim、GPU、formal 调用均为 `0`；失败响应与独立 replacement identity 均已保留。
+- [ ] 当前阶段保持 `development_only / formal_release_allowed=false`；下一步若继续补齐 50+50，先建立新的 membership-blind 2-source replacement plan，再单独申请/执行额外 Luna 构造调用，不回改旧 identity。
+
+
+### 2026-10-02：V25 shared-G 50+50 fixed-index development run 完成
+
+- [x] fixed-index artifact 已准备并完成审计：`50 KB_Member + 50 True_Non_Member`，每数据集 50 个 Member index source，query plan 保持原冻结 identity；旧首轮 index retrieval 不进入 victim。
+- [x] retrieval 完成 `900/900`；Member target-source hit@5 为 initial `139/150`、anchored `144/150`、no-anchor `138/150`，True Non-member 三个 arm 均 `0/150`；主 index 未出现 Non-member chunk。
+- [x] initial victim 完成 `300` 次，follow-up 完成 `178` 次；所有请求 `completed`，provider model 固定为 `gemma-2-2b-it-bf16`。initial-correct gate 触发 `89` 个 slot，anchored/no-anchor 严格发送 `178=89×2` 次，实际发送集合与 gate 期望完全一致。
+- [x] source-level report 已生成：initial AUC `0.9228`；anchored-chain AUC `0.82`（CI95 `[0.75,0.88]`）；no-anchor-chain AUC `0.77`（CI95 `[0.70,0.84]`）。这些是 100-source development diagnostic，统计单位为 source document，不能写成 formal 攻击结论。
+- [x] 修复并验证 report 的两个汇总层 schema 问题后重生成 report；修复没有重跑外部调用。report SHA-256=`c63c51a75a479cd1e277ea3145ac9bf337ad811f5f1dbed550f4b3305c6ae9f3`。
+- [x] 本阶段累计真实 victim 调用 `478`；query、retrieval、index、模型、gate 和 scoring 均未依据本次响应后调，旧失败/diagnostic artifact 保留。
+- [ ] 唯一下一步：独立审阅 anchored 相对 no-anchor 的 source-level 解释，并在新 identity 下预注册 remote-only、wrong/permuted-anchor 和 answer alias 后再决定是否继续 successor；当前阶段保持 `development_only / formal_release_allowed=false`。
+
+
+### 2026-10-03：shared-G 独立机制审阅与对照补齐
+
+- [x] 独立审阅已完成：固定 100-source development run 的 triggered slots 为 89，anchored 58/89，no-anchor 56/89，差异 +2.25 pp；精确 McNemar p=0.7905。
+- [x] Member source-cluster bootstrap weighted delta +0.0230，95% CI [-0.0769,0.1266]；当前不能把该差异或 chain AUC 0.82 vs 0.77 写成 anchor mechanism 已成立。
+- [x] 已确认解释限制：initial gate 主导 membership 分离；Non-member triggered capacity 只有 2；anchored query 长度明显更长；answer matcher 有格式/等价表达敏感性；G 跨 region 只是 preferred，不是 hard gate。
+- [x] 分析包已生成：研究记录/v25_shared_g_mechanism_review_20261003/；包含独立统计、source-cluster bootstrap、McNemar、retrieval paired diagnostics、query-length audit、region audit 和控制设计。
+- [ ] 新 successor 设计预审：冻结并实现 correct_anchor、remote_only、same_source_permuted_anchor 三臂，保留同一 initial gate、同一 source/G、条件发送而非条件构造；最大预算改为每 source 12 次。
+- [ ] 新 successor 预审：在 victim 调用前冻结 answer aliases、ambiguous policy、region stratification、slot mapping 和 Holm 校正；若 Non-member trigger capacity 不足，将结论限定为 Member-side mechanism。
+- [ ] 新 successor 运行授权：未获得新的真实 Luna/Retriever/victim 调用授权前不得执行；当前 formal release 仍关闭。
+
+### 2026-10-03：主终点改为纠正 True Non-member 误报
+
+- [x] 明确主终点：不再把稳定的 local-anchor→G recovery gain 作为必要条件，改为 source-level false-positive correction。
+- [x] 当前 development diagnostic `tau=0.3`：initial True Non-member false positives `2/50`；anchored-chain correction `2/2`、FPR `4%→0%`；no-anchor-chain 也为 `2/2`、FPR `4%→0%`。
+- [x] 已记录 TPR trade-off：anchored Member `86%→64%`，no-anchor Member `86%→54%`。`2/2` 只能作 feasibility evidence，不能写成稳定 correction rate。
+- [x] successor core arms 改为 `correct_anchor` 与 `remote_only`；`same_source_permuted_anchor` 为可选 attribution control。core 最大预算 `3 + 2×sum(I_i)`，置换控制加入后为 `3 + 3×sum(I_i)`。
+- [ ] successor 预审：冻结 tau、最小 initial-FP capacity、FPC/FPR-before-after/member-retention 指标、answer aliases 和 ambiguous policy；保持条件发送而非条件构造。
+- [ ] 未获得新的真实 Luna/Retriever/victim 调用授权前不得执行 successor；formal release 仍关闭。
+
+### 2026-10-03：shared-G 赋分制校准完成（development-only）
+
+- [x] 主分数改为 `S_lambda=sum(I_i)+lambda*sum(I_i*F_i)`，保留逐槽 correctness gate 与 shared `G`，不改写冻结 response/query/retrieval artifact。
+- [x] 离线生成 `lambda={0.5,1,1.5,2}`、cutoff=`{1,2,3,4}` 敏感性网格；选择 `lambda=1`、initial gate=`sum(I_i)>=1`、操作性 cutoff=`2`。
+- [x] 选定参数的 anchored source score AUC=`0.926`、TPR=`80%`、FPR=`0%`；remote-only AUC=`0.9256`、TPR=`78%`、FPR=`0%`；两个初始 True Non-member 误报均纠正，但误报分母只有 2 个 source。
+- [x] 更新思路文档、独立 analysis report、stats appendix、figure catalog、review summary 和 control design；新增 `point_score_distribution.png`，保留旧阈值结果为历史诊断。
+- [ ] successor 运行前冻结公式、lambda、cutoff、answer rules 和 initial-FP capacity；未获新的真实 Luna/Retriever/victim 授权前不得执行，formal release 保持关闭。
+
+### 2026-10-03：fresh shared-G successor 五步执行（授权已获）
+
+- [x] 五步执行授权：用户要求一起完成，覆盖必要 Luna、Retriever/GPU、victim 调用；不再重复申请历史待办中的授权。
+- [x] successor config/代码固定：lambda=1、initial gate=1、cutoff=2、correct_anchor / remote_only、canonical matcher/空 aliases、最多一次构造 repair、FP capacity 下限20；HEAD+实际文件 hash 追踪未提交代码。
+- [x] fresh source cohort：固定100 source、50/50、各数据集34/34/32，排除历史479 source；Member-only index150 source在调用前固定；不补选构造失败。
+- [x] 本地门禁：专用Python与CUDA可用；74项定向测试、CLI和空白检查通过。补入同 cutoff 的 local_only 离线对照，防止将阈值提高写成纯G纠错。
+- [ ] 构造与Assistant盲预审：完成最多两次/source Luna调用，保留失败，逐条复核并冻结query计划与评估规则。
+- [ ] Retriever：对冻结query进行BGE dense top-k=5预检，校验Member-only index和source/hash隔离，不据召回回改query。
+- [ ] victim：先initial，再逐槽发送两个arm，完整校验多发/漏发/invalid/provider身份；source-level报告逐数据集、macro、CI、低FPR、赋分分布和误报/Member代价。
+- 当前唯一下一步：执行已授权的新cohort Luna构造；产物 `artifacts/v25/development/shared_g_point_score_fresh_100source_20261003/`，仍是fresh development validation，非formal test。
+
+### 2026-10-03：fresh shared-G successor 五步执行完成
+
+- [x] 97 个结构通过 source 已完成 membership-blind Assistant 预审：59 accepted、38 rejected；3 个构造失败保留，不补选；generation hash 已绑定。
+- [x] 完成 query freeze（59 source、531 query）、BGE retrieval（531/531）和 Member-only/source-hash 隔离校验。
+- [x] 完成 victim initial（177）及 correctness-gated 双臂 follow-up（90）；触发 45 个 slot，实际发送集合与 gate 期望完全一致，无漏发/多发。
+- [x] 完成 source-level report：评估 29 Member/30 True Non-member；local-only AUC=`0.9397`，correct-anchor=`0.9448`，remote-only=`0.9448`；初始误报容量 `1`，低于最小 `20`，只作 feasibility。
+- [x] 记录 Windows checkpoint 恢复：保留 partial-write 证据，恢复 `.tmp` 后补跑 37 个缺失 initial 调用；总调用和 response identity 已审计。
+- [ ] 当前唯一下一步：保持该批 `development_only`；若继续，建立新的 membership-blind cohort 以满足 initial false-positive capacity，再重新冻结并评估，不把本批结果晋升为 formal。
+### 2026-10-03：shared-G 跨批次零调用汇总与案例审计
+
+- [x] 只读汇总 r3、fixed-index、fresh 三个 development identity；审计自身外部调用为 0，没有修改既有 response/retrieval/score artifact。
+- [x] 完成 source-level 批次表、gated/forced diagnostic 分离、retrieval target/G surface 命中统计、Member retention/TPR cost 和三条自然误报案例审计。
+- [x] 记录自然 gated false-positive correction 的描述性结果：fixed 2/2、fresh 1/1，跨批次 tally 3/3；不合并为 formal correction rate 或 CI。r3 9 条 forced non-member follow-up 保持 diagnostic_only。
+- [x] 明确解释边界：fixed/fresh 中 correct-anchor 与 remote-only 的纠正集合相同；赋分 cutoff 的阈值变化和无 G 得分是当前纠正路径，不能写成 anchor-specific mechanism。
+- [x] 审计产物：研究记录/v25_shared_g_mechanism_review_20261003/cross_batch_audit.md 与 cross_batch_audit.json。
+### 2026-10-03：shared-G 容量门槛后续决定（superseding）
+
+- [x] 根据用户决定，不再执行“在单一新 cohort 中取得至少 20 个 initial True Non-member false-positive source”的容量扩展步骤；不再为此支线新增 Luna、Retriever、victim 或 GPU 调用。
+- [x] 当前研究结论保留为：fixed-index 与 fresh 两个独立 development identity 均观察到自然非成员初始误报被二阶段赋分筛除，shared-G 误报纠正机制的可行性已经得到跨批次案例支持。
+- [x] 保留 cross-batch audit、三条自然误报案例和 r3 forced diagnostic 作为审计证据；不删除、不重写历史 artifact。
+- [ ] 本支线不晋升为 formal test；后续若要正式实验，需要另行明确 formal 目标和冻结方案，不再默认以 20 个误报容量作为本支线的当前下一步。
+
+### 2026-10-03：V25 shared-G query construction 覆盖率与语义稳定性
+
+- [x] 将当前工作范围切到 query construction；MEntA 复现单独后置。本步骤不以攻击 AUC、初始误报容量或 victim 结果调参。
+- [x] 新鲜 development 配置与 runner 已接通：`scripts/103_run_v25_shared_g_successor.py` 默认使用 `configs/v25_shared_g_query_stability.yaml`，旧 `v25_shared_g_successor.yaml` 保留为历史配置。
+- [x] Luna 只生成 3 个 local facts + 1 个 `G`；程序派生 3 个共享同一 canonical `G` 的 remote-only 问题，以及逐槽带对应 local answer 的 anchor 问题。query plan 构造会 fail closed 校验配对和目标一致性。
+- [x] 一次有限 repair 会根据明确 validator failure codes 重试，且不复制旧 raw response；格式 alias 在 query freeze 时确定，禁止语义性改写、删冠词/撇号或 response-dependent alias。
+- [x] 离线旧响应 replay 为 `84/100` 新规则结构通过，但旧 Assistant review 只与其中 `58` 条交叉接受；它不能估计新 prompt 的实际构造或语义覆盖率。
+- [x] 本地 cohort/index manifest 已准备并 hash 校验：100 source、50/50、每数据集 34/34/32；Member-only index 150 source；历史 source 排除数 579。prepare 外部调用为 0。
+- [x] 验证：shared-G query construction `11/11`，V25 gated follow-up `74/74`，全量 unittest `85/85`，`git diff --check` 通过。
+- [ ] 当前唯一下一步：获得新批次 Luna 明确调用授权后，最多运行 200 次 construction（100 source × 最多 2 attempts）；随后 membership-blind Assistant review，计算 structural pass、semantic acceptance、query-usable source coverage 和逐数据集结果。此步骤不运行 Retriever/victim，不进入 formal，也不按成员身份/攻击输出修订 prompt。
+
+### 2026-10-03：V25 shared-G anchor 自然度修订（superseding）
+
+- [x] anchor query 改为引用配对 local claim，再复用完全相同的 canonical `G.question`；冻结 query 记录 `anchor_claim`，并校验配对、跨槽答案泄漏与 G 答案泄漏。
+- [x] 已切换到新的 query-construction identity/output path，原先已准备的 source/index/run config 不覆盖、不迁移；新身份目前尚未 prepare。
+- [x] 定向构造测试 `15/15`、gated-pilot 回归 `74/74`、当前工作树全量测试 `89/89` 通过；外部 API、Retriever、victim 与 GPU 调用为 `0`。
+- [ ] 当前唯一下一步：执行新身份的本地 prepare 与 query fixture 审阅；再取得明确 Luna 调用授权后，做 membership-blind construction 和 semantic review。本阶段不运行 Retriever/victim。
+
+### 2026-10-03：claim-anchor fresh identity 本地 prepare 完成（superseding）
+
+- [x] 新身份已完成本地 prepare：100 source，50/50；nfcorpus/SciDocs/trec-covid 为 34/34/32；Member-only index 150 篇；排除历史 679 个 source。
+- [x] source/index/run-config SHA-256 已写入研究 notes；重复 `--prepare` 返回 `already_prepared` 并通过 drift 校验。外部调用为 0。
+- [x] 原计划对 100-source cohort 运行最多 200 次 Luna 构造的下一步已由 12-source 小样本 pilot supersede；100-source Luna 调用没有执行。
+
+### 2026-10-03：claim-anchor 构造器小样本验证完成（development-only）
+
+- [x] 固定 12 source，三数据集各 4 篇；与此前 100-source identity 零重叠，不替换构造失败样本。
+- [x] Luna 实际调用 15 次：首轮 12、失败 repair 3；结构通过 9/12（75%），repair rescue 为 0。
+- [x] Assistant membership-blind semantic review：7/9 结构通过样本接受（77.8%）；端到端可用覆盖 7/12（58.3%）。按数据集：nfcorpus `4/4` 结构、`4/4` 语义；SciDocs `3/4`、`2/3`；trec-covid `2/4`、`1/2`。
+- [x] 冻结 7 个接受来源的 63 条 query，仅完成本地 freeze 校验；Retriever、victim、GPU 调用均为 0，未进入 formal。
+- [x] 当前 pilot 阶段完成；不追加真实调用、不扩大样本。
+- [x] 最低必要门槛已包含答案完整性；对宽泛的 “what ... used” G 问法，源 claim 若明确列出 `X and Y have/are/were used`，答案只覆盖其中一项时结构拒绝。
+- [x] 回归验证通过：构造器 17/17、V25 gated-followup 74/74、`git diff --check`；未调用 Luna、Retriever、victim 或 GPU。已完成 pilot 的计数和产物不改写。
+- [x] 上述不扩样状态由用户新指令 supersede；另建 r2 独立身份，对第二批 12 篇实际复测，不修改第一批 artifact。
+
+### 2026-10-03：claim-anchor 构造器第二批 12-source 复测
+
+- [x] 本地 prepare：12 source（3 数据集各 4）、6 Member/6 True Non-member、Member-only index 9；历史 source 排除 791 个，与第一批 key/hash 零重叠。
+- [x] Luna generation：首轮 12 次、repair 6 次，共 18/24 次上限；首轮结构 6/12，repair rescue 3，最终结构 9/12。最终 3 条失败原样保留。
+- [x] Membership-blind Assistant semantic review：9/9 接受，端到端可用覆盖 9/12（75%）；逐数据集 nfcorpus 4/4、SciDocs 3/4、trec-covid 2/4。
+- [x] Query freeze 完成：9 source、81 query（3 个 arm 各 27）；没有执行 Retriever、victim、GPU 或 formal test。
+- [x] 本批没有样本触发新增的 coordinated-used answer gate；实际触发效果仍只由正反单测验证，不能据本批推断其经验拦截率。
+- [x] 按用户最新标准，只要求答案有源文依据且能正确回答问题；其他同样成立的答案或附带标准差不单独判错。严格 semantic re-audit 及其 54-query freeze 保留为 diagnostic-only，r2 主结果仍按 9/9 接受、9/12 可用和 81 条 query 记录。
+- [x] 本轮 query-construction 小样本验证收尾；不追加 semantic audit、扩样或外部调用。后续工作依用户另行指示。
+
+### 2026-10-03：新构造代码 100-source shared-G 完整 development run
+
+- [x] 用户要求使用新构造代码完成 50 Member / 50 True Non-member 全链路；旧 fresh-100 identity 因绑定的 `scripts/95` hash 与当前代码不同而拒绝续跑，旧 artifacts 保持不变。
+- [x] 新 identity/config：`configs/v25_shared_g_query_stability_claim_anchor_fresh_100source_r2.yaml`，seed=44，固定 100 source（34/34/32）、50/50，formal release 关闭。
+- [x] membership-blind prepare 完成：Member-only index 150 篇，排除历史 803 个 source，外部调用 0；新代码/config/source-pool hashes 由 run config 固定。
+- [x] Luna generation 完成：首轮 100 次、repair 25 次，共 125/200 次调用；首轮结构通过 75/100，repair 后 91/100 通过，9 个终态构造失败保留。
+- [x] 对 91 个结构通过 source 完成 Assistant membership-blind 复核：接受 89、拒绝 2；端到端可用覆盖 89/100。按数据集 nfcorpus 31、SciDocs 30、trec-covid 28 个接受。
+- [x] 冻结 89 个接受 source 的 801 条 query（initial/correct_anchor/remote_only 各 267）；generation、semantic review、query plan、freeze 与 Member-only index 均由 artifact hash 绑定，未补选失败样本。
+- [x] BGE dense top-k=5 retrieval 完成 801/801；每条返回 5 个 chunks，Member-only index identity、query hash 与 source/hash 隔离检查通过。641>512 警告来自全 source 分块前的 tokenizer 编码，实际 query 最长 134 tokens，embedding 只接收 128-token chunks。
+- [x] 固定 victim model 完成 267/267 initial query；matcher 标签 correct=107、incorrect=49、ambiguous=111，逐槽门控触发 107 个 slot。
+- [x] 两个 arm 完成 214 个 correctness-gated follow-up；gate audit：107 个触发槽，expected=observed=214，missing=extra=0。
+- [x] source-level development report 完成：89 个 source（45 Member/44 True Non-member），cutoff=2 时 local-only TPR/FPR=`80.0%/0%`，correct_anchor 和 remote_only 均为 `95.6%/0%`；report SHA-256=`1901b4421ff797f4f0a786c36ebb1aa90c3f07588a1848d9a1ba5ab6db8edf12`。
+- [x] 解释边界：仅 2 个 initial false positives，local-only 在同 cutoff 下同样排除 2/2；不得将误报排除归因于 G。结果为 development feasibility，不是 formal test。
+- 本批完整 development run 已结束；不自动扩样、晋升 formal 或启动 MEntA 复现，后续按用户新指示推进。
+
+### 2026-10-04：shared-G 开发验证收尾，转向正式评估准备（superseding）
+
+- [x] 按用户最新反馈，停止追加 development 小实验、同预算普通事实追问对照和新归因臂；此前会话提出的同预算小对照不再作为下一步或前置门槛。
+- [x] 沿用当前构造、逐槽 gate、`lambda=1`、`cutoff=2`、answer policy 和已有三个比较项；历史配置与 artifact 不改写，实际查询预算差异及机制归因限制如实保留。
+- [ ] 当前唯一下一步：准备现有方案的最小正式评估配置草案，明确固定未使用 source split、KB 规模、模型/Retriever、查询预算、source-level 评分/指标、seed 和 config/code 冻结范围；正式规模与运行目标尚待确定，不追加开发实验。
+- [x] 本轮只更新两份研究总表，无代码/config 修改，无真实调用或正式运行；`formal_release_allowed=false` 保持，本次反馈不视为新的真实调用授权。
+
+### 2026-10-04：shared-G 正式评估代码与固定 split 准备完成（superseding）
+
+- [x] 独立模块包 `src/shared_g/` 与新入口 `scripts/104_run_v25_shared_g_formal.py` 完成；来源准备、构造/query、检索、victim、评分、评估及读写分别实现，入口仅编排。旧脚本和历史 artifact 保留。
+- [x] 新正式配置 `configs/v25_shared_g_formal.yaml`：seed=45、逐数据集 +offset；三数据集各 1000 Member/1000 Non-member，KB 各 1000 Member；current claim-anchor/格式 alias/逐槽 gate/lambda=1/cutoff=2 沿用，主指标固定为 correct_anchor Macro source AUC。
+- [x] 明确 V24 原文复用且新分配 membership、新构造 query；排除 V25 开发历史及显式 V24 开发输入，不使用旧 membership、eligible、query、response、score 选择样本。指定 V24 nfcorpus formal 身份输入重合 1184 source，原文复用口径需要在结果中保留。
+- [x] 本地 prepare 完成：6000 source、3000 Member-only index source，source/key/text-hash 隔离通过；产物 `artifacts/v25/formal/shared_g_gemma2b_bge_seed45_20261004/`，状态=`prepared_before_construction`，重复 prepare/hash 校验通过。
+- [x] 新 35 项 mock 回归和全量 126 项 unittest 通过；CLI、AST、真实数据 capacity check 通过。构造/调用/评分一致性及恢复门禁均为本地测试，不是正式运行。
+- [ ] 固定 cohort Luna construction：每 source 最多两次，单 wave 最多 200 次，总上限 12000 次；尚未授权或执行。
+- [ ] 全部结构通过 source 的 Assistant membership-blind 预审，保存完整覆盖的 generation-hash-bound semantic review；统一 query freeze，不补样，失败 Member 保留在 KB。
+- [ ] 按 nfcorpus → SciDocs → trec-covid 单 cell 完成真实 BGE 检索、initial、两臂 gated follow-up；正式 victim 上限 54000 次，尚未授权或执行。
+- [ ] source-level 正式报告：逐数据集/等权 Macro AUC、配对 CI、固定 cutoff/经验低 FPR、原始 6000 候选覆盖与弃权、实际成本和失败；不把阈值变化写成 G 机制或声称同预算优势。
+- 当前唯一下一步：取得 Luna 明确调用授权后执行固定 split 的 query construction。本轮真实 Luna/Retriever/victim/GPU 调用均为 0；没有 query freeze、正式响应或正式 AUC，不自动提交或推送。
+
+### 2026-10-04：正好 6000 篇合格 source，历史原文可复用（superseding）
+
+- [x] 用户修正最终规模为合格 6000 source；三数据集各 2000 篇合格后才各划分 1000 Member / 1000 Non-member。旧固定候选、不补选方案被替代，旧三份 prepare artifact 原样保留，没有对旧身份运行 Luna。
+- [x] 用户允许历史原文复用；原文去重，事实/query/membership 全部新生成。历史身份只统计原文重用，不使用旧 labels/eligible/responses/scores 作选择依据；论文推断总体明确为合格 source。
+- [x] 在原模块和同一个 YAML 上实现固定无标签候选顺序、结构失败继续下一个候选、语义拒绝不 repair、逐记录 hash 绑定的增量盲预审、各数据集恰好达标才能冻结，以及包含被丢弃候选成本的报告。入口继续只编排；新增 candidate manifest 直接固定选择顺序，不新增治理层。
+- [x] Luna 构造已获用户明确授权；单 wave ≤200，每 source ≤2，总调用 ≤12000。到上限而仍未达标则保留状态，不自行增加预算。Retriever/GPU/victim 仍未授权或启动。
+- [x] 首轮定向 43/43 mock 回归通过；补充候选成本回归后待完成完整验证。
+- [ ] 新身份 `shared_g_qualified6000_gemma2b_bge_seed45_20261004` 的本地候选 prepare 与恢复/hash 检查。
+- [ ] 固定顺序执行 Luna construction，累计合格配额 nfcorpus=2000、SciDocs=2000、trec-covid=2000；每批结构通过来源进行 Assistant 盲预审，拒绝后按序补足。
+- [ ] 全部审查覆盖且配额恰好达标后，一次生成 6000-source split、3000-source Member-only index、54000-query plan 并统一 freeze。
+- [ ] 另行获得下游授权后按单 dataset/cell 执行 BGE / initial / gated follow-up 和 source-level 正式报告。
+- 当前唯一下一步：完成新流程回归和 prepare 后启动 Luna 构造。当前真实调用仍为 0，未产生正式 victim 响应或 AUC。
+
+#### 执行前检查完成
+
+- [x] 新 44 项 / 全量 135 项 unittest、AST、CLI/dry-run、空白检查通过。
+- [x] 固定候选 prepare 完成，148191 source（nfcorpus=3524、SciDocs=24060、trec-covid=120607）；正式 source/index manifest 不存在，当前 membership 数=0，目标合格数=6000。
+- [x] 新身份恢复/hash 检查通过；candidate SHA-256=`e8238b7b309fa07530bfe9a3318314f3a88ef7625469501f5fc32f2d748eadc1`；run config SHA-256=`1f124be0c71f213a9c3b1743d99a58411d001abda625d532c14e064969c09523`。旧 prepare 没有新增调用或被覆盖。
+- [ ] 启动并按 nfcorpus → SciDocs → trec-covid 连续构造，每 wave≤200、总调用≤12000；结构候选达标后进入盲预审，语义拒绝后补足。当前唯一下一步是已授权的真实 Luna 构造。
+
+#### 已启动，运行中（北京时间 14:40 快照）
+
+- [x] 14:32:54 启动现有 `104 generate` CLI 的逐 wave 顺序运行，当前 nfcorpus/wave 1，PID=75288、执行会话=25022。每 wave≤200、总调用≤12000、每 source≤2；达到结构候选配额后转向盲预审，预算/候选不足则保留证据并停止。
+- [ ] Luna 全 cohort 构造：快照为 25 次请求已开始、24 次完成、1 次进行中；15 source 结构通过、2 source 终态结构失败，provider=`gpt-6-luna`、transport retry=0。该计数不是完整 wave 结果。
+- [ ] Assistant membership-blind 预审：首批接受 8/8，终态记录 hash 已绑定；结构通过但尚未复核的来源不计入合格配额。
+- [ ] 最终合格配额：nfcorpus=8/2000、SciDocs=0/2000、trec-covid=0/2000（快照）。达到各数据集正好 2000 并完成全部结构通过来源预审后，才能生成最终 source/index manifest 和统一 freeze。
+- 当前唯一下一步：继续运行中的 Luna 构造并按批盲预审，拒绝后按固定顺序补足。正式 membership 仍未分配，Retriever/GPU/victim 均为 0；不进入下游，不自动提交或推送。
+
+#### 2026-10-04：后台恢复与持续重连已生效（superseding，15:18 快照）
+
+- [x] 查明旧进程已在 14:46:44 的第 44 次请求退出；MED-1188 第二次构造终态为 `uncertain_transport/RuntimeError`，具体底层原因未保存。保留 43 个已返回响应和 1 个不确定记录；停止时 26 结构通过、4 终态结构失败、1 调用不确定，语义接受 8、拒绝 0。
+- [x] 用户已明确授权继续后台构造与持续网络重连。现有客户端对可恢复断连、超时、429/服务端错误在同一逻辑请求内持续退避重连，无单请求次数上限；鉴权或模型身份等不可恢复异常仍暂停。每 source 内容尝试≤2、每 wave 逻辑请求≤200，12000 总预算计入全部实际 HTTP 发送和重连，不增加总预算。
+- [x] 在现有文件修复运行恢复、脱敏诊断与实际发送计数；没有新增配置副本、治理层或编排脚本。48/48 定向、139/139 全量 unittest、AST 与空白检查通过；测试为 mock，不代表已观察到真实网络重连。
+- [x] 恢复前旧 candidate/generation/review、151 个输入及 profiles 校验一致。可变 run config 保存旧配置/代码 hash 与第 44 次请求边界，绑定当前版本并初始化 `construction_wire_calls=44`；新 config SHA-256=`26a4865d93825282fe5fb277b4b244fea39a69717818452c4a844f96c281557f`。候选、Prompt、模型、query/scoring 语义不变，无新协议版本、已有响应无需重跑。
+- [x] 15:17:19 已恢复后台，PID=83624、执行会话=62633；按 nfcorpus → SciDocs → trec-covid 调用现有 `104 generate`，旧终态不确定候选不重发。15:18:08 已有 47 次逻辑请求/实际发送，46 终态、1 进行中；恢复后两次响应实际 model=`gpt-6-luna`、transport retry=0。
+- [ ] 全 cohort 构造继续运行；当前结构通过 26，Assistant 语义接受 8，未复核者不计合格配额。三数据集精确配额仍为 nfcorpus=8/2000、SciDocs=0/2000、trec-covid=0/2000（该快照）。
+- [ ] 对后续终态结构通过来源完成 Assistant membership-blind 预审；语义拒绝后按原顺序补足。达到每数据集恰好 2000 且复核全覆盖后，生成 6000-source split、3000-source Member-only index 和统一 query freeze。
+- 当前唯一下一步：继续已运行的 Luna 后台构造，直至结构候选达标等待预审或实际发送总预算/候选池耗尽；完成预审并补足后才 freeze。正式 membership 未分配，Retriever/GPU/victim 调用=0，没有正式攻击结果；不自动进入下游、不提交或推送。
+
+#### 2026-10-04：继续运行与第二批预审（15:27 快照）
+
+- [x] 用户要求继续；确认现有后台进程仍在运行，PID=83624 / child=77200、会话=62633，恢复/hash 检查通过；没有重复启动或修改代码/config。
+- [x] 实际 HTTP 408 已自动重连一次后完成同一 `nfcorpus::MED-2982:construction:1` 请求，provider=`gpt-6-luna`、终态 passed，实际发送 2 次；运行未因这次暂时性错误中断。
+- [x] 新增 20 篇完整原文与事实的 Assistant membership-blind 预审，接受 20、拒绝 0；按用户既定答案正确性标准，不因另有正确答案单独拒绝。累计接受 28、拒绝 0；原决定未改写，每条绑定终态 record hash。semantic review SHA-256=`586dad48cec31c9e602b609ed73ffc9787e52467a73155d417a8e039cbcd4ae2`；无额外 reviewer API 调用，不是独立人工标注。
+- [ ] 构造持续运行：15:27:30 为 76 次逻辑请求/77 次实际发送，75 终态、1 进行中；43 source 结构通过，9 终态结构失败，1 调用不确定。结构通过中 15 尚待预审；最终合格配额 nfcorpus=28/2000、SciDocs=0/2000、trec-covid=0/2000。
+- 当前唯一下一步：继续现有后台按固定候选顺序构造并完成批次盲预审；三数据集各恰好 2000 合格后才统一 freeze。每 source 内容尝试≤2、每 wave 逻辑请求≤200、实际 HTTP 总预算≤12000；membership 未分配，Retriever/GPU/victim 调用=0，不自动进入下游或提交。
+
+#### 2026-10-05：后台进度检查（19:42 快照）
+
+- [x] nfcorpus 已构造 2000 篇结构通过候选，尝试 2294 篇；仅 28 已盲预审接受，1972 待审，最终合格配额尚未完成。
+- [ ] SciDocs 构造进行中：1700 篇结构通过，1700 待审；尝试 1940 篇，其中 239 终态结构失败、1 正在请求。合格配额仍为 0/2000。
+- [ ] trec-covid 尚未开始，结构通过与合格均为 0/2000。
+- [ ] 合计结构通过 3700，Assistant 盲预审接受 28、拒绝 0、待审 3672；预审需补做，不能将结构通过直接记为最终合格。
+- [x] 19:42:54 快照：5463 次逻辑请求、5685 次实际 HTTP 发送，5462 终态、1 进行中；总实际发送预算≤12000。19:44 校验通过时发送 counter=5691，PID=83624 / child=161364 仍运行；沿用原任务，没有重复启动或改代码/config。
+- 当前唯一下一步：继续现有后台完成 SciDocs → trec-covid 构造，并补做盲预审、拒绝后按序补足；三数据集各恰好 2000 合格才统一 freeze。membership 未分配、query freeze 未生成，Retriever/GPU/victim 调用=0。
+
+#### 2026-10-06：后台进度检查（08:59 快照）
+
+- [x] nfcorpus / SciDocs 各 2000 篇结构通过候选；对应最终合格配额分别仍为 28/2000、0/2000。
+- [ ] trec-covid 构造进行中：1665/2000 篇结构通过，1665 待审，最终合格 0/2000。
+- [ ] 合计 5665/6000 篇结构通过（94.4%），对应 50985 条构造 query；Assistant 预审接受 28、拒绝 0、待审 5637。后台没有自动推进语义预审，最终合格仍为 28/6000。
+- [x] 北京时间 08:59:12 快照：8344 次逻辑请求、8692 次实际 HTTP 发送，1 次进行中；父进程 PID=83624 / child=273172 仍运行，沿用原 12000 次实际发送总预算，未重复启动或修改代码/config。
+- 当前唯一下一步：继续现有 trec-covid 构造并补做盲预审，语义拒绝后按序补足；全部预审覆盖且各数据集恰好 2000 合格后才统一 freeze。正式 membership/source/index manifest、query freeze 和攻击结果尚未生成。
+
+#### 2026-10-06：构造中断恢复（10:56 / 10:59 快照）
+
+- [x] 查明原构造进程及执行会话已不存在，最后一次请求只保存 attempt_started 与一次实际发送；具体退出原因未知，不能标为已完成或确定网络失败。
+- [x] 恢复前 config/code/input/profile 与现有预审绑定校验通过。仅为 `trec-covid::ekqflx7i:construction:2` 追加 uncertain_transport 终态，保留原始记录，不重发不确定候选，不重置 9124 次发送计数；候选固定顺序与终态 hash 检查通过。
+- [x] 10:59:15 在已有 Luna 授权和 12000 次实际发送总预算内，启动隐藏后台的现有 104 generate 单 wave（trec-covid，max-new=200），PID=296080；没有代码/config 修改或新编排脚本。
+- [ ] 10:59:46：结构通过 5973/6000，nfcorpus=2000、SciDocs=2000、trec-covid=1973；还差 27 个结构候选。新进程首个请求已成功，8779 次逻辑请求、9127 次实际发送，1 次进行中。
+- [ ] Assistant membership-blind 语义预审仍接受 28、拒绝 0，5945 篇结构通过候选待审；最终合格 28/6000，尚无正式 query freeze 或 membership 分配。
+- 当前唯一下一步：完成恢复中的 trec-covid 构造并补做积压盲预审，拒绝后按序补足；各数据集恰好 2000 合格且全部复核覆盖后统一 freeze，不自动进入 Retriever/GPU/victim 阶段。
+
+#### 2026-10-06：结构候选与 query 构造完成（11:40 检查）
+
+- [x] 11:09:16 最后一批构造完成；nfcorpus、SciDocs、trec-covid 各恰好 2000 篇结构通过 source，共 6000 篇、54000 条构造 query 条目。后台已结束，状态 `awaiting_semantic_review`；没有未完成请求，不重复启动生成。
+- [x] 11:40:51 计数：6837 篇尝试候选、6000 结构通过、835 两次结构失败、2 调用不确定；8816 次逻辑请求、9164 次实际 HTTP 发送，成本对账与 config/code/input/profile、generation/response、候选顺序和预审绑定检查通过。原 12000 次总预算剩余 2836。
+- [ ] Assistant 盲预审：接受 28、拒绝 0、待审 5972（nfcorpus 1972 / SciDocs 2000 / trec-covid 2000）。最终合格仍为 28/6000，不能因结构配额完成自动接受待审来源。
+- [ ] 完成全部预审，拒绝后按固定候选顺序补足各 2000 篇合格；达到精确合格配额且预审全覆盖后生成正式 split/index/query plan 并 freeze。当前 membership 未分配，query freeze 未生成。
+- 当前唯一下一步：逐批补做 5972 篇待审候选的 Assistant membership-blind 语义预审；需要补选时沿原预算和候选顺序执行。没有代码/config 修改、新 API/Retriever/GPU/victim 调用或正式攻击结果，不自动进入下游。
+
+
+#### 2026-10-06：Luna 批量 AI 预审已启动（superseding，12:24 快照）
+
+- [x] 用户明确授权 Luna 批量 AI 预审，并要求标准为“能用、没有明显错误”。仅明确无原文依据、矛盾或答非所问退回；不增加唯一答案、措辞完美、跨段或额外统计量等硬门禁。原 12000 次总上限现在合并计算构造 + AI 预审实际发送，所有重连计入。
+- [x] 原结构候选仍为各 2000 篇、共 6000 篇；补做 10 篇完整 Assistant annotation 后，原始 Assistant 决定累计 38 接受、0 拒绝，旧决定未改写。AI 原始响应、逐篇理由与 Assistant 复核明确分别记录，均不是独立真人标注。
+- [x] 独立 review 模块与既有入口小扩展完成；每批最多 10 篇，`review-all` 仅顺序预审及调用现有 generate 补选，暂时性网络问题持续重连，达到预算/候选上限则停止。没有新协议号、配置副本、编排脚本或授权/ledger 层。
+- [x] 151 个输入、profiles、候选/生成记录及 38 条 Assistant 基线验证一致后，更新现有可变 run config 的代码/config 绑定并保留旧基线。主事实/query/scoring、原候选顺序与模型未改；config SHA-256=`68cd82b1f6332a1f77abc2fba5904d729c2f4c4518377a563392d4db0ff8ba47`。构造发送 counter 保持 9164，旧恢复字段及失败证据保留。
+- [x] 首个真实批次 model=`gpt-6-luna`、10 篇、原判 9 接受/1 退回、响应 11.36 秒、无重连。Assistant 复核 MED-5024 后按既定宽松标准接受；仅追加 assistant_adjudications，原 AI 退回和响应不变。代码同时禁止覆盖既有复核、超过精确配额或在 freeze 后复核改变集合。
+- [x] shared-G 定向 60/60、全量 unittest 151/151、17 个 Python AST、CLI help、空白检查通过；mock 测试不作为真实网络/真人审查证据。
+- [x] 12:23:29 启动隐藏后台的现有 `104 review-all`，PID=41596，日志 `artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004/semantic_review_20261006_122329.*.log`。12:24:23 已确认仍运行，4 批次终态/1 批次进行中；AI 已预审 40 篇，原始 Assistant 38 篇、Assistant 复核 1 篇。
+- [ ] 最终合格（该快照）：nfcorpus=77/2000、SciDocs=0/2000、trec-covid=0/2000；最终退回 1、待审 5922。9164 构造发送 + 5 预审发送 = 9169，剩余原预算 2831。不是已完成 6000 篇预审；AI 预审有误判可能，原始判断与复核理由均保留。
+- [ ] 后台完成三个数据集预审及必要补选；各数据集最终恰好 2000 接受且全部结构通过来源审查覆盖后，才能生成正式 source/index/query plan 并 freeze。
+- 当前唯一下一步：继续已授权的后台预审及按原固定候选顺序补足。暂估 3–6 小时，补构或重连会延长；当前 membership 未分配，Retriever/GPU/victim 与正式攻击结果均未进入，不自动 freeze/运行下游、不提交或推送。
+
+- 12:28:30 后台运行确认：PID=41596 仍在运行；原始 Assistant 38 篇 + AI 200 篇，共 238 篇已审，Assistant 追加复核仍为 1 篇。最终接受 236、退回 2、待审 5762（运行中快照）；20 个 AI 批次已完成、1 个进行中，实际发送为构造 9164 + AI 21 = 9185，剩余原预算 2815。继续同一后台进程，没有重复启动或新增下游调用。
+
+
+#### 2026-10-06：格式异常恢复，后台预审继续（superseding，12:58 快照）
+
+- [x] 查明旧 PID=41596 退出原因：第 105 个预审批次返回非单一合法 JSON，解析报 Extra data，旧运行逻辑直接退出。错误请求及原响应完整保留，实际发送 1 次；当时已接受 1070、退回 8、待审 4922，9164 构造发送 + 105 预审发送 = 9269。
+- [x] 在既有 review.py 小改：无效 JSON/缺少逐篇决定自动重试同批，输入来源及审查标准不变，只补充 JSON 格式提醒；不导入部分决定、不跳过来源、不重构事实。单 wave≤200、所有实际发送合计≤12000，网络重连仍持续退避重试；模型/身份异常保持原边界。
+- [x] 恢复前校验 config、profiles、151 个输入与原 generation/review/request 基线；仅重新绑定该单文件代码，在原 run config 字段保留旧 hash 和错误调用边界。已有通过结果与旧格式错误记录不改写，没有新协议号或新增治理文件。
+- [x] shared-G 定向 62/62、全量 unittest 153/153、所改 Python AST、空白检查通过；回归覆盖同批格式失败恢复、输入不变、原件保留、半截结果排除与原共享发送上限。
+- [x] 12:58:03 隐藏后台续跑现有 `104 review-all`，PID=30520；日志 `artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004/semantic_review_resume_20261006_125803.*.log`。首个续跑批次 106 已完成，来源绑定与失败批次 105 完全一致，真实 model=gpt-6-luna，9 接受/1 退回；随后批次也成功，12:58:52 确认进程持续运行。
+- [ ] 最新快照最终合格 nfcorpus=1089/2000、SciDocs=0/2000、trec-covid=0/2000；退回 9、待审 4902。累计已审 1098；106 个完整 AI 批次 + 1 个原格式错误 + 1 个进行中，实际发送 9164 + 108 = 9272，剩余原预算 2728。
+- [ ] 完成三个数据集全部预审及按序补足，各恰好 2000 接受并覆盖全部结构通过来源后才统一 freeze。
+- 当前唯一下一步：继续已恢复的 PID=30520 后台预审及必要补构；沿用“能用、没有明显错误”标准，保留审查类型和逐篇理由。membership 尚未分配，不自动进入 Retriever/GPU/victim 或提交推送。
+
+#### 2026-10-06：source ID 复制错误修复，后台继续预审（superseding，17:03 快照）
+
+- [x] 查明大量格式重试原因：SciDocs 长 source ID 被返回时截断，562 次 schema 错误；加上 SciDocs 9 次和 nfcorpus 1 次 JSON 错误，共 572 次原始格式失败，原件与状态均保留并计入发送预算。它们不是网络故障或语义拒绝。
+- [x] 在现有 review.py、artifacts.py 小改为批内 s1…s10 短标签，原请求保存完整来源的一一映射；解析、缓存导入和 start/terminal 一致性继续严格验证，旧全长 ID 记录兼容，不模糊关联、不重判旧错误。源文、facts、G、标准、模型、候选顺序及 query/scoring 不变，无新协议或治理文件。
+- [x] 在最后旧批次 858 的真实响应落盘后由现有身份检查停止旧 PID=30520；无未完成请求。校验 config/profiles、151 个输入及历史产物后，仅在原可变 run config 保存旧代码/产物 hash 和发送边界并重新绑定两份修改代码。恢复时导入缓存的 10 条决定，没有重复 API 发送。
+- [x] shared-G 定向 65/65、全量 unittest 156/156、修改文件 AST 与空白检查通过；覆盖短标签精确恢复、映射/标签错误拒绝、start/terminal 漂移拒绝及旧缓存导入。无测试真实 API 调用，README 已同步。
+- [x] 17:01:28 隐藏后台续跑现有 104 review-all，PID=70192；日志 artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004/semantic_review_short_ids_20261006_170128.*.log。17:03:29 仍运行，7 个新短标签批次完成、1 个进行中，已观察批次没有格式失败；模型保持 gpt-6-luna。
+- [x] nfcorpus 最终接受 2000/2000，语义退回 15，必要补构与预审已完成。
+- [ ] SciDocs 最终接受 939/2000、语义退回 1；后台继续预审及按序补足。
+- [ ] trec-covid 预审尚未开始，最终接受 0/2000。
+- [ ] 17:03:29 合计接受 2939/6000、语义退回 16；构造发送 9195 + 预审发送 867 = 10062，剩余原 12000 次预算 1938。原始 Assistant annotation 38 篇、Assistant 追加复核 1 篇与 Luna AI 预审继续分开记录，不能写为独立真人审查。
+- 当前唯一下一步：继续现有 PID=70192 的 SciDocs → trec-covid 预审及按固定顺序补足；各数据集恰好 2000 合格且预审覆盖后才具备统一 freeze 条件。没有自动 freeze、membership 分配、Retriever/GPU/victim 或正式攻击结果，不提交或推送。
+
+- 17:08:02 运行确认：PID=70192 持续运行，新短标签批次完成 26 个、1 个进行中，无新增格式失败；最终接受 3129/6000（nfcorpus=2000、SciDocs=1129、trec-covid=0），语义退回 16。实际发送 10081，原预算剩余 1919，继续同一后台。
+
+#### 2026-10-06：6000 篇预审完成，待正式 freeze（superseding，18:38 核验）
+
+- [x] 隐藏后台 104 review-all 于 18:27:52 正常完成，输出 qualified6000_ready_for_freeze；18:36 检查进程已结束，无需恢复或重复启动。
+- [x] nfcorpus 最终合格 2000/2000，语义退回 15，待审 0，必要补构已完成。
+- [x] SciDocs 最终合格 2000/2000，语义退回 7，待审 0，必要补构已完成。
+- [x] trec-covid 最终合格 2000/2000，语义退回 17，待审 0，必要补构已完成。
+- [x] 合计 6039 篇结构通过来源全部有最终语义决定，恰好 6000 接受、39 退回。原始 Assistant annotation 38 篇、AI 预审 6001 篇、其中 Assistant 追加复核 1 篇；审查类型和原始判断分别保留，复核不另计独立 source，也不是独立真人盲审。
+- [x] 18:38:40 本地只读校验：config/code/profiles、151 个输入及现有产物身份一致，候选顺序、provider/生成/预审响应与逐篇决定 hash 绑定通过；无未完成请求、精确配额及审查覆盖通过。无新增真实 API/GPU/victim 调用。
+- [x] 实际发送对账为构造 9232 + AI 预审 1178 = 10410，原 12000 次预算剩余 1590。603 个完整 AI 批次与 573 个格式失败原件均保留；格式失败不混入语义退回或 passed。
+- [ ] 按既定配置冻结合格 6000-source 列表、各数据集 1000 Member/1000 Nonmember 的 source-exclusive split 和正式 query plan；当前尚无实际 membership 或 freeze 产物。progress 的 membership_assigned_after_qualification 字段仅说明流程规则。
+- [ ] 后续按固定 split 构建 Member-only index，执行正式 victim cell 与评估；本次未进入 Retriever/GPU/victim 阶段，没有正式攻击结果。
+- 当前唯一下一步：完成合格来源的正式 source split/query freeze；预审与补足已结束，不再后台重审或补构，不自动运行下游或提交推送。
+
+#### 2026-10-06：正式名单、source split 与 query 已冻结（superseding，18:50 核验）
+
+- [x] 按用户本次要求执行现有 `104 freeze`，18:49:35 正常返回 frozen；当前 `run_config.json` 状态为 `frozen_before_retrieval_and_victim`，上条待冻结事项已完成。
+- [x] `source_manifest.jsonl` 固定恰好 6000 篇合格 source；nfcorpus、SciDocs、trec-covid 各 1000 Member + 1000 Nonmember，按既定 seed=45 加 offset 在合格集合上打乱、交替分组。全部 39 篇最终语义退回和结构失败来源排除，原始证据保留，冻结后不补选或换样。
+- [x] `index_manifest.jsonl` 固定恰好 3000 篇指定 Member，各数据集 1000；尚未构建索引。`query_plan.jsonl` 固定 54000 条 query，每数据集 18000、每 source 9 条，包含 3 initial、3 correct_anchor、3 remote_only；实际发送仍遵循 `3 + 2 * sum(I_i)` 门控。
+- [x] 18:50:18 身份、精确配额、审查覆盖、source/text hash 零重叠、Member-only 索引名单与完整 query 重放核验通过；重复 freeze 返回 already_frozen，所有文件 hash 不变。151 个输入和 22 个代码文件保持原绑定；原构造/预审记录与日志未改写，无新增临时产物。
+- [x] source SHA-256=`f442ef3a1a7bd46cf0cda31dbacaca6e42a21280bd3f7b266c9d9d883b701ce3`；index=`0ac97a103cb8a9057c591f10c57fde088ae7a2f51ff3dcc31b595ad924dc930f`；query=`fbc9a7339cdafac86a78a12c5b466738e60fd42beedebe461c789d38025b7f2e`。代码绑定 HEAD=`749972dae09da8b1000af2963230a2e76c7453f5` 加现有未提交文件 hash；没有新增提交，不声称 HEAD 包含全部实现。详细冻结身份与历史原文重用比例见同日 notes。
+- [x] shared-G 定向测试 65/65、CLI help、实际 freeze、冻结后重放/幂等检查通过；README 同步。没有代码/config/协议语义变更，无需重跑构造/预审或新建版本。本次真实 API/GPU/Retriever/victim 调用均为 0，累计构造和 AI 预审发送数保持 10410。
+- [ ] 获得真实运行授权后，从 nfcorpus 的单个 cell 开始，按冻结名单构建 Member-only BGE index，再执行 victim 初问、门控追问与 source-level 评估。
+- 当前唯一下一步：授权后的首个 nfcorpus `retrieve`；本次只完成名单/split/query freeze，未运行下游，尚无正式攻击结果，不提交或推送。
+
+#### 2026-10-06：nfcorpus retrieve 已完成（superseding，19:01 核验）
+
+- [x] 用户授权首个 nfcorpus retrieve；冻结身份、指定 Conda 环境、CUDA 与固定 revision 的本地 BGE snapshot 检查通过。
+- [x] 18:56:09 启动现有 `104 retrieve --dataset nfcorpus --max-new 18000`，PID=104688；18:58:58 输出 complete=true、18000/18000 完成，进程已结束。日志为正式输出目录中的 `retrieve_nfcorpus_20261006_185609.*.log`。
+- [x] `nfcorpus/index/` 恰好包含 1000 篇指定 Member、4012 chunks、4012×768 有限归一化向量；实际使用 cuda:0，固定 128/32 切块与 BGE revision 未变。
+- [x] `nfcorpus/retrieval.jsonl` 覆盖 2000 source 的全部 18000 个冻结 query，每臂各 6000、每条 top-5。19:01:46 完整性、Member-only、逐条 query/context/prompt/record hash 与 chunk 身份检查通过；完成后重入返回 new_queries=0，文件 hash 不变，无临时残留。
+- [x] retrieval SHA-256=`86b13e56e5dabedea29eeaf0de2e377197e80cd1f80172f3f0db67eb01308aea`，index identity=`31868c15b7c537fb0adbcb7947cf750ec244d8ce6cfa062400bdb4db351ec1f8`；详细产物 hash 见同日 notes。冻结 source/index/query/run config 均未改变；没有代码/config/实验语义修改，不需要新版本。
+- [x] 本次本地 GPU 检索 18000 条，新增 API/victim 调用 0；既有构造与预审发送数保持 10410。README 同步，未提交或推送。
+- [ ] 获得 victim 调用授权后，在 nfcorpus 同一 cell 执行首个 `run-initial --dataset nfcorpus --max-new 200`，后续沿用原 checkpoint 与逐槽追问门控；SciDocs/trec-covid 尚未开始。
+- 当前唯一下一步：获授权后的 nfcorpus 首个 victim initial wave。本次 retrieve 全部完成，尚无 victim response、攻击分数或正式评估结果。
+
+#### 2026-10-06：nfcorpus 首个初问 wave 运行中（superseding，19:09 快照）
+
+- [x] 用户授权开始 nfcorpus 初问阶段；冻结 config/code/input、完整 retrieval 和初问计划校验通过。只读模型元数据 GET 确认 `gemma-2-2b-it-bf16` 在服务中，未产生生成调用。
+- [x] 19:08:09 启动现有 `104 run-initial --dataset nfcorpus --max-new 200`，隐藏后台 PID=106980；本 wave 最多 200 条，全初问阶段 6000 条。日志为 `initial_nfcorpus_20261006_190809.*.log`，响应写入 `nfcorpus/initial_responses.jsonl`。
+- [x] 19:09:47 已完成 17 条、无错误或进行中请求；实际模型一致、retry_count=0，平均模型响应约 448.7 ms，已保存响应的身份/hash 校验通过。服务 fingerprint=null 按原值保留，不把部署标识写成独立权重验证。
+- [ ] 首个 200 条 wave 尚在运行；当前快照 17/200，本阶段 17/6000，不能写为初问完成。按现有 5 秒间隔和观察到的模型耗时，本 wave 从启动起约需 18 分钟，网络或服务延迟可能延长。
+- [x] 本次正式 victim 调用在快照时为 17 次，模型元数据 GET 为 1 次；构造/AI 预审计数保持 10410。固定 source/index/query/retrieval 和 run config 未变，没有代码/config 修改或新版本；README 已同步，未提交或推送。
+- [ ] 当前 wave 完成后检查终态，并按同一初问阶段授权和 checkpoint 继续剩余初问；nfcorpus 追问及其他数据集尚未启动，无攻击分数或正式评估结果。
+- 当前唯一下一步：等待 PID=106980 的首个 200 条初问 wave 完成并核验；不要重复启动当前 wave，不自动进入追问或其他数据集。
+
+#### 2026-10-06：nfcorpus 首批完成，6000 条初问续跑中（superseding，19:35 快照）
+
+- [x] 首批 PID=106980 已结束；原 stdout 确认完成 200 条，阶段 planned=6000、complete=false。
+- [x] 用户已启动现有 `run-initial --dataset nfcorpus --max-new 6000`，当前 PID=81840；自动跳过既有 200 条，无助手重复启动。
+- [ ] 19:35:23 快照为 243/6000 条 completed，余下 5757；最近 100 条平均响应 345.9 ms，加固定 5 秒间隔，连续运行估计还需约 8.55 小时（北京时间 2026-10-07 04:10 左右）。该快照仅确认请求状态，不替代结束后的全量身份核验。
+- 当前唯一下一步：等待既有 PID=81840 补齐全部初问并做完成核验；不重复启动，不进入追问或其他数据集。响应正文位于 `nfcorpus/initial_responses.jsonl` 的 completed 行 `response` 字段。
+
+#### 2026-10-07：nfcorpus 全部初问已完成（superseding，07:49 核验）
+
+- [x] 用户回报续跑 new_calls=5800、completed=planned=6000、complete=true；原首批 200 条与续跑相接，相关入口进程已结束。
+- [x] 07:49:53 完整核验：6000 个唯一 query 按计划顺序完成，恰好覆盖 2000 source、每 source 3 槽；12000 行 start/terminal 记录，无缺失、重复、未完成或异常终态，retry_count 全为 0，实际模型全为 gemma-2-2b-it-bf16。最后请求记录时间为北京时间 04:11:15；fingerprint=null 按原样保留。
+- [x] 6000 条响应的模型及 query/prompt/retrieval/response/record 身份核验通过，原代码/config/input、source/index/query/run config 与检索产物无漂移。initial_responses SHA-256=`43c44b7e0f1c147b86334455d1551e7b598437f044310bc3a6b92f67beb77e7f`；无临时残留，未改写正式产物。
+- [x] 按冻结规则判定 correct=1815、ambiguous=1740、incorrect=2445、invalid=0；1815 个槽位涉及 928 篇 source，共触发 3630 条追问，correct_anchor/remote_only 各 1815。这是门控数量，不是独立人工准确率或 source-level 攻击指标。
+- [x] 此次仅离线核验并同步 README/两份总表，新增真实调用 0；累计初问 victim 6000、构造与 AI 预审 10410。代码/config/方法不变，不提交或推送。
+- [ ] 获得追问实际调用授权后，使用现有 nfcorpus `run-followup` 执行 3630 条冻结门控追问，再完成该 cell 的评估；SciDocs/trec-covid 尚未进入下游。
+- 当前唯一下一步：获授权后的 nfcorpus 3630 条门控追问；本次未启动追问，尚无完整 cell 攻击评估结果。
+
+#### 2026-10-07：nfcorpus 初问误判诊断完成（superseding，diagnostic-only）
+
+- [x] 对全部 6000 条初问做离线风险扫描，去重候选 603 条；候选数不作为误判数。结合 source 原文形成 28 条逐例证据，详见[专项记录第 21 节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 确认至少 26 条漏判，涉及 23 篇 source：ambiguous 误拦 8 条、incorrect 漏判 18 条；另记录 1 条合理 ambiguous 反例和 1 条对象错配疑似项。属于 Assistant 定向复核，未完成全量逐项语义审阅，不报告总体误判率或独立人工盲审结论。
+- [x] 区分工程完整性与语义判分：初问 6000/6000 完成和原身份核验结果有效；冻结判定 1815/1740/2445、正式触发 3630 条保持不变。26 条漏判对应的 52 个分支仅作诊断，没有追加调用或修正正式标签。
+- [x] 仅补充专项记录、README 和两份总表；代码/config/正式 artifact 未改，新增 API/victim/Retriever/GPU 调用均为 0，未创建新协议版本，未启动追问。
+- [ ] 明确门控测量问题的处理方式及对正式结果的影响，再决定是否按原口径执行 nfcorpus 追问；不按已见正式回答选择性加 alias 或改写旧结果。
+- 当前唯一下一步：明确误判处理方案。此项替代上一条直接进入追问的建议，不新增运行器强制门禁；现有 3630 条追问仍未发送，SciDocs/trec-covid 下游未启动。
+
+#### 2026-10-07：全部 603 条候选已逐条复核（superseding，diagnostic-only）
+
+- [x] 覆盖 603/603 条风险候选、502 篇 source，逐条检查问题、冻结答案、完整回答和原文定位；42 条另查看完整 source。所有原文通过现有 hash 校验，没有新增模型调用。
+- [x] 结果为 361 条漏判、1 条误放行、218 条保留原判、23 条仍有争议；确证误判共 362 条，涉及 302 篇 source。旧 26 条漏判全部保留，新增确认 335 条；原对象错配疑似项现确认为误放行。
+- [x] 完整逐例结果追加至[专项记录第 22 节](思路v25_ReCheck正确性门控成员验证.md)，含全部回答、理由、source hash 和 query/response 原行定位。保留第 21 节历史；23 条争议已审但未定案，不写成漏审或通过。
+- [x] 区分表面匹配测量局限、17 条可复现边界处理问题与源文/专业语义争议。此次是 Assistant 后见诊断，不是独立人工盲审；362/603 不外推为 6000 条总体误判率，其余 5397 条未逐项审阅。
+- [x] 正式判定 1815/1740/2445 与待发追问 3630 条未变；361 条漏判对应的 722 分支及 1 条误放行对应的 2 分支只作诊断。代码/config/query/alias/scoring 和正式产物未改，新增 API/victim/Retriever/GPU 调用均为 0，未启动追问。
+- [ ] 在开发材料上明确通用判分口径、修复范围及对现有正式结果的影响，再决定后续追问；不拿本批响应做选择性 alias 修补或阈值调优。
+- 当前唯一下一步：明确误判处理方案与修复范围；当前 603 条候选核查任务已完成，未自动启动下游或创建新协议版本。
+
+
+#### 2026-10-07：判分修复与复用初问的续跑副本完成（superseding）
+
+- [x] 在原代码内保留v2并加入v3，统一接入初问门控、追问判分、source赋分和报告；未绕过代码/config/hash恢复校验。
+- [x] 原25文件及22代码归档保留；新配置 `configs/v25_shared_g_formal_scoring_fix.yaml` 和 `_scoring_fix/` 副本建立。query/split/alias/index/retrieval/6000初问字节不变，CLI默认使用新配置，initial resume实测0新调用且complete=true。
+- [x] 77项shared-G测试、CLI及新副本全部身份校验通过。修正版判定1853/1717/2430，新增38个正确槽，待发3706条追问；原1815正确槽全部保留，追问未执行。
+- [x] 保存首轮失败候选和最终6000条比较；37条原候选及1条额外格式漏判得到修复，全部17条边界错误和8条ambiguous误拦覆盖。详细证据、hash与限制见[专项记录第23节](思路v25_ReCheck正确性门控成员验证.md)。
+- [ ] 处理剩余324条语义漏判、1条对象误放行及23条争议；当前表面匹配器不提供完整语义正确性保证。
+- [ ] 在明确上述语义问题后授权nfcorpus追问；当前0新增API/victim/Retriever/GPU调用，无提交推送。post-response scoring correction已披露，不是原始untouched冻结评估。
+- 当前唯一下一步：明确剩余语义判分处理。技术上可以使用新副本继续，不需要重发初问，也不使用旧config强行续跑。
+
+
+#### 2026-10-07：完成自动判分＋显式回答复核（superseding）
+
+- [x] 用户已明确选择复用逐项Assistant复核；603项记录绑定原query/response/source身份，保留理由与23个uncertain，接入门控、followup评分和标签来源报告。
+- [x] 原剩余324条已知漏判及1条对象误判均已更正；相对既有复核的已知FN/FP剩余0，23条争议保留ambiguous。不能外推6000条全体零错误，未复核5397条仍用自动规则。
+- [x] 当前配置 `configs/v25_shared_g_formal_semantic_review.yaml`，当前 `_semantic_review/` 副本；旧原始目录和 `_scoring_fix/` 均未改写。组合判分2175/1740/2085，待发4350追问，994source；初问无需重发。
+- [x] shared-G 84项测试、CLI及新副本完整身份校验通过，initial resume实测new_calls=0且complete=true；新27文件/旧25文件/前一25文件hash保持不变。详见[专项记录第24节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 只读查明本地已有 `models/menta/deberta-base-long-nli`，是支持/中立/矛盾编码器分类模型；用户要求不用生成式大模型。没有加载、下载或新增推理调用。
+- [ ] 确认本地NLI候选在独立开发材料上的小样本验证方案并授权必要GPU工作；当前未接入全自动语义判分模型。
+- 当前唯一下一步：本地NLI候选验证的范围与授权。603项复核接入任务已完成，现有4350追问仍未发送，不自动启动其他dataset或API。
+
+#### 2026-10-07：本地NLI小样本验证已完成（superseding）
+
+- [x] 用户已授权验证；确认指定Conda、CUDA及本地模型9文件hash，离线成功加载DeBERTa分类器，无缺失权重、下载、依赖安装或API调用。
+- [x] 模型加载前固定60条新编合成压力样例和60条已见复核诊断（60source、包含全部23条UNC），运行三种NLI输入共360对＋1预热；保存脚本、输入、概率、标签和运行信息于既有诊断目录。没有用正式membership/AUC调参或选择阈值。
+- [x] 预设主模式合成测试接受27/30正确、3/30错误；0.90规则接受22/30正确、1/30错误。已见真实组分别接受21/24正确、5/13错误及11/23争议；0.90规则为14/24、0/13、1/23。完整三模板结果与具体失败见[专项记录第25节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 结论：可以本地快速运行，但暂不作为唯一判分器；高分对象/方向混淆、数字等价漏判和claim范围错位仍存在。合成与已见定向样例不作为独立准确率证据，23个争议不由模型强制解决。
+- [x] 前后正式校验通过，101个代码/config/新旧正式产物hash相同。正式标签仍2175/1740/2085，4350条追问保持未发送；没有修改正式代码、配置或标签，无提交推送。
+- [ ] 若继续自动语义判分开发：先在隔离开发材料上验证数字/单位/边界/对象规则和仅覆盖所问槽位的最小断言，再测试NLI辅助组合；本次不直接接入。
+- 当前唯一下一步：隔离开发材料上的规则与问答表示验证。用户本次要求的候选验证已完成，不自动启动正式追问或其他dataset。
+
+#### 2026-10-07：nfcorpus cell完成及指标落盘（superseding）
+
+- [x] 用户执行4350条追问完毕；核验6000初问及4350追问completed、身份唯一、门控缺失0/多余0，每臂2175。模型ID与冻结配置一致，未改原始response。
+- [x] 现有 `104 report --dataset nfcorpus` 成功，生成2000篇source的 `scores.jsonl` 与 `report.json`，状态 `scoring_corrected_cell_complete`；三种方案AUC及95%CI、固定阈值/低FPR指标、成本和覆盖率均已保存。
+- [x] AUC：local_only=0.955298、correct_anchor=0.960778、remote_only=0.9603795。固定阈值TPR/FPR：75.4%/0.9%、89.1%/1.2%、88.7%/1.3%；FPR≤1%下TPR为75.4%、68.0%、65.7%。不得将整体AUC提升表述为所有低FPR区间均占优。
+- [x] 同source配对bootstrap=2000、seed=45：anchor−local=0.005480 [0.003665,0.007526]；anchor−remote=0.0003985 [−0.0001566,0.0009980]。对等预算锚点增益尚无明确证据；不据此修改冻结阈值或scoring。
+- [x] 追问自动标签合计correct=3108、ambiguous=221、incorrect=1021；全部4350条尚无逐回答Assistant复核，NLI未接入。初问已有603条复核的post-response correction继续披露。总victim调用10350，当前统计新增调用0。
+- [x] 独立频数法复算AUC和score≥2计数与报告完全一致；正式身份校验前后通过，初问/追问hash未变。详见[专项记录第26节](思路v25_ReCheck正确性门控成员验证.md)。同步研究总表与README，无提交推送。
+- [ ] SciDocs cell：按现有冻结配置执行retrieve→run-initial→run-followup→report；本轮未启动，不根据nfcorpus正式结果调参。
+- [ ] trec-covid cell及三数据集macro：依既定顺序完成后生成汇总，当前没有全suite结果。
+- 当前唯一下一步：SciDocs的retrieve；用户本次要求的nfcorpus指标计算已完成，后续真实检索/GPU/victim任务在明确授权后执行。
+
+#### 2026-10-07：SciDocs retrieve运行中（superseding，18:50）
+
+- [x] 用户授权SciDocs retrieve；当前冻结配置、nfcorpus前序cell完整性、source隔离及CUDA环境预检通过。
+- [x] 18:50:04启动现有 `104 retrieve --dataset scidocs --max-new 18000`，PID=302800、会话70310；目标为1000篇Member的索引及18000条检索，起始无索引或检索断点。日志位于当前正式目录 `retrieve_scidocs_20261007_105004Z.*.log`。
+- [ ] 等待该进程结束，校验检索query集合、每条top-5、Member-only来源、hash及断点恢复；目前不写成retrieve完成。
+- 当前唯一下一步：完成并验证SciDocs retrieve。scoring/阈值/query/split保持冻结，SciDocs victim阶段及trec-covid未启动。
+
+#### 2026-10-07：SciDocs retrieve完成（superseding，18:53）
+
+- [x] 104 retrieve正常退出，18000/18000检索完成，三臂各6000；1000篇Member的BGE index完成，2599 chunks、2599×768向量。
+- [x] 冻结身份、source隔离、Member-only top-5、chunk内容与index、向量及文件hash、query/context/prompt/record身份全部验证通过；无Non-member进入索引或返回结果。
+- [x] 完成断点恢复返回0新检索且complete=true，无模型加载，四个SciDocs产物hash不变；nfcorpus报告未改。详情见[专项记录第27节](思路v25_ReCheck正确性门控成员验证.md)。
+- [ ] SciDocs初问6000条：尚未启动，当前victim调用0；初问完成后再按固定门控进行两臂追问及评估。
+- 当前唯一下一步：SciDocs run-initial。用户本次授权的retrieve已全部完成；不自动启动victim或trec-covid，不调整冻结阈值/scoring，无提交推送。
+
+#### 2026-10-07：nfcorpus追问误判抽查完成（superseding，diagnostic-only）
+
+- [x] seed=20261007固定随机抽取160/994篇已触发source，完整审阅698条追问、305个阅读组；两臂各349，包含533 correct、129 incorrect、36 ambiguous。
+- [x] 确认83条漏判（31组、27篇source），其中80条等价表达漏判、3条标准答案非唯一；原标签82 incorrect、1 ambiguous。保留608条、争议7条，样本中没有确证误放行；不将样本结论外推为4350条全量准确率。
+- [x] 保存 `audit_packet.json` 与 `assistant_review.json`，复现抽样并验证698条query/response/source绑定及全部计数。全部组已审，争议仍未定案；明确Assistant post-response、非独立人工盲审。
+- [x] 正式scoring/query/alias/复核文件与报告未变，未重算修正AUC；冻结身份验证通过，config/run_config/追问/scores/report hash保持原值。详见[专项记录第28节](思路v25_ReCheck正确性门控成员验证.md)。无新增模型/API/victim/Retriever/GPU调用或提交推送。
+- 本次用户要求的核查已完成。后续若修复判分，按明确范围一致复核并保留原报告，不根据正式AUC调参；这不是新增运行门禁。正式主线下一步仍为已交付命令的SciDocs初问，实际进度以机器可读断点为准，本轮不干预或自动启动其运行。
+
+#### 2026-10-08：BEM试用完成，正式判分保持不变（superseding）
+
+- [x] 用户授权下载及小规模验证；固定BEM revision并核验7文件，指定Conda/CUDA离线加载，未安装依赖。
+- [x] 818条固定诊断输入在模型推理前保存；模型卡默认fast输入、完整原问题和回答、0.5主阈值/0.9补充阈值，无截断或阈值选择。
+- [x] 原83条追问漏判找回64/33条，同时误放行12/5条；合成30条错误答案误放行25/20条。数字、对象、否定、漏项及拒答高分错误阻止其接管正式判分。
+- [x] 保留原否定检查失败结果，另存24次接口复查；默认padding一致、class方向支持，slow全0分段不是选出的替代方案。全部818条结果及计数、输入/权重/脚本hash通过复查。
+- [x] 正式32项文件hash及22代码/158输入绑定不变，原追问标签3108/221/1021与报告保持原样；SciDocs未被干预，无新victim/Retriever/付费推理调用。详见[专项记录第29节](思路v25_ReCheck正确性门控成员验证.md)。
+- 本次试用已完成，不接入BEM。正式主线仍按既有SciDocs断点继续；判分开发若继续，下一步应先验证数值/单位/否定/对象/漏项约束，再评估候选筛查用途，不依据正式AUC调阈值。无新协议或强制门禁，无提交推送。
+
+#### 2026-10-08：nfcorpus追问83条修复完成，SciDocs初问进度已保留（superseding）
+
+- [x] 按用户指定范围接入83条确认FN（anchor 48、remote 35；27篇source）；82 incorrect＋1 ambiguous改为correct，7条争议不改。复用既有Assistant逐回答机制，未修改Python代码/自动匹配/冻结query/阈值/门控，未应用BEM或NLI预测。
+- [x] 新配置 `configs/v25_shared_g_formal_followup_review.yaml` 与 `_semantic_review_followup_review/` 副本完成；旧37文件全部原样保留，响应逐字节复用，603条初问复核＋83条追问复核共686条，来源/hash及理由可追溯。
+- [x] 现有report已重算2000篇source，状态 `scoring_corrected_cell_complete`。追问标签3191/220/939，初问2175/1740/2085不变；AUC local/anchor/remote=0.955298/0.9608075/0.9605075，固定score≥2的Acc=87.25%/94.10%/93.85%，TPR@FPR≤1%=75.4%/68.3%/66.1%。详见[专项记录第30节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 27项相关测试、独立AUC复算、标签精确差异和新旧身份校验通过；nfcorpus门控集合不变、缺失/多余均0。保护性mock客户端下，nfcorpus初问/追问与SciDocs初问resume均0新增调用且complete=true。
+- [x] SciDocs6000初问已完成并完整保留；1914 correct、1738 ambiguous、2348 incorrect，现有门控计算3828条追问（每臂1914）。此为核验用户既有运行进度，本轮未发起任何模型/API/victim/Retriever调用。
+- [ ] SciDocs追问3828条及report：当前追问0，后续使用新配置执行；trec-covid及三数据集macro仍待完成。
+- 本次83条修复任务完成；7条争议与其余3652条未逐项审阅追问仍需准确披露，不把Assistant修正当成独立人工金标准或通用匹配能力提升。正式主线唯一下一步为SciDocs门控追问，本轮未启动。为兼容冻结代码，CLI默认值保持前版；后续须在阶段名前显式传入 `--config configs/v25_shared_g_formal_followup_review.yaml`。无提交推送。
+
+#### 2026-10-08：先完成SciDocs初问判分合理性检测（superseding，diagnostic-only）
+
+- [x] 检查v3判分与门控代码；确认1738条ambiguous中1733条是拒答/未知正则触发，正式6000条分类仍1914/1738/2348。
+- [x] 固定seed=20261008随机50篇source，完整读取150条初问；Assistant诊断10条漏判、4条拒答分类错置、133条保留、3条争议。10条漏判涉及9篇source；不把样本率外推全量，不宣称零误放行。
+- [x] 保存150条绑定/理由及16个预设边界案例，边界测试6符合预期/10不符；这是定向压力测试，不是全量准确率。现有27项测试、抽样复现、绑定与51项保护hash检查通过；正式22代码/158输入身份不变。
+- [x] 诊断产物保存在 `scidocs_initial_scoring_audit_20261008/`，详见[专项记录第31节](思路v25_ReCheck正确性门控成员验证.md)。本轮只检测和记录，未修改代码、复核标签、query、阈值或正式结果，无模型/API/victim/Retriever/GPU调用。
+- [ ] 建议下一步：处理已确认SciDocs初问误判并扩大核查；其余5850条尚未逐项审阅，3条争议保留，通用规则改进须用独立开发材料验证。
+- 本次检测完成；原3828条SciDocs追问计划仍未执行，建议在初问判分核查后推进。未增加强制门禁，未修改正式协议，无提交推送。
+
+#### 2026-10-08：SciDocs全量6000条初问核查完成（superseding，diagnostic-only）
+
+- [x] 原150条扩至600条，新增150篇source/450条，累计45 FN、4 CATEGORY、9 UNC、542 KEEP；扩查输入与决定独立保存，原150条证据保留。
+- [x] 按用户明确选择覆盖全部6000条/2000篇source，复用原600条决定；4352条Assistant语义审查＋661条严格整答相等＋987条严格整段通用拒答，准确区分核查方式，不冒称全是独立人工或语义逐读。
+- [x] 最终5477 KEEP、390 FN、2 FP、53 CATEGORY、78 UNC；确认类别差异445条/397篇source，门控相关392条。CATEGORY中50条incorrect→ambiguous、3条ambiguous→incorrect；78条已审争议保留null。
+- [x] 验证6000条无遗漏/重复、每source三条、全部query/response/source及原文片段绑定；两类机械集合661/987独立复算。历史600条决定和4份历史文件未变，55项保护hash及22代码/158输入冻结校验通过。
+- [x] `full_assistant_review.json` 为completed、complete=true、reviewed=planned=6000、diagnostic_only_not_applied，含最终汇总和验证；详见[专项记录第32节](思路v25_ReCheck正确性门控成员验证.md)。同步两份实验总表，不覆盖旧抽样事实。
+- [x] 正式SciDocs分类仍1914 correct、1738 ambiguous、2348 incorrect；3828追问（每臂1914）、已保存0不变，nfcorpus报告未改。没有接入诊断或计算修正AUC；没有生产代码、API/victim/Retriever/评分模型/GPU调用、下载、安装、提交或推送。
+- [ ] 建议下一步：明确并处理SciDocs已确认初问判分差异后推进追问；78条争议继续保留，不能当成已修复。
+- 当前全量核查任务已完成；下一步建议不构成新强制门禁，正式配置仍为 `configs/v25_shared_g_formal_followup_review.yaml`，未自动启动任何下游。
+
+#### 2026-10-08：二分类＋原因的离线重构和一次留出验收完成（superseding）
+
+- [x] 新增独立 `src/evaluation/answer_judgment.py`，版本 `binary_target_rules_v1`；仅resolved可取correct/not_correct和1/0，拒答原因refused，未定/invalid为null并阻断最终输出。复核来源和source/query/response hash可追踪，invalid不可救回；BEM/NLI及生成式模型不参与。
+- [x] claim-anchor r2与正式集合source/text hash去重，固定seed=20261008拆64篇为44开发/20留出（4 nfcorpus＋8 SciDocs＋8 trec-covid），同source不跨侧；开发234条、留出104条，全部保存Assistant逐条理由，不冒称独立人工标注。
+- [x] 开发后固定模块/测试hash再开留出，只执行一次验收。开发165/234自动（70.51%）、69待复核；留出75/104自动（72.12%）、29待复核，其中22正确。已定FN/FP为0/0；留出9条旧FN自动找回0、全部转复核，另13条旧正确转复核，覆盖局限已如实报告。
+- [x] 显式复核后开发156 correct/76 not_correct/2未定，留出69/34/1；仍争议保持null，定案量不冒称独立准确率。开发61、留出27条拒答均识别；实际invalid=0，由合成测试验证其阻断和不可救回。
+- [x] 既有测试扩至61项通过，保留原27项及首轮5失败证据；228项保护hash、22代码/158输入冻结身份、旧16350条判分与门控摘要不变，代码/测试hash在留出后不变。三份研究记录同步；对比及逐条理由见[专项记录第33节](思路v25_ReCheck正确性门控成员验证.md)及 `artifacts/v25/diagnostics/answer_judgment_binary_20261008.json`。
+- [x] 本轮只离线交付：旧ambiguous与正式接口原样保留，SciDocs390 FN/2 FP未应用、53原因问题未冒称修复、78争议不改，SciDocs追问与新最终报告仍未生成。无新增模型/API/victim/Retriever/GPU调用、下载、安装、提交或推送。
+- 本轮任务已完成。后续判分开发唯一建议下一步：提高确定性规则覆盖，再用新的未见source验收；本次留出只保留一次结果，不按它改规则重做验收。正式启用需新的评分版本，既有响应重算明确披露后见修正，并处理新门控缺失响应后才可出完整指标。本轮不启动下游、不新增正式强制门禁或治理文件。
+
+#### 2026-10-08：规则＋非生成式NLI全自动实现交付，一次验收失败（superseding）
+
+- [x] 既有模块新增 `binary_target_rules_nli_v2` 自动入口，保留v1/default与冻结正式接口。有效回答仅correct/not_correct，拒答保留原因，invalid不计零；新版不依赖Assistant复核、不输出needs_review，门控显式选择新版。
+- [x] 本地DeBERTa固定现有revision、CUDA FP32、batch4、max_length1280、overlap128，无下载/训练/BEM/生成式模型。64篇338条已见材料按source五折，seed=20261008，同一阈值网格比较两种输入；选中qa_pair、0.2，折外错误上界6/338；无membership/AUC/正式标签调参。
+- [x] 验证打开前固定完整137篇628条名单、代码/模型/格式/阈值/hash；source及两种文本hash与正式6000篇、开发64篇零重叠。521组Assistant盲态阅读、107重复目标回答复用，预测前固定628条对照；4参考争议全保留，非独立人工金标准。
+- [x] 仅运行一次验证：628/628自动，18 FN、16 FP、4争议，错误上界38/628=6.051%，准确率下界93.949%；旧v3为88 FN、7 FP、4争议、84.236%。确认错误95→34，但误放7→16；拒答原因错误5→1。验收上限为6条错误，`acceptance.passed=false`，如实交付失败。
+- [x] 保存逐dataset/初问追问/历史cohort统计与source聚类CI；新版最坏错误率95% CI=[3.431%,8.937%]。规则379条/NLI249条，错误8/26；完整错误依据和概率见 `answer_judgment_nli_20261008/validation_rows.csv`、`validation_comparison.json`，详见[专项记录第34节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 82项定向测试通过，229保护文件、38正式文件清单、22代码/158输入冻结、16350旧判分/门控、338条v1输出不变；旧源码/测试快照保留。验证打开后未再改代码、测试、阈值或对照。calibrate/predict/evaluate离线入口与可读报告完成，不新增编排系统或治理链。
+- [x] 本轮本地NLI共543输入对/138批；API/victim/Retriever/下载/训练/安装均0。正式SciDocs390 FN/2 FP未应用，53原因问题、78正式争议未改，追问仍0；旧ambiguous与nfcorpus报告保持，无提交推送。
+- [ ] 1%误判率验收未通过：这是已完成验证的失败结论，不是待运行。后续若继续，按失败模式讨论候选改进并另备未见source验收；本628条已见，不反复调参后重报独立通过，不自动换模型。
+- 当前实施任务已交付完成，正式接入尚未进行。本轮唯一建议下一步为讨论失败类型和后续验证设计；新评分正式启用另记版本、旧响应重算披露后见修正，并处理新门控缺失响应。当前不重跑旧实验、不启动SciDocs追问或其他下游。
+
+#### 2026-10-08：按用户要求澄清单位大小写容错（superseding）
+
+- [x] 复查组460、item 557–560：Dicer结合常数的回答5 nm可按明确上下文恢复为5 nM。旧版和新版原本均判对，先前4条FP来自Assistant对照过严；已纠正研究记录中的失败解释。规范符号有量纲区别，容错不等于全局忽略单位大小写或实际数量级变化。
+- [x] 仅4条的同口径敏感性计算完成：v2为18 FN/12 FP、30确认错误＋4争议，上界5.414%；旧v3为88 FN/3 FP、91确认错误＋4争议。原始一次验证结果保留，1%未通过；其他同类案例未全量重阅，不宣称完成新的准确率验收。
+- [x] 同步[专项记录第34.6节](思路v25_ReCheck正确性门控成员验证.md)和研究总表；本次无代码、冻结对照或正式文件修改，无模型/API/victim/Retriever调用、下载、训练、提交或推送。后续若应用宽松口径，应一致处理全部同类样本并明确披露为验证后调整。
+
+#### 2026-10-08：后续改进只读定位完成（候选方案未实施）
+
+- [x] 检查剩余错误和现有解析，补充2条μM/μm同类口径问题；共6条对照过严。仅修6条敏感性统计为v2 18 FN/10 FP、4争议，错误上界5.096%；原冻结对照、预测和验收报告保持，不作为新验收结果。
+- [x] 18条漏判细分为9数字/范围/取值、4列表、4否定/复合描述、1替代参考；定位and范围及vs数值对被吞进qualifier、排名及病毒列表类型错误。误放行8条对象/属性/关系问题及2条过泛名称，后者按题意所需精度统一处理。
+- [x] 形成[专项记录第34.7节](思路v25_ReCheck正确性门控成员验证.md)候选路线：统一目标与格式口径→修范围/有序数值对/完整列表→比较安全的简短陈述NLI输入及明确冲突约束。保留全自动二分类及当前本地模型；候选实际回答一侧不混入参考事实。
+- [ ] 下一轮最小实现优先落在现有 `answer_judgment.py` 与 `test_shared_g_evaluation.py` 的目标类型、数值/列表和对应反例；随后在已见201篇/966条上校准。此项为建议，当前未改代码、未启动模型实验。
+- 先前628条已见，后续新方案另找未见source验收；保持1%目标，不承诺当前建议必达标。本次分析任务完成，无正式配置/预测修改，无模型/API/victim/Retriever调用、下载、训练、安装、提交或推送。
+
+
+#### 2026-10-08：规则＋NLI v3 已见开发改进交付（superseding）
+
+- [x] 按用户“改吧”实施最小离线扩展：范围/有序数值、排名、完整列表、目标值提取、单位格式容错、否定/撤回、明确对象/条件冲突及未来预测与已发生结果的区别；新增评分版本 binary_target_rules_nli_v3，v1/v2与正式入口保持。
+- [x] 固定已见201篇/966条开发输入（603初问、363追问），与6000正式source和两种文本hash零重叠；6条单位大小写对照按同口径修订、原标注保留。7条争议不排除，Assistant对照不冒称独立人工盲审。
+- [x] 完成两轮开发候选及最终source五折校准。最终qa_pair/0.2；折外上界20/966，target_statement为23/966，未因个别好例采用整体较差的输入。旧失败候选、源码和概率保留。
+- [x] 全量自动预测与同口径比较完成：FN/FP从20/11降为5/7，确认错误31→12（修复19、新增0）；含争议上界38→19，即1.967%，准确率下界98.033%。输出577 correct、389 not_correct（256 refused），无invalid或needs_review。
+- [x] 保存逐dataset、初问/追问、历史cohort、原分区和source聚类CI；原628条上界32→15，但本轮仅属已见开发。对比、966条逐项证据和复现命令见 artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/comparison.md 与[专项记录第35节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 155项shared-G测试通过；249保护文件hash、38正式文件清单、22代码/158输入冻结、16350条旧判分及门控、966条v1/v2完整输出不变。运行已有本地模型1813输入对/456批，无问答API/victim/Retriever、下载、训练、安装、提交或推送。
+- [x] 保持正式边界：不应用SciDocs修正、不启动追问、不重算正式分数。v3必须显式选择并使用校准参数；默认仍是旧入口。现有实验可按原身份续跑。
+- [ ] 1%开发目标尚未达到：19/966，高于允许9条；独立未见source验收尚未执行。不能宣称验收通过或未来6000条最多错60条。
+- 本轮授权的离线实现与诊断已完成。唯一建议下一步：研究剩余12条NLI语义误差的通用修正，再用另备未见source验收；966条不再作为独立验收。当前不自动推进正式接入或任何下游调用。
+
+#### 2026-10-08：SciDocs v3 正式接入及初问重判完成（superseding）
+
+- [x] 用户决定直接采用现有v3，并明确限定只判SciDocs。配置 `configs/v25_shared_g_formal_nli_v3.yaml` 的 `scoring_datasets: [scidocs]` 限定范围；在原判分模块扩展正式入口，旧104入口和冻结代码保持，不新增编排脚本或治理链。
+- [x] 绑定原正式query/source/响应/检索缓存，固定qa_pair/0.2、DeBERTa既有revision与CUDA FP32参数；新判分保存在同级 `_nli_v3/` 目录。明确post-response correction，不依赖Assistant复核标签，不改规则或重新校准。
+- [x] SciDocs全部2000篇/6000条初问完成：correct=2359、not_correct=3641（refused=1749、其他=1892），invalid/ambiguous/needs_review=0；规则2938、NLI3062，耗时135.049秒。471条转correct、26条转not_correct是判定差异，不作为已确认纠错数或正式准确率。
+- [x] 新门控4718条（两臂各2359、1084篇source）已保存；相对旧3828条新增942、移出52。旧门控及正式文件不覆盖，尚未发送任何SciDocs追问。
+- [x] 初问续算0新判定、0模型调用；待追问时report不生成最终scores/指标，混合评分版本不输出三库macro。170项shared-G测试、246保护hash、38旧正式文件、22代码/158输入校验通过；v3原80个判分定义AST不变。
+- [x] nfcorpus使用原冻结完成度，不要求新判分；其判分/门控/报告hash不变，新目录无nfcorpus/trec-covid子目录。实际本轮只有本地判分，问答API/victim/Retriever、下载、训练、安装、提交、推送均0。
+- [x] 保存 `artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3/integration_report.json` 和逐条预测证据，同步README与[专项记录第36节](思路v25_ReCheck正确性门控成员验证.md)。保留1%未达标、无新独立验收及已见开发的研究口径。
+- [ ] 唯一下一步：用户执行新版 `formal --config configs/v25_shared_g_formal_nli_v3.yaml run-followup --dataset scidocs --max-new 4718` 完成SciDocs追问后，再生成该数据集最终指标。本轮接入任务完成，不自动发送追问。
+
+#### 2026-10-08：SciDocs当前正确率与已有核查一致率统计完成（superseding）
+
+- [x] 初问答对率2359/6000=39.32%，拒答1749/6000=29.15%；与判分器一致率分别报告。
+- [x] 绑定全部6000条新版预测与既有核查；5922已定、78争议。新版已定一致率96.61%（5721/5922），旧版93.38%；FN/FP由390/2变为89/112，总不一致392→201，净减少191，误放行增加110。
+- [x] 争议全部计错时完整集合下界95.35%（旧92.17%），新错误上界279/6000=4.65%，仍未达到1%。保存source聚类CI、规则/NLI及核查方式分组与6000条逐项对照，文件为 `artifacts/v25/diagnostics/scidocs_initial_scoring_audit_20261008/nli_v3_formal_comparison.json`。
+- [x] 明确原核查由4352条Assistant语义审查、661条整答精确相等、987条整段拒答检查组成，原标签可见；本次一致率不冒称独立人工准确率。新旧预测、门控、代码及阈值保持，不按正式对照重新调参。
+- 本次统计完成，无新模型推理、API/victim/Retriever调用；SciDocs追问仍0，nfcorpus未改。唯一下一步仍是用户执行既有新版SciDocs追问命令，不因本轮统计自动改分或启动追问。
+
+#### 2026-10-08：SciDocs新版初问指标已汇总（superseding）
+
+- [x] 按2000篇source、每篇3条初问计算local_only，固定分数≥2判成员。AUC=0.9693015 [0.9617854,0.9758161]，Acc=89.70%，TPR/FPR=80.30%/0.90%，TP/FN/FP/TN=803/197/9/991。
+- [x] 记录Precision98.8916%、F1 88.6313%、AP0.9610215、MCC0.8084148和完整区间；TPR@FPR≤1%与≤5%均80.30%，不插值，未采用事后阈值。分数降至1的FPR=11.70%。
+- [x] 验证6000条绑定、2000唯一source、两类各1000及三槽完整；AUC与sklearn复算一致，正式输入/初问判分/门控未变。保存现有审查目录的 `nli_v3_initial_metrics.json/.md/.png`，同步专项记录36.7。
+- [x] 明确本次仅初问诊断，不生成完整追问方案最终scores/report或混版本macro，不修改冻结代码和阈值。用户SciDocs追问已开始产出响应，本次未启动、停止或干预该任务，无新增模型/API/victim/Retriever调用。
+- [ ] 唯一下一步：待用户当前SciDocs追问完成，再按新版评分生成该cell完整指标。初问指标请求已完成。
+
+#### 2026-10-09：新三值评分开发试验完成（superseding）
+
+- [x] 固定比较`C+λR`与`(C−U)+λ(R−V)`，正确性门控及v3标签完全共用；不归一化，λ=1主对照与0/0.25/0.5/1/1.5/2/4固定网格。
+- [x] 从预存开发材料限定claim-anchor fresh r2的64篇，三库分别M/N=4/7、14/13、12/14；与正式6000篇source/text identity零重叠，不混合历史cohort。
+- [x] 按用户明确授权补齐28条缺失追问：nfcorpus 2、SciDocs 14、TREC-COVID 12；复用原查询、检索缓存与模型参数，victim/API=28、Retriever=0。最终64/64完整，不再用52篇完整案例替代全体。
+- [x] 对新增28条固定v3判分：25 correct、1 refused、2其他，invalid=0。首轮漏配对字段导致的14 invalid作为失败证据保留；修复只补原计划的配对引用，victim未重发。本地NLI合计17输入对/5批。
+- [x] 逐库、macro、配对CI、固定阈值、低FPR、完整λ网格与实际图完成。所有网格AUC=1，λ=0也为1；λ=1/cutoff=2新旧TPR100%/FPR0。记录天花板、已见开发子集、小样本和退化CI限制，不宣称新公式更好或方法等效。
+- [x] 125项评分测试、84项sklearn AUC独立复算及两图检查通过；扩展现有102脚本与原测试，未改正式评分/配置或既有响应，无提交推送。交付[分析报告](../artifacts/v25/diagnostics/signed_score_development_20261009/analysis/analysis-report.md)、统计附录、图目录、逐来源计数及[专项记录第37节](思路v25_ReCheck正确性门控成员验证.md)。
+- [x] 纠正上条下一步时态：此次只读SciDocs机器状态已complete，当前不再“等待追问完成”。没有据正式指标选新公式、没有接管或改写正式结果。
+- 本次开发对照任务已完成，新λ仍未选定，正式公式保持。若继续此候选，唯一建议下一步是先确定新的source隔离开发队列及固定比较计划，再检验能否识别增益；不自动扩展调用、不按已见攻击分数选择样本。
+
+#### 2026-10-09：nfcorpus整批新旧评分对照完成（superseding，post-hoc diagnostic）
+
+- [x] 核实目标为1000成员＋1000非成员、2000个source；6000初问＋4350追问齐全，不抽取方便子集、不补零，无补跑。
+- [x] 保持当前nfcorpus原matcher、已接入复核和正确性门控，复现全部原分数；23条语义争议/11条否定冲突不当拒答，固定两类abstention理由提取−1。
+- [x] λ=1与完整固定网格的AUC、来源配对CI、阈值2与低FPR指标、分布及两张真实图已完成。anchor/remote AUC升至0.9744795/0.9714940；TPR@FPR≤1%升至82.2%/81.6%，同时披露固定阈值检出率和准确率下降。
+- [x] 记录初问拒答信号与高λ退化；不选择正式λ，不合并不同判分器的64篇开发结果，不改正式结果。当前诊断身份为posthoc_formal_score_diagnostic。
+- [x] 132项定向测试通过，28个AUC/4个固定阈值/8个低FPR点独立复算一致，输入及原判分器hash不变，两图目视检查通过。新增API/victim/Retriever/NLI调用0；未提交推送。
+- [x] 更新两份总表和[专项记录第38节](思路v25_ReCheck正确性门控成员验证.md)。产物见[分析报告](../artifacts/v25/diagnostics/signed_score_nfcorpus_2000_20261009/analysis-report.md)、同目录统计附录、图目录、JSON与逐来源计数。
+- 本次用户请求全部完成，正式评分保持。后续此候选的唯一建议下一步是独立、事前固定的开发验证与阈值校准；本轮不自动推进其他cell、补发API或挑选λ。
+
+#### 2026-10-09：nfcorpus其他指标补充完成（superseding）
+
+- [x] 从已有2000篇来源分数补齐λ=1、score≥2的Precision/Recall/F1/MCC/混淆矩阵、Balanced accuracy/NPV及非插值AP，保留原AUC和评分结果。
+- [x] 补充source分层配对2000次bootstrap CI和0/0.1%/1%/5%经验ROC点；明确固定阈值F1/MCC下降、无锚点0.1%检出率下降以及两臂零误报检出率下降。
+- [x] 更新原统计附录、分析报告及专项记录38.7，单独保存other_metrics_lambda1.json。28项sklearn点指标、4个原AUC/混淆计数及8个原低FPR点一致；原report/source输入hash保持。
+- 本次补充完成，无代码/config/正式状态变化、新API或模型调用；不以次要指标重选λ或阈值。下一步仍为独立开发验证候选，不自动启动实验。
+
+#### 2026-10-09：SciDocs整批三值评分对照完成（superseding，post-hoc diagnostic）
+
+- [x] 核实新版机器状态complete，1000＋1000 source、6000初问和4718追问全部有效；保持v3标签与正确性门控，不复用旧matcher或Assistant修正。
+- [x] 在原102脚本增加v3正式材料的只读适配；旧公式从固定v3判分重建，未向正式目录写scores/report。复现此前全部2000篇初问分数与AUC0.9693015；新旧统计均覆盖整批来源。
+- [x] 固定λ=1和原7点网格，完成AUC、来源配对CI、AP、分类指标、混淆矩阵及0/0.1%/1%/5%经验FPR操作点。anchor ΔAUC+0.0038825、remote−0.0005205，Holm p0.071964/0.815092；不依据未校正CI宣称显著改善。
+- [x] 同时报出固定阈值Accuracy/F1/MCC下降、1%上限TPR提高、anchor在0.1%上限下降和两臂5%上限下降；记录高λ退化，未选择新λ或改阈值。
+- [x] 138项定向测试通过；28个AUC、44项次要点指标、4组混淆计数、16个ROC点、32个CP区间及50项输入hash核验通过；两图目视检查通过。新API/victim/Retriever/NLI调用均0，无提交推送。
+- [x] 保存[诊断报告](../artifacts/v25/diagnostics/signed_score_scidocs_2000_20261009/analysis-report.md)、统计附录、图目录、主/次指标JSON、逐来源特征及verification.json；同步notes与[专项记录第39节](思路v25_ReCheck正确性门控成员验证.md)。
+- 本次SciDocs请求完成。当前证据支持较窄的1%经验FPR收益，不支持新公式全面占优；不同判分版本不混入跨库主macro。候选的唯一建议下一步仍是事先固定、source隔离的开发验证与阈值校准；不自动生成正式新报告或接管其他cell。
+
+#### 2026-10-09：新公式结构收敛与审稿风险审查完成（superseding）
+
+- [x] 按用户“可行即收敛”的意向，保留`(C−U)+λ(R−V)`结构；明确λ/阈值尚未重新固定，当前正式配置保持。
+- [x] 核查赋值理由、拒答风格依赖、追问罚项必要性、λ>1的门控语义、判分口径和已见正式数据选择风险；没有以公式简洁为由制造额外治理要求。
+- [x] 完成两批既有2000来源的组件诊断与2000次source配对CI。追问拒答罚项未稳定提高AUC，但有锚点的1%经验FPR上限检出率在两批均提高；同时保留SciDocs无锚点反例和实际FPR不同的限制。
+- [x] 在原诊断目录分别保存`formula_component_review.json`；22个AUC点与sklearn一致，原主报告、来源特征和正式输入保持。同步notes与[专项记录第40节](思路v25_ReCheck正确性门控成员验证.md)。无新增源码、API/模型调用或提交推送。
+- 本次审查完成，公式结构不再继续扩项。后续唯一建议步骤是事先固定的source隔离开发校准与未见来源评估，包含组件消融及完整低FPR报告；本轮不自动执行。
+
+
+#### 2026-10-09：三值来源评分主线接入完成（superseding，暂用 λ=1 / 阈值2）
+
+- [x] 按用户明确决定将主线公式替换为 `(C−U)+λ(R−V)`，不归一化；暂沿用1/2并记录参数来源及 `pending_ablation`，不再把公式保留为未接入候选。
+- [x] 从102脚本提取既有评分/读取逻辑至 `src/evaluation/source_scoring.py`，诊断与主线共用；配置为 `configs/v25_signed_scoring.yaml`。旧冻结模块、配置、查询、判分与门控保持；原初问基线C不变，C−U另存。
+- [x] nfcorpus与SciDocs各2000来源的新主线评分和指标已写入独立目录，两臂点结果复现此前诊断。保留各自判分版本及事后重算性质，不产生混合macro或新untouched评估结论。
+- [x] 153项评分测试和210项shared-G回归通过；包含125种三槽组合×6个权重、缺失不补0、输入/参数漂移拒绝、旧结果保护、NLI端到端零新模型调用与重复运行。4000篇逐来源及独立指标复核通过，86项保护hash保持。
+- [x] 更新README、notes和[专项记录第41节](思路v25_ReCheck正确性门控成员验证.md)，交付新目录 `verification.json`。无新增API/victim/Retriever/NLI调用，无提交推送。
+- [ ] 后续唯一实验步骤：事先确定source隔离的开发消融，检查组件、λ及阈值，再固定未见评估设置。1/2目前仅为用户同意沿用的默认值，本轮不执行消融或其他cell。
+
+#### 2026-10-09：已有消融证据整理及下一步纠正（superseding）
+
+- [x] 核对两库各2000篇已有新旧公式对照、组件消融与七点λ敏感性；已有消融已完成。
+- [x] 交付[论文证据整理](../paper/三值评分消融与敏感性整理.md)，完整写作进展记于paper/写作记录.md。
+- [x] 澄清沿用λ=1、阈值2无需为补消融再跑开发批次；`pending_ablation`仅保留参数尚未独立校准的事实，
+  不修改原配置或报告。保留事后分析、判分差异、固定阈值漏检代价及低FPR反例。
+- [x] 本条取代此前“后续唯一实验步骤为新增开发消融”的推进建议；当前整理已完成，新增实验调用0，未提交推送。
+- [ ] 下一步：只读核对尚未完成评估cell的当前配置、机器状态与调用计划，确定沿用固定设置的执行顺序。
+  真实API/victim、GPU长任务等不由本轮授权自动启动。
+- 如需重新选λ/阈值，再使用source隔离开发数据；未见来源评估用于独立泛化验证，不与开发选参混为同一步。
+
+#### 2026-10-09：全库 NLI v3 开放，待启动 trec-covid
+
+- [x] 用户明确要求 NLI v3 对全部数据集开放；新增 `configs/v25_shared_g_formal_nli_v3_all.yaml` 与薄兼容入口 `scripts/105_run_v25_shared_g_nli.py`，原冻结 NLI 模块、104入口、SciDocs配置及历史产物保持原样。
+- [x] 本地激活独立 `_nli_v3_all` 目录并复用已完成 SciDocs 回答／标签／门控缓存；认可原 nfcorpus 完成度，不自动重判。新 NLI cell 一旦开始则必须完成，不允许用旧完成状态掩盖新缺失。全库开放不等于三库已统一判分，暂不合并混合主macro。
+- [x] 新增 `configs/v25_signed_scoring_all.yaml`，启用trec-covid新输入，保留λ=1、阈值2、seed45及旧输入；新输出目录保护已有报告，未创建新查询协议或治理层。
+- [x] 确认trec-covid 2000篇来源、18000检索query已冻结，当前6000初问全缺、追问门控尚未形成；只读前序检查通过，CUDA可用。4项新增mock测试＋17项既有正式NLI回归通过。
+- [ ] **当前唯一下一步：trec-covid retrieve**，105入口 `retrieve --dataset trec-covid --max-new 18000`。本轮仅准备命令，没有实际检索或问答调用。
+- [ ] 检索完整后执行6000条初问（自动固定NLI判分）；初问完整后执行固定新门控追问（两臂合计最多12000），最后通过 `v25_signed_scoring_all.yaml` 生成来源分数与指标。
+- 原 NLI v3 1%目标未达、独立验证未完成的限制保留；新API/victim/Retriever/NLI调用0，无下载、安装、提交或推送。
+
+#### 2026-10-09：trec-covid retrieve 执行中
+
+- [x] 用户明确授权运行检索；指定Python环境和CUDA确认通过，使用全库NLI配置及105入口。
+- [ ] **当前执行：** `retrieve --dataset trec-covid --max-new 18000`，单trec-covid cell已启动，等待机器产物确认覆盖率与身份。
+- [ ] 检索结束后核对18000条冻结query覆盖、Member-only/index/query/config/retriever绑定和完成状态。
+- 后续初问、追问、NLI判分与来源评分均未启动；本轮授权执行范围为检索。
+
+#### 2026-10-09：trec-covid retrieve 已完成
+
+- [x] 单trec-covid检索完成：18000/18000，complete=true；initial、correct_anchor、remote_only各6000条。
+- [x] Member-only核验通过：索引1000篇Member、3672个chunk、3672×768有限向量；全部90000个top-5结果来自Member，query ID零重复且覆盖完整。
+- [x] 无模型加载／NLI／victim调用的完成后恢复返回new_queries=0、complete=true；26项历史冻结文件hash保持。关键产物及SHA记录于notes，检索运行长度提示保留。
+- [ ] **当前唯一下一步：6000条trec-covid初问**，105入口 `run-initial --dataset trec-covid --max-new 6000`（自动固定NLI判分）。本轮没有启动，用户本轮执行指令仅为检索。
+- 后续初问完整后执行固定门控追问，再作三值来源评分；本轮新增本地检索18000、API/victim/NLI0，无下载、安装、提交或推送。
+
+#### 2026-10-09：trec-covid 初问部分完成，恢复被异常记录拦截（superseding）
+
+- [x] 只读核验用户执行后的初问进度：2476个query已尝试，2475个completed、1个uncertain_transport；6000条计划另有3524条无请求记录。2476个判分为2475个resolved＋1个invalid（response_not_completed），当前status=invalid、complete=false，无最终指标。
+- [x] 定位当前报错：入口在发送新请求前发现上述不确定记录并拒绝续跑；记录仅有error_type=RuntimeError，不能确认具体HTTP/网络/超时/返回格式原因。普通重跑恢复不适用于这种已保存的异常终态。
+- [x] 保留2475条成功响应、失败请求及其无效判分和既有检索，本轮未改代码或机器产物；三个当前产物hash记录于notes。诊断新增API/victim/Retriever/NLI调用0。
+- [ ] **当前唯一下一步：处理这1条不确定请求的恢复方式，保留失败证据并复用成功请求，再继续剩余初问。** 同一run-initial命令目前会继续拦截，不直接删行或伪造完成状态，本轮不发起真实重试。
+- [ ] 初问完整有效后再形成固定门控追问，最后作三值来源评分；追问与攻击指标当前均未产生。
+
+#### 2026-10-09：trec-covid 异常初问已局部恢复（superseding）
+
+- [x] 按用户要求先完整备份原响应、判分和status至trec-covid/failed_initial_backup_20261009；原失败证据和原SHA保持，位置记录于notes。
+- [x] 当前工作文件只移除该异常query的开始/异常两行和一行无效判分；2475条成功响应及判分逐字节保持，无代码、配置或实验语义变更，不新增实验版本。
+- [x] 刷新状态为incomplete：有效响应2475、resolved判分2475、invalid=0、pending=3525，原失败query为首个待运行请求。历史2476次尝试仍需计入，其中1次失败已备份，不以工作文件数抹去失败调用。
+- [x] 离线恢复检查通过，在真实victim客户端构造前用mock停止；NLI backend未加载，新增API/victim/Retriever/NLI调用0，未实际重试。
+- [ ] **当前唯一下一步：用户重跑原run-initial命令，补齐3525条pending；已有2475条不重复调用。** max-new 6000是上限，实际仅运行缺失query。
+- [ ] 初问全部有效并完成固定NLI判分后，再执行门控追问及三值来源评分。本轮未提交推送。
+
+#### 2026-10-09：trec-covid 续跑后另一条请求异常，待定位（superseding）
+
+- [x] 确认上次局部恢复有效：原失败query本次completed，续跑新增55条成功；第56次新请求发生另一条uncertain_transport，并触发2340的保存后停止。
+- [x] 只读复核当前初问：2530个有效响应/2530个resolved判分、1个异常/invalid，status=invalid、complete=false；另3469条无请求记录，合计3470条尚未有效完成。计入原备份的失败后累计用户请求尝试2532次。
+- [x] 确认根因信息缺失：仅有RuntimeError，没有HTTP状态或底层异常链，本地没有运行日志。不能直接确认超时或服务端故障；本轮未改代码、机器产物或发新请求，关键hash记录于notes。
+- [ ] **当前唯一下一步：补充安全的请求异常类型链/HTTP状态诊断，再处理这条新失败并续跑。** 当前同一命令直接重跑会再次触发既有异常拦截；本轮不盲目重试或修改固定实验设置。
+- [ ] 初问完整有效后再执行门控追问及三值来源评分；当前无最终指标，新增API/victim/Retriever/NLI调用0，未提交推送。
+
+#### 2026-10-09：有限网络重连接入，trec-covid初问可续跑（superseding）
+
+- [x] 按用户要求在105入口加入仅对可识别网络故障的有限重连：默认3次、2/4/8秒等待，--network-retries 0关闭；HTTP/格式/证书/模型身份错误仍停止，不切换provider或模型。
+- [x] 原冻结核心/配置/run_config/旧结果保持；每次重连使用同一Prompt/检索/解码参数，原ChatResult.retry_count不改写。新行记录network_retry_policy、client_attempts、network_retry_count、安全request_errors，真实尝试与逻辑query数分开。
+- [x] 28项定向mock检查通过，含初问和追问重连、耗尽保护、成功缓存恢复和旧FormalNLI回归；测试的一处Prompt身份假设已改为source绑定query ID。AST/CLI/空白检查通过，未跑真实API或模型。
+- [x] 当前旧失败已完整备份到trec-covid/failed_initial_backup_20261009_2，再移除该query的两条请求记录及一条无效判分；2530条成功响应和判分逐字节保持。状态恢复incomplete、invalid=0、pending=3470，失败query为首个pending；原两次失败证据仍保留。
+- [x] 新入口的无API续跑预检通过，NLI backend未加载；新runner与当前工作文件hash记录于notes，新增API/victim/Retriever/NLI调用0，无新实验版本或治理文件。
+- [ ] **当前唯一下一步：用户重跑105 run-initial，补齐3470条pending；默认最多网络重连3次。** 2530条成功请求不重复发送；若耗尽或非网络异常仍保存并停止。
+- [ ] 初问完整有效后执行固定门控追问与三值来源评分。本轮未下载、安装、提交或推送。
+
+#### 2026-10-10：trec-covid初问完成，固定门控追问待运行（superseding）
+
+- [x] 用户补跑3470个初问query后，响应及判分6000/6000，invalid=0、unscored=0、missing_responses=0；correct=2505、not_correct=3495。保存status=incomplete、complete=false，命令complete=true仅表示initial阶段完成，cell_complete=false仍正确。
+- [x] 5010个固定gate query ID唯一且与当前初问判分hash绑定一致；correct_anchor=2505、remote_only=2505。当前追问响应/判分为0，pending=5010，无最终source级攻击指标。
+- [x] 本次3470个新query均为一次客户端尝试，未触发网络重连；当前成功请求6000次，加两次已备份的历史失败，累计客户端尝试6002次。真实重连恢复仍只经过既有mock验证；旧失败证据不丢弃。
+- [x] 只读状态/冻结query plan及响应统计核对通过，NLI backend未加载；关键产物hash记录于notes。本轮新增API/victim/Retriever/NLI调用0，仅追加两份总表，无新实验版本或文件。
+- [ ] **当前唯一下一步：用户运行以下命令，补齐5010条固定门控追问；最多网络重连3次。** 已完成初问保持，HTTP/格式/身份异常仍保存并停止。
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B `
+  'D:\MIA\mia_model\scripts\105_run_v25_shared_g_nli.py' `
+  --config 'D:\MIA\mia_model\configs\v25_shared_g_formal_nli_v3_all.yaml' `
+  run-followup --dataset trec-covid --max-new 5010 --network-retries 3
+```
+
+- [ ] 固定门控追问完整有效后，再计算三值source评分和最终指标；当前不报告成员推断AUC或混合判分版本macro。本轮未启动真实追问、下载、安装、提交或推送。
+
+#### 2026-10-10：追问超时失败已备份恢复，待用户自行续跑（superseding）
+
+- [x] 确认第199个追问连续4次TimeoutError，3次网络重连已耗尽；已有198条有效响应/判分，失败状态uncertain_transport。当前异常栈是续跑时读取失败缓存的拦截，未发送新请求。具体query、异常链、北京时间和hash见notes。
+- [x] 按用户明确要求完整备份追问响应、判分、status到trec-covid/failed_followup_backup_20261010；只移除失败query两条请求行及一条无效判分。198个成功结果逐字节保持，初问6000条、固定gate和retrieval保持。
+- [x] 恢复为status=incomplete、invalid=0、pending=4812，原失败query是首个pending；无API续跑预检通过，NLI backend未加载，专用Python/CUDA可用。累计实际客户端尝试6204次，本轮助手新增API/victim/Retriever/NLI推理0，无代码、配置或实验定义改动。
+- [x] 助手代跑被自动审批两次拒绝，未启动进程或新增调用。只读确认目标仍为私网172.16.150.45:8000及相同Gemma模型，现有198条响应的profile identity与当前目标一致；拒绝原因详见notes。用户改为自行执行，不再申请助手代跑。
+- [ ] **当前唯一下一步：用户在原PowerShell执行下列命令，续跑4812条固定门控追问。** 成功缓存会跳过，网络最多重连3次；若再次耗尽，失败证据仍保存并停止。
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B `
+  'D:\MIA\mia_model\scripts\105_run_v25_shared_g_nli.py' `
+  --config 'D:\MIA\mia_model\configs\v25_shared_g_formal_nli_v3_all.yaml' `
+  run-followup --dataset trec-covid --max-new 4812 --network-retries 3
+```
+
+- [ ] 追问完整有效后计算source级三值评分及最终指标；当前无最终攻击AUC。未启动真实续跑，未下载、安装、提交或推送。
+
+#### 2026-10-10：trec-covid问答及来源级三值结果完成（superseding）
+
+- [x] 用户补跑4812条追问完成；初问6000/6000、追问5010/5010全部有效并判分，invalid/unscored/missing均为0，gate外历史响应0，cell_complete=true。三份失败备份保留，成功逻辑查询11010个，含历史失败的累计客户端尝试11016次。
+- [x] 使用既有v25_signed_scoring_all.yaml完成trec-covid本地三值评分，输出artifacts/v25/scoring/shared_g_signed_v1_20261009_all/trec-covid/{scores.jsonl,report.json}。2000个source document（Member/Nonmember各1000），lambda=1、阈值2、seed=45、bootstrap=2000保持；新增API/victim/Retriever/NLI调用0。
+- [x] source AUC：local_only=0.959322，correct_anchor=0.9809565（95% CI [0.975939,0.985474]），remote_only=0.9790605。主分阈值2下accuracy=93.25%、TPR=88.5%、FPR=2.0%；经验ROC的TPR@FPR≤1%=79.1%（实际FPR=0.6%），不改阈值。详细指标、hash与预算分母见notes和机器报告。
+- [x] 独立sklearn AUC、固定阈值混淆矩阵、source唯一性与分组及scores hash核验通过。只读输入保持，未生成旧二值报告或覆盖历史结果；新产物仅有本次既有入口的两份评分文件，未改代码/配置。
+- [x] 状态准确区分：问答采集和本地统计完成；事后重评分报告仍formal_release_allowed=false、独立NLI验证/1%接受门禁未通过，mixed-version主macro不生成。未据本库结果调参，不把query级回答正确率当source攻击准确率。
+- [ ] **当前唯一下一步：整理三库已有逐数据集主结果，衔接已有两库消融与敏感性证据，并标明判分版本、预算及事后评分属性。** 论文整理记录维护在paper/写作记录.md；当前无需再跑TREC-COVID victim问答。
+
+已完成的本地评分命令（输入/代码不变时再次运行只验证并复用现有报告）：
+
+```powershell
+& 'D:\python\anaconda\envs\mia_model\python.exe' -X utf8 -B -m src.evaluation.source_scoring `
+  --config 'D:\MIA\mia_model\configs\v25_signed_scoring_all.yaml' --dataset trec-covid
+```
+
+本轮未下载、安装、提交或推送。
+
+#### 2026-10-11：ReCheck正确性门控追问详细实验计划完成（superseding）
+
+- [x] 用户确认主线；单独完成 [ReCheck顶会实验矩阵与补充计划](ReCheck_顶会实验矩阵与补充计划_20261011.md)。主表目标4模型×3库，先补ReCheck/MEntA/IA的36个方法结果单元，完整参考版为6方法×12设置＝72个；模型候选及扩展均为待落实计划。
+- [x] 计划明确同预算上限5、同数量独立问题、所有槽追问、随机槽位对照，以及代表模型的检索、知识库规模、防御/正常效用、查询成本和source级统计；不新增追问构造形式的贡献问题，不修改现有方法。
+- [x] 现有Gemma三库结果与两库消融准确复用；保持事后评分、混合判分不算主macro和独立核验缺失的限制。独立来源另列，NFCorpus不承诺2000篇fresh集；计划不替代冻结配置或实验执行授权。
+- [ ] **当前唯一下一步：计划A1——离线补齐TREC-COVID组件/七点λ分析，并形成三库固定阈值的逐文档判定转移和成本表。** 本轮未实施；该项复用固定响应和标签，无需新增victim/API/Retriever/NLI推理，不重选λ=1或阈值2。
+- [ ] 随后按计划A2–A5盘点独立来源、明确判分盲审及基线/对照定义；在任何新评估响应可见前固定config/code commit/split/query/judge/scoring。
+- [ ] 按P1完成公平基线、独立验证、三个新增模型及两代表模型门控对照；P2补代表基线、检索/知识库规模及防御效用，P3仅按论文主张追加。
+
+本轮只新增上述计划并追加两份总表，没有代码/配置/实验产物修改，没有实际运行新实验或消融；新增API/victim/Retriever/NLI推理均0，无模型下载、安装、训练、提交或推送。论文正文、PDF及Overleaf未更新。
+
+#### 2026-10-11：按用户要求后置全部外部基线（superseding）
+
+- [x] 已在 [详细实验计划](ReCheck_顶会实验矩阵与补充计划_20261011.md) §3.1整理MEntA Table 3的60个AUROC参考值，标为原论文报告；未将引用值计作本项目已运行结果。
+- [x] 已将MEntA/IA/MBA/S²-MIA/DCMI及各扩展中的外部基线统一移至F阶段。此条取代上一条“P1先补公平基线、P2补代表基线”的执行顺序。
+- [x] 预算拆为先做ReCheck/自身对照、最后补外部基线；独立验证、检索/知识库规模和防御先完成ReCheck，保留同一冻结设置供后补比较。
+- [ ] **当前唯一下一步仍为A1：离线补齐TREC-COVID评分组件/七点λ及三库固定阈值逐文档转移和成本表。** 本轮未执行，不重选λ=1或阈值2。
+- [ ] 按A2–A5准备来源、判分、模型资源及自身对照；按B完成ReCheck跨模型、独立验证、机制/评分/预算实验，按C及已选D项完成系统扩展。当前不等待外部基线实现。
+- [ ] 上述已选定的非基线实验完成后执行F1–F5：核查基线实现，补五方法主表及MEntA扩展，完成同条件配对与成本比较。最终72个本项目主表单元的目标保留；当前60个论文引用值不勾选为实测完成。
+
+本轮仅调整文档顺序与参考数据，没有运行A1或真实实验，没有代码/配置/冻结协议/机器产物修改；新增API/victim/Retriever/NLI推理均0，无下载、安装、训练、提交或推送。论文正文、PDF与Overleaf未改。
+
+#### 2026-10-11：A1三项离线分析交付（superseding）
+
+- [x] 用户要求的三项全部实际完成：TREC-COVID的11个评分组件点和两臂七点λ，三库C−U→完整分数的固定阈值2逐source转移，以及membership×K查询成本。保持λ=1、阈值2、历史seed=45，统计bootstrap2000次、seed=20261009，没有用结果选择参数。
+- [x] 交付[A1完整报告](../artifacts/v25/diagnostics/recheck_offline_a1_20261011_final/analysis-report.md)、统计附录、图目录、report.json、6000篇逐source计数、五份CSV、四组PNG/PDF。各库1000 Member＋1000 Nonmember，status=posthoc_offline_a1_complete；原两库消融及首次表图快照保留，不覆盖历史证据。
+- [x] 结果明确保留权衡：TREC主分AUC=0.9809565；−V额外AUC增量仅+0.000428且CI跨0，旧两库主方法也未确认−V稳定收益。C−U→追问后Member净检出+133/+152/+113，初问检出保留98.40%/98.48%/98.83%；FP为9→7、7→9、22→20，ΔFPR CI均跨0，三项Nonmember Holm p均1。当前支持增加检出，尚不支持稳定净纠错。
+- [x] 分开旧式→新式消融与初问→追问机制比较，保留大λ退化、成员损失/新增误报、TREC阈值2的2% FPR。经验TPR@≤1%保留可达阈值/实际FPR、source配对重选ROC区间及条件CP区间，不作部署校准。
+- [x] 主逻辑成本8175/8359/8505，总25039，均问数4.0875/4.1795/4.2525；两臂成功采集合计32078。已分别报告Member/Nonmember、K=0/1/2/3、3–6问人数、均值区间、来源SD、中位/P90/P95和追问比例；K=0保留且追问率未定义，失败重试和辅助资源不混计。
+- [x] 最小实现复用102分析入口及已有测试文件；6项新增离线测试＋38项已有Signed定向回归通过。独立AUC/AP、十二组转移计数、预算、source身份、所有输入/输出hash及图表复核通过；score/judge/config/旧report保持，实际分析代码与最终report hash见notes。
+- [x] 状态仍为已见source事后诊断，formal_release_allowed=false、未作参数选择、mixed-judge主macro不生成。未新增独立真人盲审或NLI验收；原标签误差与单模型单seed限制保持。新API/victim/Retriever/NLI推理均0，无下载安装、GPU训练、提交推送或论文正文/PDF修改。
+- [x] [详细实验计划](ReCheck_顶会实验矩阵与补充计划_20261011.md)的A1及§6.1前四项已按实际结果勾选；F阶段后补外部基线顺序保持。
+- [ ] **当前唯一下一步为A2：只读盘点每库来源容量、历史接触与source/text hash重叠，明确独立验证实际可用数量。** 不改旧split、不采集新victim响应、不把名义剩余数量当已确认fresh来源。
+- [ ] 之后推进A3判分独立盲审、A4模型资源与mock、A5同预算/选槽对照定义，再按B/C及已选D执行ReCheck，最后F阶段补外部基线。本条取代上一条“A1仍未执行”的当前状态，其他阶段未勾选完成。
+
+
+#### 2026-10-11：A2三项来源容量盘点交付（superseding）
+
+- [x] 审计三库来源池和本地保留历史：199616篇来源、1259份文件、1934555363字节。包含v24工作树/legacy、开发、失败/superseded、构造/查询、检索背景index、审核/判分和文字记录；全池候选枚举不算实验接触。
+- [x] source身份、原文hash、v24规范化hash与source_order检查通过；原始重复40/1/964篇、空文档0/0/1。历史扣除后长度不足80词42/1577/49662篇，候选跨库重复排除0/0/7篇；原始去重不再重复扣减。三库6000篇旧正式来源全部已接触，候选与其零source重叠。
+- [x] 历史已接触3074/2583/2615篇；未知9/13/21篇均已扣除，另交付43篇身份与证据路径的[独立清单](../artifacts/v25/diagnostics/recheck_source_capacity_a2_20261011_final/history_uncertain.csv)。29条未关联记录中28条synthetic/empty测试fixture不属于BEIR池，1条SCIDOCS历史引用仍未能关联。未将AI审核当真人证据。
+- [x] [容量报告](../artifacts/v25/diagnostics/recheck_source_capacity_a2_20261011_final/capacity-report.md)及CSV、report、逐source状态和证据hash表实际交付；首轮快照保留，最终扩展口径取代首轮容量值。候选总数NF468、SCIDOCS21483、TREC118062；其中仅准备未执行288/1951/2073篇。完全无历史分配记录候选为180/19532/115989，最保守平衡上限90＋90 / 9766＋9766 / 57994＋57994；含未执行准备的一档上限234＋234 / 10741＋10741 / 59031＋59031。
+- [x] [详细计划](ReCheck_顶会实验矩阵与补充计划_20261011.md) §5.2、§6.1和A2已同步实际容量和限制。NF不能再承诺1000＋1000独立集；两大库保留1000＋1000目标，容量为构造前上限，未形成合格query或fresh split。
+- [x] 9项A2定向＋11项来源回归（20项）、6项A1离线分析回归通过；6000旧正式source排除、来源总数/互斥分区、管线输出hash与CSV计数独立核对通过，AST与git diff --check通过。复用102及既有测试，无新治理层、协议世代或冻配置修改；新增API/victim/Retriever/NLI均0，无下载安装、GPU任务、训练、提交、推送、论文/PDF修改。
+- [ ] **B3前仍需确认历史范围：** 旧hard-negative筛选CSV、sequential_revision_100x3 selected_slots、三库reconciled eligibility split_manifest共5类输入本地未保留；缺失证据详见notes和[A2机器报告](../artifacts/v25/diagnostics/recheck_source_capacity_a2_20261011_final/report.json)。应补回历史身份，或明确缩小独立性主张与验证范围，不能把“本地无记录”写成完整fresh保证。此次盘点完成不勾选独立验证构造/冻结或执行。
+- [ ] **当前唯一下一步为A3：固定下一批回答判分定义，准备来源级独立盲审材料，组织真实独立人工核验并披露误差及gate影响。** 材料准备、Assistant annotation及真人双标分别记录，不将其互相替代。
+- [ ] 随后A4模型资源与mock、A5同预算/选槽对照定义，再按B/C及选定D项推进ReCheck，最后F补全部外部基线。本条取代上一条“A2为当前唯一下一步”，后续阶段未勾选完成。
+
+
+#### 2026-10-11：取消额外独立验证，直接推进实验扩展（superseding）
+
+- [x] 按用户“不需要独立验证”“这已经是验证过的啊”的要求更新[详细计划](ReCheck_顶会实验矩阵与补充计划_20261011.md)，沿用已有Gemma三库结果、A1分析及判分核查材料。
+- B3：**已取消，未标为实验完成。** 不另抽独立来源或建立对应知识库，不构造/冻结该项新split，不在F阶段补该设置MEntA，移除其独立来源结果表及预算。
+- A3：**追加独立盲审改为可选补充。** 不作为后续实验前置条件；下一批判分版本在B1固定。已有核查按实际类型保留，不将自动/Assistant记录升级为独立人工标注或补写误差验收passed。
+- [x] A2完成状态和全部审计证据保持。B3所需补齐5类旧输入、确认fresh历史范围等前置任务解除；不改旧split或历史机器产物。
+- [x] 活动预算已移除B3的ReCheck 24000–48000次、后补MEntA 40000次及NFCorpus追加部分；主表72单元及408000–480000次名义预算原本未包含B3，保持不重复扣减。
+- [ ] **当前唯一下一步为A4：核对新增模型硬件、具体revision、服务配置与接口/mock。** 下载、安装、GPU长任务或真实API/victim调用按执行范围取得明确授权。
+- [ ] 随后固定A5同预算/选槽对照，推进B1/B2/B4–B6、C及已选D；最后F1–F5补外部基线。本条取代“A3独立盲审为当前唯一下一步”，不将其余未执行实验勾选为完成。
+
+本轮为文档调整，未改方法、lambda=1、阈值2、代码、配置或实验产物，无重跑及新协议版本。新增API/victim/Retriever/NLI均0，无下载、安装、GPU任务、提交、推送或论文/PDF修改。
+
+
+#### 2026-10-11：Generator等待确定为2秒，沿用现有执行入口（superseding）
+
+- [x] 用户明确“5 秒等待 改为两秒等待吧”；下一批Generator固定回答后等待2秒、单请求串行。此条取代5秒的后续时间估算。
+- [x] 历史21728次请求的耗时抽查完成：模型平均约0.3544秒，相邻开始约5.33–5.38秒；按旧Gemma延迟估计约快2.27倍，新模型实测尚未进行。
+- [x] 现有三个Generator入口均支持`runtime.generation.request_interval_seconds`；12项执行回归通过，5秒/2秒隔离mock比较通过：每组36次调用，顺序/Prompt/解码/回答/来源评分相同，resume均新增0次，模拟等待180→72秒。临时fixture已自动清理，真实API/GPU调用0。
+- [x] [详细计划](ReCheck_顶会实验矩阵与补充计划_20261011.md) §4.3、A4及固定等待时间预算已更新。现有正式配置与产物保留5秒原值；当前未生成或启动新模型运行配置，不把参数决定记为新实验已执行。
+- [ ] **当前唯一下一步仍为A4：核对新增模型硬件、revision、服务配置和接口，在其新运行配置应用回答后等待2秒。** 随后完成A5同预算对照定义，按B/C及已选D推进，外部基线仍最后F阶段补。
+
+本轮仅文档变更，无代码/实际YAML/冻结产物修改，无新增调用、下载安装、GPU任务、提交、推送或论文/PDF更新；不需要重跑已有Gemma结果或新协议版本。
+
+
+#### 2026-10-11：API接入统一使用PCV_VICTIM，完成key前缺口核对（superseding）
+
+- [x] 用户确认Llama3.1-8B及后续Generator采用API，凭据沿用`.env`的`PCV_VICTIM_*`；A4不再以本地Generator权重下载/GPU部署为前提。
+- [x] 只读核对现有客户端的API_KEY/BASE_URL/MODEL/MODEL_VERSION读取、进程环境优先规则及模型绑定检查；未读取或输出`.env`内容。发现`llama_primary`仍默认70B，实际8B API别名、地址和版本待落实。
+- [x] [详细计划](ReCheck_顶会实验矩阵与补充计划_20261011.md) §4.4及A4已写明key前准备和现状：通用客户端/2秒等待已支持；现有`prepare`会重选来源，没有直接跨Generator复用固定输入的入口；新模型配置与端到端mock尚未完成。
+- [ ] **当前唯一下一步A4：** 在现有代码中补固定来源/查询/检索输入复用，落实Llama3.1-8B实际服务信息与模型绑定、独立输出目录、2秒串行配置、固定判分/评分、mock及单dataset运行/续跑命令。未来模型沿用该接入方式，各自重新采集响应并决定gate，不复用Gemma响应、gate或评分。
+- [ ] 随后完成A5/B1并执行B2；不重新引入已取消的独立验证或必需真人盲审。具备key且获明确执行授权后再做真实API核对和采集，外部基线仍在F最后补。
+
+本轮只读分析及现有三份记录更新，无代码/实际YAML/历史产物修改，无真实调用、下载安装、GPU任务、提交或推送；不将准备清单记为Llama接入完成，不要求旧结果重跑或新协议世代。
+
+
+#### 2026-10-11：Generator接入收缩为复用Gemma（superseding）
+
+- [x] 按用户要求简化[详细计划](ReCheck_顶会实验矩阵与补充计划_20261011.md) §4.4及A4；取代此前多项前置接入准备。
+- [ ] **当前唯一下一步A4：** 直接沿用Gemma代码及运行配置模板，替换Llama3.1-8B模型连接、结果目录和回答后等待2秒。固定数据/问题/检索及已确定的判分评分沿用，必要输入路径在现有文件小改，验证使用受影响的现有测试。
+- 后续Generator统一使用PCV_VICTIM_*，各模型独立采集回答、计算gate和评分并保存结果。新8B服务信息及实际配置尚待落实；不把计划简化写为接入完成。
+- 不新建接入框架或强制整套mock前置流程，不恢复独立验证/必需真人盲审。A5/B1/B2及外部基线F最后补的安排保持。
+
+本轮仅记录修改，无代码/实际YAML/历史产物改动及真实调用，不要求重跑Gemma或新增协议世代；无下载、安装、GPU任务、提交或推送。
+
+
+#### 2026-10-12：Llama连接复测仍失败，先恢复本机18000监听
+
+- [x] 按用户明确授权读取PCV_VICTIM_*并使用现有客户端最小复测；必需字段齐全，模型llama-3.1-8b-instruct，地址http://127.0.0.1:18000/v1，无进程环境覆盖，不输出key。
+- [x] 本次请求失败证据：WinError 10061、无HTTP状态码；随后netstat确认本机18000无TCP监听。前次及本次各1次连接尝试，合计2次、成功模型回答0；未进入key鉴权，未确认远端服务或实际模型版本。
+- [ ] **当前唯一下一步A4：** 先确认并恢复本机18000的既有服务/端口转发，再最小复测。连接成功后按现有Gemma模板落实Llama运行配置及2秒等待；本轮未启动服务、修改.env或实际YAML，接入未完成。
+- [x] 详细计划及两份实验总表已同步连接状态。正式响应采集0，Retriever/NLI调用0，无下载安装、GPU任务、提交/推送或历史产物修改。
+
+
+#### 2026-10-12：Llama连接再次复测成功（superseding）
+
+- [x] 用户再次授权最小复测；现有客户端通过PCV_VICTIM_*连接http://127.0.0.1:18000/v1，服务端返回OK及llama-3.1-8b-instruct，与配置模型一致。
+- [x] 本轮1次API请求、1次成功回答，客户端535.1毫秒、输入40/输出2 tokens、重试0；含前两次失败共3次连接尝试、成功1次。提示仅为Reply with exactly: OK，未发送研究数据或采集正式响应，不输出key。
+- [x] 详细计划及两份总表同步成功状态，取代“当前端口不可用”的下一步；此前失败记录保留。连接通过不等于正式接入或实验完成，PCV_VICTIM_MODEL_VERSION仍未填写。
+- [ ] **当前唯一下一步A4：** 按现有Gemma模板落实Llama运行配置、独立结果目录及2秒等待；固定输入/代码复用，必要路径在原文件小改并运行受影响的现有测试。A5/B1/B2及外部基线F最后补安排保持。
+
+本轮只做连通复测和三份现有记录更新；未改.env/代码/实际YAML/历史产物，正式响应及Retriever/NLI调用0，无启动服务、创建转发、下载、安装、新GPU任务、提交或推送。
+
+
+#### 2026-10-12：Llama准备就绪，当前下一步为用户运行三库（superseding）
+
+- [x] 用户要求开启llama-3.1-8b-instruct实验，命令由其亲自运行；当前不再以“仅授权连接测试”阻塞交付。
+- [x] A4（Llama）：复制现有三阶段配置并新增8B服务profile，绑定PCV_VICTIM_*、独立结果目录及回答后等待2秒；必要复用能力在现有文件扩展，未新建流水线脚本或治理层。CommandR/Phi准备仍待做。
+- [x] 本批B1：6000固定source、3000成员索引source、54000计划查询及三库缓存预检通过；不重选或重新构造，不复用Gemma响应/分数/gate。prepare和NLI activate记录配置与代码hash、现有HEAD及输入hash，主评分配置/代码也在新响应前绑定；实际源码未提交，不把HEAD虚称为新代码提交。
+- [x] 16项定向、191项来源/评估回归、19项NLI入口复核通过；三库mock验证新模型自己的gate及有符号主分、完成请求不重复调用与评分漂移拒绝。CUDA可用；无真实网络、模型推理或新GPU任务。
+- [x] 详细计划§4.5交付完整PowerShell命令并通过语法检查。先run-initial（每库最多6000）再run-followup（最多12000，含现有对照），两阶段自动判分；之后保存NLI诊断报告及source_scoring主报告。已完成cell跳过，错误停止且保留证据。
+- [ ] **当前唯一下一步B2：用户执行§4.5，按nfcorpus→scidocs→trec-covid逐cell完成Llama。** 当前三个cell初问观测均0/6000，未产生响应文件，接入准备通过不勾选实验完成。
+- 输出：原始回答在artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012_nli_v3/<dataset>/；主分报告在artifacts/v25/scoring/shared_g_llama31_8b_signed_20261012/<dataset>/report.json。lambda=1/阈值2及已有NLI qa_pair/0.2保持，评估为既有固定cohort的新Generator实验。
+
+本轮新增真实API/victim/Retriever/NLI推理均0，无下载安装、启动新服务、提交或推送；不修改Gemma冻结配置、旧产物、.env或用户background_tunnel.py。不恢复独立验证或必需真人盲审，外部基线仍F最后补。
+
+#### 2026-10-12：V25 代码提交边界与离线核验
+
+- [x] 用户授权提交并推送 V25；选用现有 `codex/v25-successor-mainline`，将旧方案清理和 ReCheck 实现分开提交。
+- [x] 当前主线、V25 历史/开发及本地资产已区分：shared-G/104/105/NLI v3/三值来源评分和 Llama 配置纳入；92–103 被测试/诊断引用的代码保留。README 和 AGENTS 的入口说明已修正。
+- [x] 290 项旧代码/配置/测试删除有此前清理决定，纳入；`legacy/` 与现有历史产物保留。V23 预注册文档的既有缺失暂不提交删除，工作区不回滚。
+- [x] 论文目录、端口转发脚本、凭据、原始数据、模型、索引、回答/评分产物及其他本地文件排除；不使用全仓 `git add -A`，不强制提交被忽略的详细研究记录。
+- [x] 当前六文件单测 332/332（241 shared-G + 91 V25）、55 个 Python 内存编译、18 个 YAML 解析、四个 CLI help 和凭据扫描通过。无真实 API/victim/Retriever/NLI、GPU 长任务或下载安装。
+- [x] 提交检查的机器产物显示用户已启动 Llama nfcorpus 初问：274 completed、1 attempt_started；其余两库尚无响应文件。此快照取代准备时零响应的当前状态，不改写旧准备记录或将采集勾选完成。
+- 原冻结配置、实验产物及创建时的 `code_commit` 保持；此次固定代码版本不改变实验语义，不需要重跑或新协议版本。提交身份以分支 Git 历史为准，不回写 immutable manifest。
+- [ ] **当前实验阶段仍为 B2：用户按既有计划逐库完成 Llama 采集、门控追问、诊断和主分报告。** 本次代码发布不勾选实验完成，不改变其他待办或外部基线 F 最后补的安排。

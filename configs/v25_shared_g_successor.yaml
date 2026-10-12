@@ -1,0 +1,54 @@
+experiment_id: v25_shared_g_point_score_fresh_100source_20261003
+status: fresh_development_validation
+base_config: configs/restoration_first_v25.yaml
+output_dir: artifacts/v25/development/shared_g_point_score_fresh_100source_20261003
+seed: 42
+source_selection:
+  dataset_counts: {nfcorpus: 34, scidocs: 34, trec-covid: 32}
+  minimum_words: 80
+  order: seeded_shuffle_of_unused_source_pool
+  membership_assignment: alternating_after_blind_source_selection
+  replacement_after_construction: false
+index:
+  member_sources_per_dataset: 50
+  selection: designated_members_plus_unused_blind_fill
+query_protocol:
+  arms: [correct_anchor, remote_only]
+  local_slots: 3
+  followup_gate: initial_response_correct_per_slot
+  query_budget: 3 + 2 * sum(I_i)
+  remote_region: preferred_not_required
+construction:
+  maximum_attempts_per_source: 2
+  maximum_answer_words: 12
+  temperature: 0.0
+  max_tokens: 4096
+  retries: 0
+  prompt_appendix: >-
+    Choose short, specific answers (at most 12 words). Each question must ask
+    for exactly its canonical answer, including the same qualifiers and units.
+    G must not be answerable from any of the three local claims alone.
+    An anchored follow-up must use only its paired local answer as the locator.
+    No-anchor questions must preserve the same target and requested answer
+    granularity as the anchored questions. Avoid broad summaries, binary
+    yes/no answers, generic conclusions, and incomplete list answers.
+answer_policy:
+  matcher: canonical_surface_v1
+  aliases: []
+  ambiguous: zero_points_no_trigger
+  invalid: incomplete_run_no_final_metrics
+  post_response_alias_edits: false
+scoring:
+  primary: S_lambda
+  formula: sum(I_i) + lambda * sum(I_i * F_i)
+  lambda: 1.0
+  initial_gate_points: 1
+  operational_cutoff: 2.0
+  same_cutoff_baseline: local_only
+  statistical_unit: source_document
+evaluation:
+  bootstrap_samples: 2000
+  confidence: 0.95
+  minimum_initial_false_positive_sources: 20
+  low_fpr_targets: [0.01, 0.05]
+  formal_release_allowed: false

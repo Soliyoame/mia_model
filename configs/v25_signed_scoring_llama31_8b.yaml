@@ -1,0 +1,24 @@
+# 沿用现有三值来源评分、lambda=1和阈值2；三库使用同一NLI判分。
+version: signed_correct_refused_v1
+output_dir: artifacts/v25/scoring/shared_g_llama31_8b_signed_20261012
+seed: 45
+inputs:
+  nfcorpus: artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012_nli_v3
+  scidocs: artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012_nli_v3
+  trec-covid: artifacts/v25/formal/shared_g_fixed6000_llama31_8b_bge_seed45_20261012_nli_v3
+scoring:
+  primary: S_lambda
+  formula: (C - U) + lambda * (R - V)
+  normalized: false
+  lambda: 1.0
+  operational_cutoff: 2.0
+  parameter_source: inherited_previous_mainline_defaults
+  parameter_validation: pending_ablation
+  statistical_unit: source_document
+evaluation:
+  bootstrap_samples: 2000
+  confidence: 0.95
+  low_fpr_targets:
+  - 0.001
+  - 0.01
+  - 0.05

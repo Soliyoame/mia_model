@@ -1,0 +1,12 @@
+# 用户要求 NLI v3 对全部数据集开放；旧 SciDocs 配置和产物保持原样。
+# 沿用冻结查询及 qa_pair / 0.2 校准；105 入口复用已完成的前序 cell。
+version: binary_target_rules_nli_v3
+scoring_datasets:
+  - nfcorpus
+  - scidocs
+  - trec-covid
+base_config: configs/v25_shared_g_formal_followup_review.yaml
+output_dir: artifacts/v25/formal/shared_g_qualified6000_gemma2b_bge_seed45_20261004_nli_v3_all
+calibration: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/calibration.json
+development_report: artifacts/v25/diagnostics/answer_judgment_nli_v3_20261008/report.json
+adoption_reason: user_requested_all_datasets_preserving_completed_cells

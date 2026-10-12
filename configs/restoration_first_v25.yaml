@@ -37,6 +37,10 @@ query_generator:
   max_tokens: 4096
   retries: 0
 
+generation_repair:
+  max_repairs_per_phase: 1
+  scope: full_phase
+
 query_protocol:
   initial_queries: 3
   followup_max: 3
