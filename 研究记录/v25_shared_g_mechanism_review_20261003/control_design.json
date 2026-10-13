@@ -1,0 +1,93 @@
+{
+  "kind": "v25_shared_g_successor_control_design",
+  "status": "design_only_not_run",
+  "primary_endpoint": "source_level_point_score",
+  "endpoint_reframing": "The successor uses a cumulative evidence score. False-positive correction is an operational diagnostic at a frozen cutoff, not the definition of the score.",
+  "score_rule": {
+    "formula": "S_lambda(s) = sum_i I_i(s) + lambda * sum_i I_i(s) F_i(s)",
+    "lambda": 1.0,
+    "lambda_interpretation": "one equal evidence point for a correct local fact and one for its gated recovery of the shared G",
+    "maximum_score": 6.0,
+    "initial_gate_points": 1,
+    "operational_cutoff": 2.0,
+    "cutoff_interpretation": "at least two total evidence points: two local hits, or one local hit plus its correct gated G recovery",
+    "parameter_selection": "development calibration plus an interpretable equal-weight rule; no formal victim response was used"
+  },
+  "preserve": {
+    "initial_gate": "initial response is evaluated per slot",
+    "shared_G": "one frozen remote target per source reused by all follow-up arms",
+    "runtime_rule": "conditional sending only; no conditional query construction",
+    "source_level_unit": true
+  },
+  "core_required_arms": [
+    {
+      "arm": "correct_anchor",
+      "definition": "canonical e_i answer inserted into same-slot follow-up",
+      "purpose": "primary point-score evidence arm"
+    },
+    {
+      "arm": "remote_only",
+      "definition": "same G question without local anchor",
+      "purpose": "control for generic follow-up rejection without local anchor"
+    }
+  ],
+  "optional_attribution_arms": [
+    {
+      "arm": "same_source_permuted_anchor",
+      "definition": "another local fact from same source; fixed cyclic mapping e1<-e2, e2<-e3, e3<-e1",
+      "purpose": "secondary attribution control; distinguish correct pairing from arbitrary source-local cue, extra length, or template specificity"
+    }
+  ],
+  "optional_matched_controls": [
+    {
+      "arm": "cross_source_matched_anchor",
+      "definition": "same dataset and fact type, length-matched anchor from another source",
+      "purpose": "source specificity diagnostic on matched subset"
+    },
+    {
+      "arm": "neutral_length_matched",
+      "definition": "natural length-matched template without semantic source cue",
+      "purpose": "query length diagnostic only if frozen before victim calls"
+    }
+  ],
+  "budget": {
+    "initial_calls_per_source": 3,
+    "core_followup_arms": 2,
+    "optional_followup_arms": 1,
+    "max_calls_per_source_core": 9,
+    "max_calls_per_source_with_permuted_control": 12,
+    "formula_core": "3 + 2 * sum(initial_correct)",
+    "formula_with_permuted_control": "3 + 3 * sum(initial_correct)",
+    "note": "correct_anchor and remote_only are core; same_source_permuted_anchor is optional attribution control; all variants require a new successor identity"
+  },
+  "primary_metrics": {
+    "source_score": "S_lambda as the primary source-level score",
+    "score_auc": "AUC of S_lambda without post-hoc threshold selection",
+    "operational_false_positive_set": "True_Non_Member sources with sum(I_i) >= frozen initial_gate_points",
+    "correction_indicator": "1[initial gate positive and S_lambda < frozen operational cutoff]",
+    "false_positive_correction_rate": "corrected initial false positives / initial false positives",
+    "fpr_tpr": "Report FPR and Member TPR at the same frozen operational cutoff",
+    "member_retention": "Member sources positive after the cutoff / Member sources positive at the initial gate",
+    "reporting_rule": "Report exact counts, score distributions, AUC, and uncertainty; do not call 2/2 a stable population rate."
+  },
+  "freeze_before_victim": [
+    "source split and source/text hashes",
+    "e1/e2/e3, G, evidence spans and region relation",
+    "slot-to-anchor mapping for every arm",
+    "query text and hashes",
+    "lambda, initial gate points and operational score cutoff",
+    "canonical answer aliases and ambiguous policy",
+    "retriever/index/model identity",
+    "source-cluster statistics and Holm correction plan"
+  ],
+  "decision_rules": [
+    "the primary result is the frozen source-level point score and its AUC",
+    "use the cutoff only for the pre-registered false-positive correction diagnostic",
+    "report Member retention and TPR cost alongside every correction result",
+    "correct_anchor versus remote_only is an attribution comparison, not a requirement for a stable G-recovery gain",
+    "same_source_permuted_anchor is secondary attribution evidence and may be run on a matched subset",
+    "if the initial false-positive set is too small, report feasibility only and do not claim a stable correction rate",
+    "do not relabel current responses after seeing them; parser changes belong to successor freeze"
+  ],
+  "multiple_comparison": "pre-specify Holm correction only if optional attribution arms are included"
+}

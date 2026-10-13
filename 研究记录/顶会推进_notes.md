@@ -7319,3 +7319,72 @@ A4的Llama准备完成；当前唯一下一步B2为用户运行上述命令。�
 - 此次仅固定代码版本及提交范围，不改变 query、门控、判分/评分定义、参数或固定 split；无重跑及新协议版本。Llama 已准备产物以文件 hash 绑定实现，原 `code_commit` 保持其创建时事实，不能回填为此次新提交。
 
 当前实验阶段仍为 B2：由用户按既有计划逐库完成 Llama 初问、门控追问与来源评分；代码提交不代表正式采集已完成。
+
+## 2026-10-12：Llama nfcorpus 进行中拒答检查（19:04:17 快照）
+
+用户询问五百多个回答中约两百个拒答是否正常。本轮仅离线读取正在追加的响应文件快照及既有固定 source/query/retrieval，不启动、停止或重发用户的采集。
+
+- nfcorpus 已完成初问 572 次，另有 1 条 attempt_started；覆盖 191 个 source document，其中 190 个已有全部 3 个初问，1 个已有 2 个。SciDocs/trec-covid 尚无响应文件。本段次数与比例以初问响应为分母，仅作运行诊断，不是独立 source 样本量或正式评估。
+- 使用现有 v3 规则只读检查，明确拒答 174/572（30.42%），文本均为 `Unknown.`。Member 为 15/287（5.23%），True_Non_Member 为 159/285（55.79%）；159/174 的明确拒答来自非成员。安全拒绝关键词标志及 API 错误文本均为 0。238 个回答仍需既有 NLI 判定，尚无保存的 initial_judgments，不能把其余回答都称为正确或提前计算正式攻击指标。
+- 572 个完成请求均对应 5 个检索块，共 2860 块，全部来自 KB_Member；上下文长度 2061–3783 字符，中位 2857.5。由冻结检索块与问题重建 Prompt，其 hash 与响应记录、检索记录全部一致，context hash 也一致。provider 模型为 llama-3.1-8b-instruct，fingerprint 单一；没有观察到未接入 RAG、缺上下文或错误响应被混记为 Unknown 的迹象。
+- Member 明确拒答的 15 个请求中，10 个未检索到对应目标 source，5 个检索到了目标 source；source 命中不证明对应答案已包含在切块中，不据此归因全部为模型问题。当前拒答分布与仅使用参考资料、资料不足则回答 unknown 的固定 Prompt 相符；支持按既有配置继续采集，不能用进行中数据改 Prompt、检索、判分或阈值，也不能据此宣称最终攻击性能。
+
+本轮仅追加两份研究总表，无代码/配置/正式产物修改，新增 API/victim/Retriever/NLI 推理 0。当前唯一下一步仍为 B2：由用户逐库完成既有 Llama 命令，再查看正式文档级评分与报告。
+
+## 2026-10-12：Llama nfcorpus 状态检查返回 1，单条请求异常阻止续跑（22:06 快照，superseding）
+
+用户再次执行所交付 PowerShell 循环，停在“状态检查失败：nfcorpus”。同一只读 status 命令复现退出码 1，代码/配置/输入验证通过；JSON 为 status=invalid，原因是已有请求失败，而非 PowerShell 语法或配置漂移。
+
+- 原始初问文件共 1752 个逻辑请求：1751 completed、1 uncertain_transport。失败 query_id 为 2e617fdf6e2f1c7654bed9df7317ed95f76f7463d36f1f4ef3b9825c4f6a0ba5，error_type 仅保存 RuntimeError，没有 provider 回答或完整异常链。客户端会包装网络、HTTP、API 错误及返回格式异常，因此当前证据不能进一步确定底层原因。
+- 已保存 1752 个初问判定：1751 resolved（correct 713、not_correct 1038），1 invalid，reason=response_not_completed。失败请求不能记为正常拒答或零分；该 invalid 导致 status CLI 按既有逻辑退出 1，当前没有追问 gate/响应或最终指标。SciDocs/trec-covid 尚无响应。
+- 之前交付的循环将 status JSON 收入变量，在非零退出时只抛泛化错误；现已在详细计划 §4.5 的现有命令中先显示具体 JSON 再停止。此修改只改善报错可见性，不绕过失败，也不自动重发 uncertain_transport。
+- 1751 条成功回答和原判分全部保留。只读检查前后需保持原产物 hash：initial_responses c13acb99dd5bef48fbc958279bab304f7f996c90654399ebb087d64e67139b33；initial_judgments 544096c6d5ea14bdcc59d76f6e89a05900a444ca5c1e2e973e95271718de76d2；status b731574b41542ab93fb52bfe7182297c04a6d7883a70a59d0269c3ce3733aba2。
+- 另发现 _state 的展示字段 post_response_correction 硬编码为 true，冻结 run_config 正确保存 false；当前仅记录这一展示问题，不修改已冻结代码或元数据，也不将本批误写为响应后重判。
+
+本轮新增 API/victim/Retriever/NLI 推理 0；未编辑代码、配置、回答、判分、status 或冻结记录。当前唯一下一步为 B2 故障恢复：先定位并确定该单条异常请求的恢复方式，保留失败证据和成功缓存后再交付续跑命令；重复原循环不能解决该失败。
+
+## 2026-10-12：按用户要求清理单条异常，Llama接入已有重连并可续跑（22:23，superseding）
+
+用户明确要求“删掉这个异常记录，有重连吗如果没有加一个重连机制”。按该授权，仅处理上条定位到的单个失败 query；先保留完整失败证据，再清理当前续跑缓存，不静默抹除调用失败。
+
+- 原 nfcorpus initial_responses、initial_judgments 和 status 已完整备份到 artifacts/v25/diagnostics/llama31_8b_nfcorpus_failed_request_20261012/，三个 hash 与22:06快照完全一致。当前文件移除失败 query 的 attempt_started/uncertain_transport 两条原始记录及对应1条 invalid 判分；1751条成功响应及其有效判分逐行保持不变。使用现有 score 入口在新增判分0、NLI推理0的条件下刷新状态：1751 observed/judged、invalid0、missing4249、status=incomplete。失败备份不混入主结果，但此前1次未获有效回答的调用仍须计入实际调用成本；不能因恢复而按零次调用报告。
+- 原始文件 hash 更新为：initial_responses f6ca7bded0f3f2bbc7469fb60798405de02a1f855948838dc90740dc0c2391f9；initial_judgments 416f65e74cda8c249d91e4ec9bd1f28269179aa3860218e25598d67e006e394a；刷新后 status b53655bcac7d78482813fd5aefb944d6910a8dbc505ad2057c5ce17c9911d8ba。备份3文件保留，运行目录无.tmp，冻结记录原样保留、验证通过。
+- 重连机制已存在于105入口，原交付的-m answer_judgment调用没有使用它。最小修改仅使scripts/105_run_v25_shared_g_nli.py识别reused_inputs的新Generator配置：直接使用Llama自己的响应/判分，跳过旧Gemma完成缓存；前序cell仍须完成。冻结answer_judgment、共享客户端、配置和Prompt/检索/评分均未修改，三个YAML hash保持原值，不要求成功回答重跑或新协议版本。修改后的105入口SHA256为1b7df71ff2a07df826becb71fc143d3323d444d284ea757fe4c66b7c9974e971；后续执行应使用此入口与详细计划§4.5更新后的命令。
+- 重连默认/显式为3次，连接失败、断连或超时按2/4/8秒退避；每次使用同一模型、Prompt、检索、temperature和max_tokens，成功后的2秒等待保持。HTTP、证书、返回格式及模型身份异常不自动重试，耗尽重连仍保存失败并停止。新响应保存安全异常类别、client_attempts/network_retry_count/request_errors，用于区分成功逻辑查询与实际尝试；以后失败不会自动删除。
+- 13项105入口离线测试全部通过（14.503秒），覆盖已有Gemma缓存、Llama缓存逐行保留/相同Prompt重连、模型/参数身份、前序cell、重连上限与异常脱敏。两文件AST、105真实配置status、CLI help、文档命令块语法及git diff --check通过；测试阻止真实网络。恢复写入因普通沙箱目录权限受限，按用户明确授权使用写权限执行，未改变目录ACL或绕过研究冻结。
+
+当前唯一下一步B2：用户使用§4.5的105入口续跑nfcorpus剩余4249条初问，自动判分后执行本模型门控追问及来源评分，再依序SciDocs、trec-covid。本轮真实API/victim/Retriever/NLI推理0；未启动实验、提交或推送，不回填原code_commit，也不修改正常Unknown回答。
+
+## 2026-10-12：同一请求4次60秒超时，按用户新指令先清理异常（superseding）
+
+用户运行105入口后报告两次TimeoutError。本地22:33:39只读快照确认，该query的初次请求加3次重连均失败：22:29:02、22:30:04、22:31:08、22:32:16（Asia/Shanghai），client_attempts=4、network_retry_count=3，异常链均为RuntimeError→TimeoutError。退避2/4/8秒和60秒超时均按预期生效，但没有新增成功回答，采集停止。
+
+- 问题36字符、检索上下文3005字符、RAG Prompt3290字符（不含固定profile前缀），Top-5与context/prompt hash均一致。之前1751个成功请求延迟中位4.855秒、P95 9.551秒、P99 16.665秒、最大44.081秒，输入tokens491–892、中位733；未发现输入异常增大或缓存漂移，尚不能定位是推理、服务接口还是转发链路持续无响应。
+- 本机18000仍由SSH监听，已有SSH TCP连接保持ESTABLISHED，转发日志没有记录断开。新增只读SSH诊断未取得远端GPU/服务端口数据，主机公钥读取受限；没有关闭主机密钥校验或修改SSH配置。当前工具进程读取的代理列表为空，该检查不能代表用户终端所有环境设置。
+- 用户提供远端22:44:46的/health HTTP200：current_model=llama-3.1-8b-instruct、loading_model=null、waiting_requests=0、engine_pid=3812、last_error=null、对应ready=true；max_model_len131072、BF16、cpu_offload_gb8为服务自报设置，未写入或改动实验配置。健康检查证明HTTP服务响应，不能证明生成接口及时返回，也未确认GPU状态。
+- 用户随后明确要求“先删除掉这个异常记录吧”。已将本次完整initial_responses、initial_judgments和旧status备份到artifacts/v25/diagnostics/llama31_8b_nfcorpus_retry_exhausted_20261012/，保留4次超时详情；备份hash依次为e8fd08602f12f06dd7a584346311632af60032f410eebe149291516d0239b233、e9807b28c54ed663cc98b02b16dde8ddebfb9ea935b3f6b8349e04ae1dc16654、b5330971678756702f41e0ac4ae60454f5220dd14a9510fe186a888e12875585。前次失败备份同样保留，该query累计已有5次未获得有效回答的已记录尝试，后续实际调用成本不得漏记。
+- 当前续跑缓存仅移除该query的2条调用记录和1条invalid判分。1751条成功回答及1751条有效判分逐行不变，文件hash恢复为f6ca7bded0f3f2bbc7469fb60798405de02a1f855948838dc90740dc0c2391f9和416f65e74cda8c249d91e4ec9bd1f28269179aa3860218e25598d67e006e394a。现有score入口在新增判分/NLI推理0条件下刷新status：incomplete、invalid0、missing4249；冻结验证通过，未改代码、模型、Prompt、timeout或其他配置。
+
+本轮助手新增真实API/victim/Retriever/NLI推理0；用户执行的4次失败尝试按上文保留，不混称助手调用或正常拒答。当前异常状态已清除，但持续超时未修复；B2下一步先定位生成接口和转发链路的响应问题，再由用户恢复采集，不因health200或缓存清理而勾选实验完成。
+
+## 2026-10-12：用户要求单次传输超时改为120秒，原冻结配置保持（superseding）
+
+用户要求排查“连通且能回复却出现异常”，随后明确将等待时间提高到120秒。只读响应统计显示：最慢的成功回答为216 output tokens/44.081秒，另有210/43.268秒、208/41.442秒；输出中位5、P95 31、最大216。正式max_tokens=512而非流式等待为60秒，按已观察的长回答速度，较长生成可能超过60秒，短回复连通测试不能排除此情况。这是时延不足的证据和推断，尚无失败请求的服务端生成日志，不能据此断言完整根因。失败问题是“For how long was each diet consumed?”，固定答案为21-day period，同source前两个初问正常；该query原Gemma有759 input/12 output tokens、295.943ms完成记录，未发现题面异常。
+
+- 最小实现只扩展scripts/105_run_v25_shared_g_nli.py：初问/追问支持--request-timeout，接受正有限秒数；命令显式传120，每次重连也使用120，新开始及终态响应保存request_timeout_seconds。省略参数仍沿用冻结配置60。成功后2秒等待、重连3次和2/4/8秒退避不变；模型、temperature、max_tokens、Prompt、Retriever、门控、scoring和已有成功响应不变。
+- 三份冻结YAML及answer_judgment等核心代码不修改，已有冻结校验通过；不用为传输等待调整新增协议或冻结层。当前105入口hash为e938f8ac466d4527f9ffdae460c899c00cd5222f802affb9d74ec2d5101f70a5，既有Git SHA与run_config原样保留，实际等待时限由命令和每条新响应字段追踪。详细计划§4.5已为三库初问/追问加--request-timeout 120。
+- 16项入口离线测试通过（16.446秒），包括120秒传给全部重连、CLI初问/追问透传、非法时限在请求前拒绝、冻结文件不改；CLI测试消除日志全局副作用后再验通过。AST、CLI help、冻结验证及文档语法/空白检查通过；真实网络被mock阻止，新增模型调用0。
+- 23:15快照仍有1751 completed和同query的一条attempt_started。随后只读确认本机python实验进程数0，响应文件最后修改22:55:01，说明没有对应进程可继续写终态；不能把这条记录当成功回答或认定确切物理调用次数。按用户先前对同一异常的清理授权，3原件备份到artifacts/v25/diagnostics/llama31_8b_nfcorpus_interrupted_request_20261012/，仅移除该1条未完成调用记录，1751成功回答与1751有效判分逐行不变。响应备份hash f1d4a238920f0defe0c2b20e503f5750b901cac7bd49066a78a6f8fc017befd3；无新增判分刷新后invalid0、missing4249，冻结验证通过。此次未确定尝试的实际HTTP次数需标注未知，不能因清理静默计0。
+
+当前唯一下一步B2：用户运行已更新的120秒三库命令，先完成nfcorpus剩余初问再追问/主评分，依序SciDocs与trec-covid；观察120秒是否解决响应超时，不把参数实现或单元测试称为真实修复验证。已启动的旧进程无法热更新，不能并行启动同cell；本轮助手未执行真实采集、重启服务或改模型配置，API/victim/Retriever/NLI推理0，无提交/推送。
+
+## 2026-10-13：补齐 ReCheck 相关资料并统一 README 命名
+
+- 用户明确要求 V25 分支纳入 ReCheck 相关内容，而非只收录两份研究总表。修正研究目录整目录忽略规则为文件白名单，纳入思路v25、ReCheck 实验矩阵、shared-G 开发机制审阅/图表及当前三值评分结果与写作材料。根目录和 paper/README 的项目与论文名称统一为 ReCheck。
+- 当前 shared-G/NLI v3/三值来源评分及 Gemma/Llama 配置已在分支中；补交既有的 105 入口新 Generator 重连与 --request-timeout 支持、对应测试，以及与之匹配的实验计划。未重新实现攻击方法，模型/Prompt/检索/判分/评分与固定 split 保持。
+- 思路v25 的发布版保留方法、时间记录、审阅结论和证据索引；603 条批量附表及 28 条逐例材料的完整模型回答正文留在本地。机制 JSON 的 45 个逐例回答字段在发布版替换为本地保留提示，统计汇总和诊断状态保持。三个文件通过 Git 暂存对象生成发布版，工作区完整原件原字节保留；提交后这三份本地完整文件显示未暂存差异是预期，后续不得直接将原始响应正文暂存。
+- paper/ 纳入当前 ReCheck 的 README、三值评分消融与敏感性整理和写作记录。旧 PVS 正文、框架图、原 ZIP、编译物与 BUILD_CHECK 仍是历史本地材料，不将只改题名的旧稿称为 ReCheck 正文完成。论文发布范围与命名记录同步至 paper/写作记录.md。
+- 105 入口 16 项定向 mock 测试、两个修改 Python 文件内存 AST 解析及三个 CLI help 通过；--network-retries 与 --request-timeout 参数可见。没有真实 API/victim/Retriever/NLI 推理、GPU 长任务、下载、依赖安装或论文编译。
+- 此次补齐代码版本与资料发布范围，不改变冻结配置或 immutable 实验产物，不需要新协议版本或成功请求重跑。缺失的 V23 预注册删除和 background_tunnel.py 不纳入；历史资产保持。
+
+当前实验仍按 B2 由用户逐库完成 Llama；资料与代码发布不表示三库实验或 ReCheck 论文正文已经完成。

@@ -91,5 +91,24 @@ src/baselines/MIRABEL/
 # 研究记录（思路/未来计划），不入库
 /思路v*.txt
 /未来计划.txt
-# 归档目录:思路/实验记录统一收纳于此,整目录不入库
-/研究记录/
+# 历史记录默认留在本地；V25/ReCheck 方法、计划和汇总证据纳入版本控制。
+/研究记录/*
+!/研究记录/顶会推进_notes.md
+!/研究记录/顶会推进_task_plan.md
+!/研究记录/思路v25_ReCheck正确性门控成员验证.md
+!/研究记录/ReCheck_顶会实验矩阵与补充计划_20261011.md
+!/研究记录/v25_shared_g_mechanism_review_20261003/
+/研究记录/v25_shared_g_mechanism_review_20261003/*
+!/研究记录/v25_shared_g_mechanism_review_20261003/*.md
+!/研究记录/v25_shared_g_mechanism_review_20261003/control_design.json
+!/研究记录/v25_shared_g_mechanism_review_20261003/review_summary.json
+!/研究记录/v25_shared_g_mechanism_review_20261003/cross_batch_audit.json
+!/研究记录/v25_shared_g_mechanism_review_20261003/figures/
+/研究记录/v25_shared_g_mechanism_review_20261003/figures/*
+!/研究记录/v25_shared_g_mechanism_review_20261003/figures/*.png
+
+# 当前纳入 ReCheck 写作说明和结果整理；旧 PVS 稿件、原 ZIP 及编译物留在本地。
+/paper/*
+!/paper/README.md
+!/paper/写作记录.md
+!/paper/三值评分消融与敏感性整理.md

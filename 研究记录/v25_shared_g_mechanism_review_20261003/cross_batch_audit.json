@@ -1,0 +1,513 @@
+{
+  "kind": "v25_shared_g_cross_batch_zero_call_audit",
+  "audit_date": "2026-10-03",
+  "status": "development_only",
+  "source_unit": "source_document",
+  "audit_execution": {
+    "read_only": true,
+    "external_calls_performed": 0,
+    "luna_calls": 0,
+    "retriever_calls": 0,
+    "victim_calls": 0,
+    "gpu_calls": 0,
+    "modified_existing_response_or_retrieval_artifacts": false
+  },
+  "scope_and_comparability": {
+    "batches": [
+      "shared_g_anchor_pilot_r3_20261002",
+      "shared_g_anchor_cohort_query_usable_100sample_50plus50_member_index_fixed_20261002",
+      "shared_g_point_score_fresh_100source_20261003"
+    ],
+    "pooled_auc_or_pooled_correction_rate": false,
+    "reason": "The batches have different cohort identities, query plans, index identities, response sets and scoring/reporting stages. The counts below are descriptive cross-batch evidence, not a single formal estimator.",
+    "member_only_index_caveat": "True_Non_Member target-source absence is expected under the frozen Member-only index and is part of the observed refusal mechanism; it is not an independent proof of membership.",
+    "shared_g_dependence": "The three follow-up slots reuse one source-level remote target G. Slot counts are conditional diagnostics; source-level correction is the primary unit."
+  },
+  "batches": [
+    {
+      "id": "r3_pilot_gated",
+      "artifact": "artifacts/v25/development/shared_g_anchor_pilot_r3_20261002",
+      "status": "development_only",
+      "source_counts": {
+        "total": 6,
+        "KB_Member": 3,
+        "True_Non_Member": 3
+      },
+      "construction": {
+        "generation_sources": 6,
+        "query_usable_sources": 6,
+        "frozen_queries": 54,
+        "region_different_for_all_three_locals": "6/6",
+        "region_policy": "preferred, not a hard gate"
+      },
+      "recorded_calls": {
+        "luna": 6,
+        "retrieval": 54,
+        "victim_initial": 18,
+        "victim_followup_gated": 10
+      },
+      "gate_and_followup": {
+        "initial_queries": 18,
+        "initial_correct_slots": 5,
+        "initial_correct_slots_by_group": {
+          "KB_Member": 5,
+          "True_Non_Member": 0
+        },
+        "initial_false_positive_sources": 0,
+        "triggered_slots": 5,
+        "expected_followup_calls": 10,
+        "observed_followup_calls": 10,
+        "followup_labels": {
+          "anchored": {
+            "correct": 5,
+            "incorrect": 0,
+            "ambiguous": 0,
+            "invalid": 0
+          },
+          "remote_only": {
+            "correct": 2,
+            "incorrect": 3,
+            "ambiguous": 0,
+            "invalid": 0
+          }
+        }
+      },
+      "retrieval": {
+        "queries": 54,
+        "target_source_hits": 26,
+        "target_source_hit_rate": 0.4814814815,
+        "g_answer_surface_hits": 10,
+        "g_answer_surface_hit_rate": 0.1851851852
+      },
+      "natural_false_positive_correction": {
+        "initial_false_positive_sources": 0,
+        "corrected_sources": null,
+        "interpretation": "No natural gated correction event was available."
+      },
+      "forced_nonmember_diagnostic": {
+        "status": "diagnostic_only",
+        "initial_gate_bypassed": true,
+        "sources": 3,
+        "followup_calls": 9,
+        "labels": {
+          "correct": 0,
+          "incorrect": 0,
+          "ambiguous": 9,
+          "invalid": 0
+        },
+        "target_source_hits": 0,
+        "g_answer_surface_hits": 0,
+        "interpretation": "This is a refusal/context-absence diagnostic and is excluded from gated correction, score and AUC."
+      },
+      "provenance": {
+        "report_sha256": "207f520e34c9498605d580eea5cc9b2392a582c3920be2e115ef6cfd1229d580",
+        "query_plan_sha256": "9feab7cc6381be3ef95daaf594bf425557a5f8f94318e0572f12d7794118c551",
+        "retrieval_sha256": "274a0584008d333ed5f0bbd8c5835ded306a1f819a4f188b2f32b39dd9a716ca",
+        "followup_response_sha256": "99696815d7b2561fab18b0862c39701d250bc257819c9d6288c4c9e50fb474db"
+      }
+    },
+    {
+      "id": "fixed_index_50_plus_50",
+      "artifact": "artifacts/v25/development/shared_g_anchor_cohort_query_usable_100sample_50plus50_member_index_fixed_20261002",
+      "status": "development_only",
+      "source_counts": {
+        "total": 100,
+        "KB_Member": 50,
+        "True_Non_Member": 50
+      },
+      "construction": {
+        "frozen_queries": 900,
+        "initial_queries": 300,
+        "anchored_queries": 300,
+        "remote_only_queries": 300,
+        "region_different_for_all_three_locals": "96/100",
+        "region_same_for_at_least_one_local": "4/100",
+        "region_policy": "preferred, not a hard gate"
+      },
+      "recorded_calls": {
+        "luna": 0,
+        "retrieval": 900,
+        "victim_initial": 300,
+        "victim_followup_gated": 178,
+        "call_scope": "Fixed-index downstream run reused a frozen query plan; construction calls are not counted as new calls here."
+      },
+      "gate_and_followup": {
+        "initial_correct_slots": 89,
+        "initial_correct_slots_by_group": {
+          "KB_Member": 87,
+          "True_Non_Member": 2
+        },
+        "initial_false_positive_sources": 2,
+        "initial_false_positive_source_keys": [
+          "scidocs::015d1aabae32efe2c30dfa32d8ce71d01bcac9c5",
+          "trec-covid::00qoe8ir"
+        ],
+        "triggered_slots": 89,
+        "expected_followup_calls": 178,
+        "observed_followup_calls": 178,
+        "followup_labels": {
+          "anchored": {
+            "correct": 58,
+            "incorrect": 24,
+            "ambiguous": 7,
+            "invalid": 0
+          },
+          "remote_only": {
+            "correct": 56,
+            "incorrect": 29,
+            "ambiguous": 4,
+            "invalid": 0
+          }
+        }
+      },
+      "retrieval": {
+        "queries": 900,
+        "target_source_hits": {
+          "KB_Member:initial": "139/150",
+          "KB_Member:anchored": "144/150",
+          "KB_Member:remote_only": "138/150",
+          "True_Non_Member:initial": "0/150",
+          "True_Non_Member:anchored": "0/150",
+          "True_Non_Member:remote_only": "0/150"
+        },
+        "answer_surface_hits": {
+          "KB_Member:initial": "91/150",
+          "KB_Member:anchored": "85/150",
+          "KB_Member:remote_only": "78/150",
+          "True_Non_Member:initial": "0/150",
+          "True_Non_Member:anchored": "0/150",
+          "True_Non_Member:remote_only": "0/150"
+        }
+      },
+      "reported_historical_chain": {
+        "initial_auc": 0.9228,
+        "anchored_chain_auc": 0.82,
+        "remote_only_chain_auc": 0.77,
+        "anchored_member_tpr": 0.64,
+        "remote_only_member_tpr": 0.54,
+        "initial_fpr": 0.04,
+        "anchored_fpr": 0.0,
+        "remote_only_fpr": 0.0
+      },
+      "selected_point_score_lambda_1_cutoff_2": {
+        "formula": "S_1=sum(I_i)+sum(I_i*F_i)",
+        "initial_gate": "sum(I_i)>=1",
+        "same_cutoff_local_only": {
+          "member_tpr": 0.64,
+          "true_non_member_fpr": 0.0,
+          "initial_false_positive_sources_below_cutoff": 2
+        },
+        "correct_anchor": {
+          "auc": 0.926,
+          "member_tpr": 0.8,
+          "true_non_member_fpr": 0.0,
+          "corrected_initial_false_positive_sources": "2/2",
+          "member_retention_among_initial_member_positives": 0.9302325581,
+          "member_tpr_cost_vs_initial_gate": 0.06
+        },
+        "remote_only": {
+          "auc": 0.9256,
+          "member_tpr": 0.78,
+          "true_non_member_fpr": 0.0,
+          "corrected_initial_false_positive_sources": "2/2",
+          "member_retention_among_initial_member_positives": 0.9069767442,
+          "member_tpr_cost_vs_initial_gate": 0.08
+        },
+        "interpretation": "Both follow-up arms retain more Members than local-only at cutoff 2, but both correct the same two one-local-hit non-members; this does not identify an anchor-specific correction effect."
+      },
+      "provenance": {
+        "report_sha256": "c63c51a75a479cd1e277ea3145ac9bf337ad811f5f1dbed550f4b3305c6ae9f3",
+        "run_config_sha256": "6fef33de824de57598ec18c4d686b95ce6bf291fbf453cdcb809c0404b9047ff",
+        "query_plan_sha256": "cbe9f3b0cde03aef3149d840427da8fc618fbea910218b08270217e8749b7f9d",
+        "retrieval_sha256": "a2f4f2f0460dbf71cb4f3a95da7f3eed1392df1521ff5944b5d0206edd94acbf",
+        "initial_response_sha256": "e0943d57b50390ff14f5f94045284d2978054bce4f59287ce3b40f11fd6e855a",
+        "followup_response_sha256": "1c149c11e798a052b44934a1cb28fba672e9a9cd41e3db70c97b9e3e29bb88ed"
+      }
+    },
+    {
+      "id": "fresh_successor_20261003",
+      "artifact": "artifacts/v25/development/shared_g_point_score_fresh_100source_20261003",
+      "status": "fresh_development_validation_complete",
+      "source_counts": {
+        "original_frame": 100,
+        "original_KB_Member": 50,
+        "original_True_Non_Member": 50,
+        "structural_pass": 97,
+        "semantic_accepted_and_evaluated": 59,
+        "evaluated_KB_Member": 29,
+        "evaluated_True_Non_Member": 30,
+        "construction_failures_not_replaced": 3,
+        "semantic_rejections": 38
+      },
+      "construction": {
+        "frozen_queries": 531,
+        "initial_queries": 177,
+        "correct_anchor_queries": 177,
+        "remote_only_queries": 177,
+        "region_different_for_all_three_locals": "93/97 structural-pass sources",
+        "region_policy": "preferred, not a hard gate"
+      },
+      "recorded_calls": {
+        "luna": 115,
+        "retrieval": 531,
+        "victim_initial": 177,
+        "victim_followup_gated": 90
+      },
+      "gate_and_followup": {
+        "initial_correct_slots": 45,
+        "initial_correct_slots_by_group": {
+          "KB_Member": 44,
+          "True_Non_Member": 1
+        },
+        "initial_false_positive_sources": 1,
+        "initial_false_positive_source_key": "nfcorpus::MED-3483",
+        "triggered_slots": 45,
+        "expected_followup_calls": 90,
+        "observed_followup_calls": 90,
+        "followup_labels": {
+          "correct_anchor": {
+            "correct": 24,
+            "incorrect": 20,
+            "ambiguous": 1,
+            "invalid": 0
+          },
+          "remote_only": {
+            "correct": 29,
+            "incorrect": 15,
+            "ambiguous": 1,
+            "invalid": 0
+          }
+        }
+      },
+      "retrieval": {
+        "KB_Member": {
+          "initial_target_source": "75/87",
+          "correct_anchor_target_source": "87/87",
+          "remote_only_target_source": "81/87",
+          "initial_answer_surface": "47/87",
+          "correct_anchor_answer_surface": "46/87",
+          "remote_only_answer_surface": "48/87"
+        },
+        "True_Non_Member": {
+          "initial_target_source": "0/90",
+          "correct_anchor_target_source": "0/90",
+          "remote_only_target_source": "0/90",
+          "initial_answer_surface": "2/90",
+          "correct_anchor_answer_surface": "0/90",
+          "remote_only_answer_surface": "0/90"
+        }
+      },
+      "selected_point_score_lambda_1_cutoff_2": {
+        "formula": "S_1=sum(I_i)+sum(I_i*F_i)",
+        "initial_gate": "sum(I_i)>=1",
+        "same_cutoff_local_only": {
+          "auc": 0.9396551724,
+          "member_tpr": 0.4827586207,
+          "true_non_member_fpr": 0.0,
+          "initial_false_positive_sources_below_cutoff": 1
+        },
+        "correct_anchor": {
+          "auc": 0.9448275862,
+          "member_tpr": 0.7931034483,
+          "true_non_member_fpr": 0.0,
+          "corrected_initial_false_positive_sources": "1/1",
+          "member_retention_among_initial_member_positives": 0.8846153846,
+          "member_tpr_cost_vs_initial_gate": 0.1034482759
+        },
+        "remote_only": {
+          "auc": 0.9448275862,
+          "member_tpr": 0.7931034483,
+          "true_non_member_fpr": 0.0,
+          "corrected_initial_false_positive_sources": "1/1",
+          "member_retention_among_initial_member_positives": 0.8846153846,
+          "member_tpr_cost_vs_initial_gate": 0.1034482759
+        },
+        "interpretation": "The natural non-member false positive is rejected by both follow-up arms. Correct-anchor and remote-only are identical on every reported source-level outcome in this batch."
+      },
+      "provenance": {
+        "report_sha256": "6bffed9ea977182767e7bee77108a620e507592a5efe825d70f3dc203dac1c66",
+        "run_config_sha256": "856244240c7099f621cbf749f280bb8edd166309adbc880c4c729588342c8d65",
+        "query_plan_sha256": "54e2a62c774fd31d61ddfe1daca16abe0d913d3002698bf863a8da3be9261bbd",
+        "retrieval_sha256": "a1e26d080290a869eaeac5507547e0c041c5c1ddf1392d8c5f11be8fc4170bab",
+        "initial_response_sha256": "6e40a4f0b120f943f313917477557d5b2f2e7ca3111fd333adbef35d48b35c2a",
+        "followup_response_sha256": "677057abba94c2b9e4cfd421a641467c5ea8ecfca281a08a1c2126e0d7042b03"
+      }
+    }
+  ],
+  "cross_batch_descriptive_summary": {
+    "natural_gated_false_positive_sources": {
+      "r3_pilot_gated": 0,
+      "fixed_index_50_plus_50": 2,
+      "fresh_successor_20261003": 1,
+      "descriptive_total": 3
+    },
+    "corrected_by_correct_anchor": {
+      "fixed_index_50_plus_50": "2/2",
+      "fresh_successor_20261003": "1/1",
+      "descriptive_total": "3/3"
+    },
+    "corrected_by_remote_only": {
+      "fixed_index_50_plus_50": "2/2",
+      "fresh_successor_20261003": "1/1",
+      "descriptive_total": "3/3"
+    },
+    "pooled_rate_status": "The 3/3 count is a cross-batch descriptive tally only. It is not a pooled correction-rate estimate, confidence interval or formal claim because the protocol identities and denominators differ and the total initial-FP capacity is 3 sources."
+  },
+  "case_audit": [
+    {
+      "case_id": "fixed_scidocs_one_local_hit",
+      "batch": "fixed_index_50_plus_50",
+      "source_key": "scidocs::015d1aabae32efe2c30dfa32d8ce71d01bcac9c5",
+      "dataset": "scidocs",
+      "group": "True_Non_Member",
+      "slot_index": 1,
+      "initial_bits": [
+        0,
+        1,
+        0
+      ],
+      "triggered_slot": 1,
+      "local_question": "What complexity are computational problems underlying solutions to these issues often found to have?",
+      "local_answer": "NP-hard",
+      "initial_response": "原始模型回答仅保留于本地响应产物",
+      "initial_label": "correct",
+      "remote_answer": "cost function",
+      "anchored_question": "In the discussion of problems that are NP-hard, what is the function C known as?",
+      "anchored_response": "原始模型回答仅保留于本地响应产物",
+      "anchored_label": "ambiguous",
+      "remote_only_question": "What is the function C known as?",
+      "remote_only_response": "原始模型回答仅保留于本地响应产物",
+      "remote_only_label": "incorrect",
+      "retrieval_hits": {
+        "initial_target_source": false,
+        "initial_g_surface": false,
+        "anchored_target_source": false,
+        "anchored_g_surface": false,
+        "remote_only_target_source": false,
+        "remote_only_g_surface": false
+      },
+      "point_scores": {
+        "initial_points": 1,
+        "correct_anchor_score": 1,
+        "remote_only_score": 1,
+        "cutoff": 2
+      },
+      "correction_outcome": "Both follow-up arms fall below cutoff and remove the initial one-local-hit false positive.",
+      "interpretation": "This is operational correction through the minimum two-point cutoff plus zero remote evidence; it is not evidence that the anchor caused a negative point."
+    },
+    {
+      "case_id": "fixed_trec_covid_one_local_hit",
+      "batch": "fixed_index_50_plus_50",
+      "source_key": "trec-covid::00qoe8ir",
+      "dataset": "trec-covid",
+      "group": "True_Non_Member",
+      "slot_index": 0,
+      "initial_bits": [
+        1,
+        0,
+        0
+      ],
+      "triggered_slot": 0,
+      "local_question": "What is identified as having effects on the national health system response?",
+      "local_answer": "COVID-19",
+      "initial_response": "原始模型回答仅保留于本地响应产物",
+      "initial_label": "correct",
+      "remote_answer": "national health system",
+      "anchored_question": "In the study involving COVID-19, what system's response is discussed?",
+      "anchored_response": "原始模型回答仅保留于本地响应产物",
+      "anchored_label": "incorrect",
+      "remote_only_question": "What system's response is discussed?",
+      "remote_only_response": "原始模型回答仅保留于本地响应产物",
+      "remote_only_label": "incorrect",
+      "retrieval_hits": {
+        "initial_target_source": false,
+        "initial_g_surface": false,
+        "anchored_target_source": false,
+        "anchored_g_surface": false,
+        "remote_only_target_source": false,
+        "remote_only_g_surface": false
+      },
+      "point_scores": {
+        "initial_points": 1,
+        "correct_anchor_score": 1,
+        "remote_only_score": 1,
+        "cutoff": 2
+      },
+      "correction_outcome": "Both follow-up arms fall below cutoff and remove the initial one-local-hit false positive.",
+      "interpretation": "The anchored answer follows a different context and the remote-only answer is unrelated; both fail the frozen canonical answer matcher."
+    },
+    {
+      "case_id": "fresh_nfcorpus_one_local_hit",
+      "batch": "fresh_successor_20261003",
+      "source_key": "nfcorpus::MED-3483",
+      "dataset": "nfcorpus",
+      "group": "True_Non_Member",
+      "slot_index": 2,
+      "initial_bits": [
+        0,
+        0,
+        1
+      ],
+      "triggered_slot": 2,
+      "local_question": "What barrier can the main citrus flavonoids traverse?",
+      "local_answer": "the blood-brain barrier",
+      "initial_response": "原始模型回答仅保留于本地响应产物",
+      "initial_label": "correct",
+      "remote_answer": "hesperetin",
+      "anchored_question": "In the discussion involving the blood-brain barrier, which citrus flavonoid is discussed as inducing cellular defense proteins against oxidative stress and neurotoxicity?",
+      "anchored_response": "原始模型回答仅保留于本地响应产物",
+      "anchored_label": "ambiguous",
+      "remote_only_question": "Which citrus flavonoid is discussed as inducing cellular defense proteins against oxidative stress and neurotoxicity?",
+      "remote_only_response": "原始模型回答仅保留于本地响应产物",
+      "remote_only_label": "incorrect",
+      "retrieval_hits": {
+        "initial_target_source": false,
+        "initial_g_surface": false,
+        "anchored_target_source": false,
+        "anchored_g_surface": false,
+        "remote_only_target_source": false,
+        "remote_only_g_surface": false
+      },
+      "point_scores": {
+        "initial_points": 1,
+        "correct_anchor_score": 1,
+        "remote_only_score": 1,
+        "cutoff": 2
+      },
+      "correction_outcome": "Both follow-up arms fall below cutoff and remove the sole initial one-local-hit false positive.",
+      "interpretation": "The fresh batch reproduces the correction pattern, while correct-anchor and remote-only are identical at source level."
+    }
+  ],
+  "diagnostic_only_case_audit": {
+    "batch": "r3_pilot_forced_nonmember_followup",
+    "source_keys": [
+      "nfcorpus::MED-1134",
+      "scidocs::00ef4151ae7dfd201b326afbe9c112fac91f9872",
+      "trec-covid::00l2apsc"
+    ],
+    "group": "True_Non_Member",
+    "initial_bits": "not applicable; initial gate was bypassed",
+    "followup_calls": 9,
+    "labels": "ambiguous=9, correct=0, incorrect=0, invalid=0",
+    "target_source_hits": "0/9",
+    "g_answer_surface_hits": "0/9",
+    "correction_outcome": "not applicable",
+    "interpretation": "The victim repeatedly refused when the target source/G was absent from the Member-only context. These calls must remain separate from gated correction."
+  },
+  "decision": {
+    "supported": [
+      "Across two independent development identities with natural gated false positives, the shared-G second stage produced a descriptive 3/3 false-positive removal tally.",
+      "The three natural false positives were one-local-hit sources; both follow-up arms returned no usable G point, so the score cutoff rejected them.",
+      "Fresh data reproduces the operational correction pattern; it does not reveal a correct-anchor advantage over remote-only.",
+      "The r3 forced non-member diagnostic provides a concrete refusal/context-absence mechanism case but is not a gated correction result."
+    ],
+    "not_supported": [
+      "A pooled formal correction rate or confidence interval across batches.",
+      "A stable anchor-specific gain or a causal local-anchor-to-G navigation claim.",
+      "A formal test result or a generalization claim: total natural initial-false-positive capacity is only 3 sources and the fresh batch has 1."
+    ],
+    "next_action": "If more evidence is needed, use a new membership-blind natural cohort with the scoring rule frozen before responses, increasing natural initial-false-positive capacity. Do not make hard-negative search or another member-only retrieval exercise a mandatory gate.",
+    "formal_release": false
+  },
+  "publication_note": "Git 发布版保留统计及诊断状态，逐例完整模型回答仅保留于原研究工作区；本地完整原件未改写。"
+}

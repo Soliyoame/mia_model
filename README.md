@@ -1,8 +1,8 @@
-# PCV-MIA
+# ReCheck
 
-PCV-MIA 项目研究如何判断一篇 source document 是否属于 RAG 知识库。当前 V25 shared-G 方法命名为 **ReCheck（正确性门控的二阶段成员验证）**：将初始正确回答视为暂时性的成员证据，仅对答对的槽位执行预先构造的追问验证，再用下述三值评分形成文档级成员分数。事实锚点用于构造追问；识别并纠正误导性正向信号是待实验验证的核心目标。早期 Paired Counterfactual Verification／PVS 方法及其记录作为历史保留。
+ReCheck 项目研究如何判断一篇 source document 是否属于 RAG 知识库。当前 V25 shared-G 方法命名为 **ReCheck（正确性门控的二阶段成员验证）**：将初始正确回答视为暂时性的成员证据，仅对答对的槽位执行预先构造的追问验证，再用下述三值评分形成文档级成员分数。事实锚点用于构造追问；识别并纠正误导性正向信号是待实验验证的核心目标。早期 Paired Counterfactual Verification／PVS 方法及其记录作为历史保留。
 
-目标会议为 **USENIX Security 2027**。论文稿件及配套材料统一存放在 [paper/](paper/) 目录；当前最新初稿来自用户确认的 [pcv_mia_usenix_rewrite.zip](paper/pcv_mia_usenix_rewrite.zip)，已解包为 [主文件](paper/main.tex)、[章节源码](paper/sections/)及配套图表。编译与稿件说明见 [paper/README.md](paper/README.md)，论文撰写、修订和交付进展统一记录在 [paper/写作记录.md](paper/写作记录.md)。实验结果仍为待填项；2026-09-20 已同步原 Overleaf 项目的 README，云端正文与 PDF 仍为旧版，新版稿件尚未上传或重新编译。
+目标会议为 **USENIX Security 2027**。当前方法说明见[思路v25](研究记录/思路v25_ReCheck正确性门控成员验证.md)，后续执行安排见[ReCheck 实验矩阵与补充计划](研究记录/ReCheck_顶会实验矩阵与补充计划_20261011.md)。论文与结果材料统一存放在 [paper/](paper/)：已整理的 ReCheck 实验依据见[三值评分消融与敏感性整理](paper/三值评分消融与敏感性整理.md)，稿件状态和写作进度见 [paper/README.md](paper/README.md) 与[写作记录](paper/写作记录.md)。本地论文正文和框架图仍是早期 PVS 工作稿，尚未整体迁移为 ReCheck；其源文件和原 ZIP 留在本地，不作为当前 ReCheck 正文发布。
 
 ## 代码提交与方法边界
 
@@ -12,11 +12,13 @@ V25 代码分支为 `codex/v25-successor-mainline`。各入口的职责如下：
 |---|---|---|
 | 当前 ReCheck 方法 | `src/shared_g/`、`104_run_v25_shared_g_formal.py`、`105_run_v25_shared_g_nli.py` | 固定 shared-G 问题、初问正确性门控、分模型采集与 NLI 判分；运行时显式选择配置。 |
 | 当前主分 | `src/evaluation/source_scoring.py`、`configs/v25_signed_scoring*.yaml` | `(C-U) + lambda*(R-V)`，以 source document 为统计单位。 |
+| ReCheck 方法与计划 | [思路v25](研究记录/思路v25_ReCheck正确性门控成员验证.md)、[实验矩阵与补充计划](研究记录/ReCheck_顶会实验矩阵与补充计划_20261011.md) | 方法、威胁模型、判定边界与可执行实验安排，与代码共同维护。 |
+| ReCheck 证据与写作 | [shared-G 开发机制审阅](研究记录/v25_shared_g_mechanism_review_20261003/analysis-report.md)、[三值评分整理](paper/三值评分消融与敏感性整理.md)、[写作记录](paper/写作记录.md) | 开发机制材料保留历史评分标记；来源级结果、消融和写作状态与当前主方法区分。 |
 | Llama 8B 扩展 | `configs/v25_shared_g_formal_llama31_8b.yaml`、`configs/v25_shared_g_formal_nli_v3_llama31_8b.yaml`、`configs/v25_signed_scoring_llama31_8b.yaml` | 复用固定来源/query/检索输入，独立采集回答、计算门控与评分；配置交付不表示实验已完成。 |
 | V25 历史与开发 | `scripts/92_*.py` 至 `103_*.py`、非当前评分配置 | 保留测试、诊断和复现仍引用的代码；原冻结正向计分与早期六事实方案不作为当前主分。 |
 | V25 之前的旧方案 | 已清理的 V6.3–V24 专属代码/配置/测试、`legacy/` | 按既有清理记录移出当前代码树；Git 历史和现存审计归档保留。 |
 
-本次代码提交包含源码、配置、测试及入口/研究总表说明。`paper/` 为本地写作资产，文中的论文链接在具备该目录的工作区使用；论文源文件、编译产物和 ZIP 未纳入本次提交。`background_tunnel.py`、凭据、原始数据、模型权重、索引和 response/score 产物也留在本地。配置中绑定的实验输入须另行具备，代码 checkout 本身不提供这些数据。
+V25 分支包含 ReCheck 源码、配置、测试、方法说明、实验计划、机制汇总图表和当前结果/写作材料。研究目录按 `.gitignore` 白名单纳入；旧 PVS 论文正文、原 ZIP 与编译物保留本地。思路v25 的 Git 发布版保留审阅判定及证据索引，逐条完整模型回答正文留在本地；两个机制 JSON 的回答字段亦仅在 Git 版替换为本地保留提示，完整原件不改写。因此这些完整本地文件会显示为未暂存差异，后续提交须继续排除原始回答正文。`background_tunnel.py`、凭据、原始数据、模型权重、索引和 response/score 产物也留在本地。配置中绑定的实验输入须另行具备，代码 checkout 本身不提供这些数据。
 
 ## 当前主线：ReCheck（V25 shared-G 三值来源评分）
 
@@ -791,7 +793,7 @@ Retriever 和 Generator 都必须一次只跑一个 cell。RAG index 只能包�
 LLM-only 的 Retriever 固定为 `none`。已有响应的 query、benchmark、index、
 具体模型版本或 code commit 任一变化，resume 都会在 API 调用前失败。
 
-PCV-MIA 是一个面向 RAG 知识库的成员推理攻击实验框架。方法全称是：
+以下保留 ReCheck 项目前期 PVS 方案的说明。该历史方案的方法全称为：
 
 ```text
 Paired Counterfactual Verification Membership Inference Attack
@@ -805,9 +807,9 @@ Paired Counterfactual Verification Membership Inference Attack
 
 核心问题是：当某篇文档进入 RAG 知识库后，模型在回答真假事实验证问题时，是否会因为检索到私有上下文而获得额外的验证、否定和纠错能力。
 
-PCV-MIA 的做法是：从候选文档里抽取可验证事实，构造真实 claim 和最小同类型反事实 claim，再生成 Q+ / Q- 查询。P0 主攻击只使用 `RAG` 返回的支持、否定和纠错行为计算 Paired Verification Score；`LLM-only` 作为预训练记忆/上下文增益的归因对照，不参与主攻击判定。
+早期 PVS 方案的做法是：从候选文档里抽取可验证事实，构造真实 claim 和最小同类型反事实 claim，再生成 Q+ / Q- 查询。P0 主攻击只使用 `RAG` 返回的支持、否定和纠错行为计算 Paired Verification Score；`LLM-only` 作为预训练记忆/上下文增益的归因对照，不参与主攻击判定。
 
-一句话概括当前代码：
+一句话概括这份历史实现：
 
 ```text
 KB isolation
@@ -896,7 +898,7 @@ P1 推荐恢复顺序：
 → 重建 feasibility、mechanism、figures、final report 与 run manifest
 ```
 
-当前仓库实现的是 PCV-MIA 主流程和实验评估框架。P0 冻结主分是 source-level RAG-only PVS；L1 conformal、LLM-only/context gain 和 L2 shadow 都是校准或归因分析，不替代主攻击定义。历史 Edgar 数字只用于可行性参考，必须等 source-level canonical run 完整后再更新论文主表。需要特别注意以下几点：
+这一历史版本实现的是 PVS 主流程和实验评估框架。P0 冻结主分是 source-level RAG-only PVS；L1 conformal、LLM-only/context gain 和 L2 shadow 都是校准或归因分析，不替代主攻击定义。历史 Edgar 数字只用于可行性参考，必须等 source-level canonical run 完整后再更新论文主表。需要特别注意以下几点：
 
 - RAG index 只能由 `KB_Member` 构建，代码中有硬检查。
 - `True_Non_Member`、`Spoof_Seed`、`Reserve`、`Spoofed_Non_Member` 都不能进入 `indexes/`（`Reserve` 会从第 05 步起进入 benchmark 充当 L1 群体校准的零分布，但绝不进 RAG index）。
@@ -904,7 +906,7 @@ P1 推荐恢复顺序：
 - 如果显式配置 `hashing` 或 `backend: hashing`，代码会直接报错。
 - 没有安装或无法加载 `sentence-transformers` 模型时，流程会失败，而不是静默换成 fallback。
 - `json_vector_fallback` 只是在没有 FAISS 时保存真实 embedding 向量的索引存储 fallback，不是 hashing embedding。
-- `Spoofed_Non_Member` 是可选 hard negative 对照组，不是 PCV-MIA 主方法必需部分。
+- `Spoofed_Non_Member` 是可选 hard negative 对照组，不是 ReCheck 主方法必需部分。
 - `Reserve` 组从第 05 步起被纳入 benchmark，随主流水线跑出 `cvg_rag`，仅作为 L1 群体校准的"非成员零分布"；评估指标时必须排除（开关 `PCV_ENABLE_RESERVE_CALIBRATION`，默认 true）。
 - 当前 NER 只是 `EntityExtractor` 的可注入候选源接口，默认没有自动加载 NER 模型。
 - 6 个 baseline 已接入统一 harness；其中 MEntA 明确属于 source-level adapted baseline。P1 重跑完成前，现有 baseline 数值不得与新 source-level 主结果混用。
@@ -912,7 +914,7 @@ P1 推荐恢复顺序：
 ### 2026-07-13：Baseline 与 API 请求可靠性
 
 - MBA 的 proxy-LM 选词阶段已串行化 Hugging Face tokenizer/model 访问，修复 `max_workers>1` 时的 `Already borrowed`。锁在 victim 请求前释放，不影响 RAG/API 并发。
-- PCV-MIA 第 10 步与第 12 步全部 baseline 共享「短指数退避 + 长冷却无限重试」语义。超时、SSL EOF、空回答、429/5xx 和网关偶发 403 不再丢弃查询，而是冷却后重试同一请求直到成功。
+- ReCheck 第 10 步与第 12 步全部 baseline 共享「短指数退避 + 长冷却无限重试」语义。超时、SSL EOF、空回答、429/5xx 和网关偶发 403 不再丢弃查询，而是冷却后重试同一请求直到成功。
 - 每一次物理重试都重新经过令牌桶，不会绕过 `requests_per_minute`。缺依赖、解析错误等非 API 异常不会无限空等。
 - 默认长冷却是 300 秒。若端点长期宕机或授权永久不可用，进程会持续运行并重试；需人工停止时使用 `Ctrl+C`。
 
@@ -1779,7 +1781,7 @@ outputs/baselines/{dataset}/{model}/{dataset}_baseline_comparison.jsonl
 6 个 baseline 已接入统一 source-level representative-chunk harness：
 
 ```text
-PCV-MIA（本方法）
+ReCheck（本方法）
 RAG-MIA      直接询问 yes/no（地板线，二值分→AUC 退化，主看 Accuracy）
 S2MIA(s)     切半 + BLEU(原文, 回答)，移植 IA 官方 mia_utils/s2.py（纯黑盒；s&p 困惑度作附录）
 MBA          proxy-LM 高难词遮蔽 + 填空填对率，移植 IA 官方 mia_utils/mba.py
@@ -1968,7 +1970,7 @@ src/data/
   preprocess.py    预处理主流程
 
 src/prepare/
-  splitter.py          PCV-MIA 四组切分
+  splitter.py          ReCheck 四组切分
   benchmark_builder.py 固定 attack benchmark 并保存 hash
 
 src/rag/
@@ -2189,7 +2191,7 @@ value + " revised"
 
 ## Scoring
 
-PCV-MIA 的核心分数来自 `src/scoring/pcv_scorer.py`。
+早期 PVS 方案的核心分数来自历史 `src/scoring/pcv_scorer.py`。
 
 对 Q+：
 
@@ -2278,7 +2280,7 @@ L2（`src/scoring/calibration.py` 的 `calibrate_l2_shadow`，入口 `src/rag/sh
 
 写回每行的字段：`pcv_score_l2`（= Φ(z)，主 L2 分）、`pcv_score_l2_z`、`l2_mu_out`、`l2_sigma_out`、`l2_n_shadows`。
 
-PCV-MIA 做 L2 的天然优势（论文卖点）：传统 MIA 做 LiRA 要训几百个 shadow model，而这里"模型"是 RAG 索引，建 shadow 只是 re-embed + 重建索引（秒级、近免费），所以负担得起 per-example 校准。
+历史 PVS 方案的 L2 设计依据（当时的论文设想）：传统 MIA 做 LiRA 要训几百个 shadow model，而这里"模型"是 RAG 索引，建 shadow 只是 re-embed + 重建索引（秒级、近免费），所以负担得起 per-example 校准。
 
 运行（辅助脚本，不在 01-15 主流水线）：
 

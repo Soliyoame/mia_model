@@ -2368,6 +2368,113 @@ class AllDatasetNLIEntryTests(ExecutionFixture):
         spec.loader.exec_module(module)
         return module
 
+    def test_new_generator_reconnects_and_preserves_existing_answers_without_completed_cache(self):
+        from src.shared_g.artifacts import ArtifactStore
+
+        self.freeze_all()
+        for dataset in self.config.datasets:
+            self.install_retrieval(dataset)
+        self.complete_cell("nfcorpus")
+        original = {path: sha256_file(path) for path in self.config.output.rglob("*") if path.is_file()}
+        self.prepare_new_generator()
+        existing, backend = FormalNLIIntegrationTests.activate_nli(self)
+        with patch("src.llm.factory.build_victim_client", return_value=(self.victim_client(), self.profiles["victim"])):
+            existing.run_victim("nfcorpus", False, 2)
+        path = ArtifactStore.path(existing, "initial_responses.jsonl", "nfcorpus")
+        previous_bytes = path.read_bytes()
+        previous_rows = request_records(path)
+        frozen = {run.config.output / "run_config.json": sha256_file(run.config.output / "run_config.json")
+                  for run in (existing, existing.parent)}
+        run = self.entry().AllDatasetJudgmentRun(existing.spec_path, self.root / "missing_completed.yaml",
+                                                self.root, backend=backend)
+        self.assertIsNone(run.completed_run)
+        self.assertEqual(run.activate(), existing.metadata)
+        client = Mock()
+        failure = RuntimeError("private-api-key")
+        failure.__cause__ = TimeoutError("private-api-key")
+        client.generate_with_metadata.side_effect = [failure, self.result("12 weeks", "victim")]
+        with patch("src.llm.factory.build_victim_client", return_value=(client, self.profiles["victim"])), \
+                patch("time.sleep") as sleep, self.assertLogs("all_dataset_nli_entry", level="WARNING") as logs:
+            result = run.run_victim("nfcorpus", False, 1)
+        self.assertEqual(result["new_calls"], 1)
+        self.assertEqual(client.generate_with_metadata.call_count, 2)
+        self.assertEqual(client.generate_with_metadata.call_args_list[0], client.generate_with_metadata.call_args_list[1])
+        self.assertEqual(sleep.call_args_list[0].args, (2.0,))
+        self.assertTrue(path.read_bytes().startswith(previous_bytes))
+        rows = request_records(path)
+        self.assertEqual(rows[:2], previous_rows)
+        self.assertEqual((rows[-1]["status"], rows[-1]["client_attempts"], rows[-1]["network_retry_count"]),
+                         ("completed", 2, 1))
+        self.assertNotIn("private-api-key", json.dumps(rows[-1]) + " ".join(logs.output))
+        self.assertEqual(run.status("nfcorpus")["initial"]["invalid"], 0)
+        with self.assertRaisesRegex(RuntimeError, "previous_dataset_incomplete:nfcorpus"):
+            run._require_previous_cells("scidocs")
+        self.assertEqual(original, {path: sha256_file(path) for path in original})
+        self.assertEqual(frozen, {path: sha256_file(path) for path in frozen})
+
+    def test_new_generator_entry_requires_all_datasets(self):
+        self.freeze_all()
+        for dataset in self.config.datasets:
+            self.install_retrieval(dataset)
+        self.prepare_new_generator()
+        existing, backend = FormalNLIIntegrationTests.activate_nli(self, ["nfcorpus"])
+        with self.assertRaisesRegex(ValueError, "all_dataset_scope_required"):
+            self.entry().AllDatasetJudgmentRun(existing.spec_path, self.root / "missing_completed.yaml",
+                                               self.root, backend=backend)
+
+    def test_request_timeout_override_applies_to_reconnect_without_changing_frozen_config(self):
+        from src.shared_g.artifacts import ArtifactStore
+
+        self.freeze_all()
+        for dataset in self.config.datasets:
+            self.install_retrieval(dataset)
+        self.prepare_new_generator()
+        existing, backend = FormalNLIIntegrationTests.activate_nli(self)
+        run = self.entry().AllDatasetJudgmentRun(existing.spec_path, self.root / "missing_completed.yaml",
+                                                self.root, backend=backend)
+        original_policy = copy.deepcopy(run.config.data["runtime"]["generation"])
+        frozen = {path: sha256_file(path) for path in (run.spec_path, run.parent.config.path,
+                  run.config.output / "run_config.json", run.parent.config.output / "run_config.json")}
+        client = Mock()
+        client.generate_with_metadata.side_effect = [TimeoutError("private-api-key"), self.result("230", "victim")]
+        with patch("src.llm.factory.build_victim_client", return_value=(client, self.profiles["victim"])), \
+                patch("time.sleep"), self.assertLogs("all_dataset_nli_entry", level="WARNING"):
+            run.run_victim("nfcorpus", False, 1, request_timeout=120)
+        self.assertEqual(client.generate_with_metadata.call_count, 2)
+        for call in client.generate_with_metadata.call_args_list:
+            self.assertEqual(call.kwargs, {"temperature": original_policy["temperature"],
+                                          "max_tokens": original_policy["max_tokens"], "timeout": 120})
+        self.assertEqual(client.generate_with_metadata.call_args_list[0], client.generate_with_metadata.call_args_list[1])
+        records = read_rows(ArtifactStore.path(run, "initial_responses.jsonl", "nfcorpus"))
+        self.assertEqual([row["request_timeout_seconds"] for row in records], [120, 120])
+        self.assertEqual(run.config.data["runtime"]["generation"], original_policy)
+        self.assertEqual(frozen, {path: sha256_file(path) for path in frozen})
+
+    def test_request_timeout_rejects_nonpositive_and_nonfinite_values_before_requests(self):
+        run = self.network_run()
+        with patch("src.llm.factory.build_victim_client") as build:
+            for timeout in (0, -1, float("nan"), float("inf")):
+                with self.subTest(timeout=timeout), self.assertRaisesRegex(ValueError, "positive_finite_request_timeout_required"):
+                    run.run_victim("nfcorpus", False, 1, request_timeout=timeout)
+            build.assert_not_called()
+
+    def test_cli_forwards_request_timeout_to_initial_and_followup(self):
+        import io
+
+        for stage, followup in (("run-initial", False), ("run-followup", True)):
+            with self.subTest(stage=stage):
+                entry = self.entry()
+                run = Mock()
+                run.run_victim.return_value = {"status": "incomplete"}
+                arguments = ["105_run_v25_shared_g_nli.py", stage, "--dataset", "nfcorpus", "--max-new", "6000",
+                             "--network-retries", "3", "--request-timeout", "120"]
+                with patch.object(entry, "AllDatasetJudgmentRun", return_value=run), \
+                        patch("sys.argv", arguments), patch.object(entry.logging, "basicConfig"), \
+                        patch("sys.stdout", new_callable=io.StringIO):
+                    entry.main()
+                run.run_victim.assert_called_once_with("nfcorpus", followup, 6000,
+                                                       network_retries=3, request_timeout=120.0)
+
     def make_all(self, completed):
         import yaml
         path = self.root / "nli_all.yaml"

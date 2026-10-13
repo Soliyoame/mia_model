@@ -1,4 +1,4 @@
-"""全库 NLI v3 入口：复用已完成前序 cell，冻结判分核心保持不变。"""
+"""全库 NLI v3 入口：支持新 Generator 和完成缓存，冻结判分核心保持不变。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import errno
 import http.client
 import json
 import logging
+import math
 import shutil
 import socket
 import ssl
@@ -67,6 +68,12 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
     def __init__(self, path: str | Path, completed_config: str | Path,
                  root: Path | None = None, *, backend: NLIBackend | None = None) -> None:
         super().__init__(path, root, backend=backend)
+        self.completed_run: FormalJudgmentRun | None = None
+        if self.parent.config.data.get("reused_inputs"):
+            # 新 Generator 仅复用固定输入，回答与判分只来自自己的输出目录。
+            if self.scoring_datasets != self.config.datasets:
+                raise ValueError("all_dataset_scope_required")
+            return
         self.completed_run = FormalJudgmentRun(completed_config, self.config.root)
         if (self.scoring_datasets != self.config.datasets
                 or self.parent.config.output != self.completed_run.parent.config.output
@@ -75,6 +82,8 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
             raise ValueError("all_dataset_cache_identity_mismatch")
 
     def activate(self) -> dict[str, Any]:
+        if self.completed_run is None:
+            return super().activate()
         self.completed_run.validate(frozen=True)
         result = super().activate()
         for dataset in self.completed_run.scoring_datasets:
@@ -120,8 +129,8 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
         raise AssertionError("unreachable_network_retry_loop")
 
     def run_victim(self, dataset: str, followup: bool, max_new: int = 200, *,
-                   network_retries: int = 3) -> dict[str, Any]:
-        """沿用冻结请求校验，仅为已确认的网络波动增加有限重连并记录实际尝试。"""
+                   network_retries: int = 3, request_timeout: float | None = None) -> dict[str, Any]:
+        """沿用冻结请求校验，支持有限重连和传输超时覆盖，并记录实际尝试。"""
         import logging
         from src.llm.factory import build_victim_client, llm_profile_identity, load_llm_profiles
         from src.llm.response_validation import strict_response_metadata_error
@@ -133,6 +142,9 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
             raise ValueError("nonnegative_network_retries_required")
         if max_new < 1:
             raise ValueError("positive_wave_budget_required")
+        timeout = self.config.data["runtime"]["generation"]["timeout"] if request_timeout is None else request_timeout
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("positive_finite_request_timeout_required")
         queries, items, entries = self._data(dataset)
         planned = self._gate(queries, entries) if followup else [q for q in queries if q["arm"] == "initial"]
         if planned is None:
@@ -155,7 +167,8 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
                         for r in self.responses(ds, flag) if r.get("provider_model_id")}
         if len(fingerprints) > 1:
             raise RuntimeError("victim_fingerprint_drift")
-        policy = self.config.data["runtime"]["generation"]
+        # 只覆盖本次传输等待时限，冻结配置与生成参数保持原值。
+        policy = {**self.config.data["runtime"]["generation"], "timeout": timeout}
         retrieval_hash = sha256_file(self.path("retrieval.jsonl", dataset))
         name = "followup_responses.jsonl" if followup else "initial_responses.jsonl"
         for count, query in enumerate(pending, 1):
@@ -166,6 +179,7 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
             row = {"request_key": query["query_id"], "query_id": query["query_id"], "source_key": query["source_key"],
                    "arm": query["arm"], "slot_index": query["slot_index"], "status": "attempt_started",
                    "retrieval_sha256": retrieval_hash, "prompt_sha256": sha256_text(prompt), "profile_identity": identity,
+                   "request_timeout_seconds": timeout,
                    "network_retry_policy": {"max_retries": network_retries, "backoff_base_seconds": 2.0,
                                             "backoff_max_seconds": 30.0, "http_errors_retried": False}}
             append_request(ArtifactStore.path(self, name, dataset), row)
@@ -196,6 +210,8 @@ class AllDatasetJudgmentRun(FormalJudgmentRun):
         return self._victim_summary(dataset, followup, len(pending))
 
     def _require_previous_cells(self, dataset: str) -> None:
+        if self.completed_run is None:
+            return super()._require_previous_cells(dataset)
         if dataset not in self.scoring_datasets:
             raise ValueError("dataset_not_enabled_for_new_judgment")
         for previous in self.config.datasets[:self.config.datasets.index(dataset)]:
@@ -234,6 +250,8 @@ def main() -> None:
         if name in {"run-initial", "run-followup"}:
             stage.add_argument("--network-retries", type=int, default=3,
                                help="只对确认的网络异常重连，默认3次；0关闭")
+            stage.add_argument("--request-timeout", type=float,
+                               help="本次请求超时秒数；省略时沿用冻结配置，新响应保存实际时限")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run = AllDatasetJudgmentRun(args.config, args.completed_config)
@@ -243,7 +261,7 @@ def main() -> None:
                   "scoring_datasets": list(run.scoring_datasets), "new_victim_calls": 0}
     elif args.stage in {"run-initial", "run-followup"}:
         result = run.run_victim(args.dataset, args.stage == "run-followup", args.max_new,
-                               network_retries=args.network_retries)
+                               network_retries=args.network_retries, request_timeout=args.request_timeout)
     elif args.stage in {"retrieve", "score"}:
         result = getattr(run, args.stage)(args.dataset, args.max_new)
     else:
